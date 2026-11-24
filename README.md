@@ -63,6 +63,15 @@ open "dist/AI Cleaner.app"
 
 ---
 
+## 官网
+
+- [AI Cleaner 官网](https://qiyuanjuzheng.github.io/ai-cleaner/)
+- 站点源码位于 `site/`。在仓库根目录运行 `python3 -m http.server --directory site` 后，打开 `http://localhost:8000/` 预览。
+- GitHub Pages 的发布源为 GitHub Actions。`main` 分支上的站点或发布工作流有变更时自动部署，也可从 Actions 手动运行 `Deploy AI Cleaner website`。
+- 站点图标来自 `scripts/generate-icon.swift`。更新图标时，用该脚本生成 PNG，再缩放为 256 × 256，保存到 `site/assets/app-icon.png`。
+
+---
+
 ## 项目结构
 
 ```text

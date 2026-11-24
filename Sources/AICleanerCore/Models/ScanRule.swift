@@ -20,6 +20,8 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
     public let path: String
     public let category: ScanCategory
     public let mode: ScanTargetMode
+    /// 默认清理建议等级（聊天会话在扫描时会按活跃时间自动细分「建议清理」与「按需清理」）
+    public let recommendation: CleanupRecommendation
     /// 针对此条规则的中文用途与安全说明
     public let explanation: String
     /// 仅在 `recursiveFiles` 等模式下生效的文件名后缀过滤（为空表示不过滤），例如 `[".jsonl", ".jsonl.zst"]`
@@ -31,6 +33,7 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
         path: String,
         category: ScanCategory,
         mode: ScanTargetMode = .directory,
+        recommendation: CleanupRecommendation? = nil,
         explanation: String,
         allowedFileSuffixes: [String] = []
     ) {
@@ -39,6 +42,18 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
         self.path = path
         self.category = category
         self.mode = mode
+        if let recommendation {
+            self.recommendation = recommendation
+        } else {
+            switch category {
+            case .cache, .temporary, .logs:
+                self.recommendation = .recommended
+            case .sessions, .custom:
+                self.recommendation = .reviewSuggested
+            case .protectedData:
+                self.recommendation = .notRecommended
+            }
+        }
         self.explanation = explanation
         self.allowedFileSuffixes = allowedFileSuffixes
     }

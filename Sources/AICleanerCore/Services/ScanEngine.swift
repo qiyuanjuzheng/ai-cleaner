@@ -1,68 +1,90 @@
 import Foundation
+import os
 
 /// 多客户端只读扫描引擎：
 /// - 严格只读，不修改任何目标目录内容；
-/// - 仅返回本机实际存在的条目（内置客户端仅展示有实际可清理条目的客户端，自定义目录始终保留以便用户管理）；
-/// - 结合 SafetyGuard 自动跳过登录态、凭据、核心配置及主数据库。
+/// - 并发扫描所有内置 AI 客户端规则，仅展示本机实际存在的客户端；
+/// - 自动区分「建议清理」「按需清理」与「不建议清理（锁定保护）」三类条目，让用户一眼辨别清理价值与风险；
+/// - 结合 SafetyGuard 自动拦截可清理列表中混入的登录态、凭据、核心配置、项目记忆与主数据库。
 public struct ScanEngine: Sendable {
     public let homeDirectory: URL
     public let builtInProfiles: [AIClientProfile]
     public let safetyGuard: SafetyGuard
     public let sizer: DirectorySizer
     public let sessionReader: SessionMetadataReader
+    /// 聊天会话超过该天数未活跃时，自动标记为「建议清理」（默认 14 天）
+    public let staleSessionDays: Int
 
     public init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         builtInProfiles: [AIClientProfile] = BuiltInClientRules.allProfiles,
         safetyGuard: SafetyGuard? = nil,
         sizer: DirectorySizer = DirectorySizer(),
-        sessionReader: SessionMetadataReader = SessionMetadataReader()
+        sessionReader: SessionMetadataReader = SessionMetadataReader(),
+        staleSessionDays: Int = 14
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.builtInProfiles = builtInProfiles
         self.safetyGuard = safetyGuard ?? SafetyGuard(homeDirectory: self.homeDirectory)
         self.sizer = sizer
         self.sessionReader = sessionReader
+        self.staleSessionDays = staleSessionDays
     }
 
     /// 执行全量只读扫描
     public func scan(customDirectories: [CustomScanDirectory] = []) -> ScanReport {
-        let fileManager = FileManager.default
+        let referenceNow = Date()
+        let resultsLock = OSAllocatedUnfairLock(
+            initialState: [ClientScanSummary?](repeating: nil, count: builtInProfiles.count)
+        )
+
+        // 1. 并发扫描所有内置 AI 客户端（每线程使用独立 FileManager 实例保证线程安全）
+        let profiles = builtInProfiles
+        DispatchQueue.concurrentPerform(iterations: profiles.count) { index in
+            if Task.isCancelled { return }
+            let localFM = FileManager()
+            let summary = scanProfile(profiles[index], referenceNow: referenceNow, fileManager: localFM)
+            resultsLock.withLock { state in
+                state[index] = summary
+            }
+        }
+
+        let builtInResults = resultsLock.withLock { $0 }.compactMap { $0 }
         var summaries: [ClientScanSummary] = []
         var detectedBuiltInCount = 0
         var totalSkippedProtected = 0
 
-        // 1. 扫描内置 AI 客户端规则，仅展示本机实际存在且可清理的条目
-        for profile in builtInProfiles {
-            if Task.isCancelled { break }
-            let result = scanProfile(profile, fileManager: fileManager)
+        for result in builtInResults {
             totalSkippedProtected += result.skippedProtectedCount
-
-            if !result.items.isEmpty {
+            if !result.items.isEmpty || !result.protectedItems.isEmpty {
                 detectedBuiltInCount += 1
                 summaries.append(result)
             }
         }
 
-        // 内置客户端按占用空间降序排列，方便用户优先看到空间大户
+        // 内置客户端优先按「可清理空间」降序排列，其次按受保护空间降序，确保高收益清理项始终排在最前面
         summaries.sort { lhs, rhs in
             if lhs.totalSizeBytes != rhs.totalSizeBytes {
                 return lhs.totalSizeBytes > rhs.totalSizeBytes
+            }
+            if lhs.protectedSizeBytes != rhs.protectedSizeBytes {
+                return lhs.protectedSizeBytes > rhs.protectedSizeBytes
             }
             return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
         }
 
         // 2. 扫描用户自定义目录（即便当前为空也保留分组，便于在侧栏查看或移除）
+        let customFM = FileManager()
         for customDirectory in customDirectories {
             if Task.isCancelled { break }
             let profile = customDirectory.toClientProfile()
-            let result = scanProfile(profile, fileManager: fileManager)
+            let result = scanProfile(profile, referenceNow: referenceNow, fileManager: customFM)
             totalSkippedProtected += result.skippedProtectedCount
             summaries.append(result)
         }
 
         return ScanReport(
-            scannedAt: Date(),
+            scannedAt: referenceNow,
             clientSummaries: summaries,
             totalBuiltInProfilesCount: builtInProfiles.count,
             detectedBuiltInClientsCount: detectedBuiltInCount,
@@ -74,10 +96,13 @@ public struct ScanEngine: Sendable {
 
     private func scanProfile(
         _ profile: AIClientProfile,
+        referenceNow: Date,
         fileManager: FileManager
     ) -> ClientScanSummary {
         var discoveredItems: [CleanableItem] = []
-        var seenPaths: Set<String> = []
+        var protectedItems: [CleanableItem] = []
+        var seenCleanablePaths: Set<String> = []
+        var seenProtectedPaths: Set<String> = []
         var skippedProtectedCount = 0
 
         for rule in profile.rules {
@@ -85,6 +110,45 @@ public struct ScanEngine: Sendable {
             let targetURL = rule.resolveURL(homeDirectory: homeDirectory)
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: targetURL.path, isDirectory: &isDir) else {
+                continue
+            }
+
+            // 透明展示的「不建议清理（已锁定保护）」规则：严格只读统计体积，放入 protectedItems，永不进入可清理 items
+            if rule.recommendation == .notRecommended {
+                guard let inspection = sizer.inspect(
+                    url: targetURL,
+                    safetyGuard: nil,
+                    fileManager: fileManager
+                ) else {
+                    continue
+                }
+
+                // 跳过完全空的受保护目录（如新建尚未使用的空 skills 目录），避免视觉噪音
+                if inspection.isDirectory && inspection.fileCount == 0 && inspection.sizeBytes == 0 {
+                    continue
+                }
+
+                let canonicalPath = targetURL.standardizedFileURL.path
+                guard seenProtectedPaths.insert(canonicalPath).inserted else { continue }
+
+                protectedItems.append(
+                    CleanableItem(
+                        clientID: profile.id,
+                        clientName: profile.name,
+                        ruleID: rule.id,
+                        displayName: rule.displayName,
+                        fileName: targetURL.lastPathComponent,
+                        url: targetURL,
+                        category: .protectedData,
+                        recommendation: .notRecommended,
+                        safetyNote: rule.explanation,
+                        sizeBytes: inspection.sizeBytes,
+                        fileCount: inspection.fileCount,
+                        modifiedAt: inspection.modifiedAt,
+                        isDirectory: inspection.isDirectory,
+                        isCustom: false
+                    )
+                )
                 continue
             }
 
@@ -116,7 +180,14 @@ public struct ScanEngine: Sendable {
                 }
 
                 let canonicalPath = targetURL.standardizedFileURL.path
-                guard seenPaths.insert(canonicalPath).inserted else { continue }
+                guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
+
+                let (recommendation, note) = resolveRecommendation(
+                    rule: rule,
+                    url: targetURL,
+                    modifiedAt: inspection.modifiedAt,
+                    referenceNow: referenceNow
+                )
 
                 discoveredItems.append(
                     CleanableItem(
@@ -127,7 +198,8 @@ public struct ScanEngine: Sendable {
                         fileName: targetURL.lastPathComponent,
                         url: targetURL,
                         category: rule.category,
-                        safetyNote: rule.explanation,
+                        recommendation: recommendation,
+                        safetyNote: note,
                         sizeBytes: inspection.sizeBytes,
                         fileCount: inspection.fileCount,
                         modifiedAt: inspection.modifiedAt,
@@ -137,7 +209,6 @@ public struct ScanEngine: Sendable {
                 )
 
             case .children:
-                // 内置规则允许进入会话根容器逐项扫描，自定义目录仍须通过完整自定义根目录校验
                 let rootCheck = profile.isCustom
                     ? safetyGuard.validateCustomDirectoryRoot(targetURL)
                     : safetyGuard.validateBuiltInContainer(targetURL)
@@ -147,7 +218,6 @@ public struct ScanEngine: Sendable {
                 }
 
                 guard isDir.boolValue else {
-                    // 若规则指向的是单个文件而非目录，回退按单文件检查
                     let fileCheck = safetyGuard.validateTarget(targetURL, fileManager: fileManager)
                     guard fileCheck.isAllowed,
                           let inspection = sizer.inspect(url: targetURL, safetyGuard: safetyGuard, fileManager: fileManager) else {
@@ -155,17 +225,26 @@ public struct ScanEngine: Sendable {
                         continue
                     }
                     let canonicalPath = targetURL.standardizedFileURL.path
-                    guard seenPaths.insert(canonicalPath).inserted else { continue }
+                    guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
+
+                    let (recommendation, note) = resolveRecommendation(
+                        rule: rule,
+                        url: targetURL,
+                        modifiedAt: inspection.modifiedAt,
+                        referenceNow: referenceNow
+                    )
+
                     discoveredItems.append(
                         CleanableItem(
                             clientID: profile.id,
                             clientName: profile.name,
                             ruleID: rule.id,
-                            displayName: targetURL.lastPathComponent,
+                            displayName: rule.displayName.isEmpty ? targetURL.lastPathComponent : rule.displayName,
                             fileName: targetURL.lastPathComponent,
                             url: targetURL,
                             category: rule.category,
-                            safetyNote: rule.explanation,
+                            recommendation: recommendation,
+                            safetyNote: note,
                             sizeBytes: inspection.sizeBytes,
                             fileCount: inspection.fileCount,
                             modifiedAt: inspection.modifiedAt,
@@ -186,11 +265,7 @@ public struct ScanEngine: Sendable {
 
                 for childURL in children {
                     if Task.isCancelled { break }
-
-                    // 跳过 macOS Finder 元数据文件
-                    if childURL.lastPathComponent == ".DS_Store" {
-                        continue
-                    }
+                    if childURL.lastPathComponent == ".DS_Store" { continue }
 
                     let childCheck = safetyGuard.validateTarget(childURL, fileManager: fileManager)
                     guard childCheck.isAllowed else {
@@ -211,13 +286,12 @@ public struct ScanEngine: Sendable {
                         continue
                     }
 
-                    // 内置规则跳过空子目录，减少界面干扰
                     if !profile.isCustom && inspection.isDirectory && inspection.fileCount == 0 && inspection.sizeBytes == 0 {
                         continue
                     }
 
                     let canonicalPath = childURL.standardizedFileURL.path
-                    guard seenPaths.insert(canonicalPath).inserted else { continue }
+                    guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
                     let displayName: String
                     if rule.category == .sessions {
@@ -229,6 +303,13 @@ public struct ScanEngine: Sendable {
                         displayName = childURL.lastPathComponent
                     }
 
+                    let (recommendation, note) = resolveRecommendation(
+                        rule: rule,
+                        url: childURL,
+                        modifiedAt: inspection.modifiedAt,
+                        referenceNow: referenceNow
+                    )
+
                     discoveredItems.append(
                         CleanableItem(
                             clientID: profile.id,
@@ -238,7 +319,8 @@ public struct ScanEngine: Sendable {
                             fileName: childURL.lastPathComponent,
                             url: childURL,
                             category: rule.category,
-                            safetyNote: rule.explanation,
+                            recommendation: recommendation,
+                            safetyNote: note,
                             sizeBytes: inspection.sizeBytes,
                             fileCount: inspection.fileCount,
                             modifiedAt: inspection.modifiedAt,
@@ -308,13 +390,20 @@ public struct ScanEngine: Sendable {
                         }
 
                         let canonicalPath = sessionURL.standardizedFileURL.path
-                        guard seenPaths.insert(canonicalPath).inserted else { continue }
+                        guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
                         let displayName = sessionReader.buildProjectSessionDisplayName(
                             itemURL: sessionURL,
                             projectFolderName: projectFolderName,
                             isDirectory: inspection.isDirectory,
                             fileManager: fileManager
+                        )
+
+                        let (recommendation, note) = resolveRecommendation(
+                            rule: rule,
+                            url: sessionURL,
+                            modifiedAt: inspection.modifiedAt,
+                            referenceNow: referenceNow
                         )
 
                         discoveredItems.append(
@@ -326,7 +415,8 @@ public struct ScanEngine: Sendable {
                                 fileName: entryName,
                                 url: sessionURL,
                                 category: rule.category,
-                                safetyNote: rule.explanation,
+                                recommendation: recommendation,
+                                safetyNote: note,
                                 sizeBytes: inspection.sizeBytes,
                                 fileCount: inspection.fileCount,
                                 modifiedAt: inspection.modifiedAt,
@@ -389,11 +479,18 @@ public struct ScanEngine: Sendable {
                     }
 
                     let canonicalPath = fileURL.standardizedFileURL.path
-                    guard seenPaths.insert(canonicalPath).inserted else { continue }
+                    guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
                     let displayName = sessionReader.buildFlatSessionDisplayName(
                         itemURL: fileURL,
                         isDirectory: false
+                    )
+
+                    let (recommendation, note) = resolveRecommendation(
+                        rule: rule,
+                        url: fileURL,
+                        modifiedAt: inspection.modifiedAt,
+                        referenceNow: referenceNow
                     )
 
                     discoveredItems.append(
@@ -405,7 +502,8 @@ public struct ScanEngine: Sendable {
                             fileName: fileName,
                             url: fileURL,
                             category: rule.category,
-                            safetyNote: rule.explanation,
+                            recommendation: recommendation,
+                            safetyNote: note,
                             sizeBytes: inspection.sizeBytes,
                             fileCount: 1,
                             modifiedAt: inspection.modifiedAt,
@@ -424,11 +522,52 @@ public struct ScanEngine: Sendable {
             }
             return lhs.modifiedAt > rhs.modifiedAt
         }
+        protectedItems.sort { lhs, rhs in
+            if lhs.sizeBytes != rhs.sizeBytes {
+                return lhs.sizeBytes > rhs.sizeBytes
+            }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
 
         return ClientScanSummary(
             profile: profile,
             items: discoveredItems,
+            protectedItems: protectedItems,
             skippedProtectedCount: skippedProtectedCount
+        )
+    }
+
+    /// 针对聊天会话结合活跃时间与归档状态动态细化「建议清理」/「按需清理」提示
+    private func resolveRecommendation(
+        rule: ScanRule,
+        url: URL,
+        modifiedAt: Date,
+        referenceNow: Date
+    ) -> (CleanupRecommendation, String) {
+        guard rule.category == .sessions && rule.recommendation == .reviewSuggested else {
+            return (rule.recommendation, rule.explanation)
+        }
+
+        let isCompressedArchive = url.lastPathComponent.lowercased().hasSuffix(".zst")
+        let staleCutoff = Calendar.current.date(byAdding: .day, value: -staleSessionDays, to: referenceNow) ?? referenceNow
+
+        if isCompressedArchive {
+            return (
+                .recommended,
+                "已压缩归档的历史会话，通常是已完成的一次性对话，建议清理释放空间（移入废纸篓可随时恢复）。"
+            )
+        }
+
+        if modifiedAt < staleCutoff {
+            return (
+                .recommended,
+                "超过 \(staleSessionDays) 天未活跃的历史会话，通常为已完成的一次性对话，建议清理（移入废纸篓不影响配置与记忆库）。"
+            )
+        }
+
+        return (
+            .reviewSuggested,
+            "近期活跃会话（\(staleSessionDays) 天内更新），若确认是一次性对话可直接勾选清理，仍需续聊建议保留。"
         )
     }
 }

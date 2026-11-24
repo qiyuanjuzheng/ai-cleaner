@@ -48,6 +48,14 @@ public struct TrashCleaner: Sendable {
         let deduplicated = deduplicateNestedItems(items)
 
         for item in deduplicated {
+            // 0. 强制拒绝任何标记为「不建议清理」的锁定条目
+            guard item.isCleanable else {
+                skippedProtected.append(
+                    CleanupFailure(item: item, reason: "该条目已标记为「不建议清理」并锁定保护，不可移入废纸篓")
+                )
+                continue
+            }
+
             let url = item.url.standardizedFileURL
 
             // 1. 清理前实时二次安全校验（含子目录内容检查）

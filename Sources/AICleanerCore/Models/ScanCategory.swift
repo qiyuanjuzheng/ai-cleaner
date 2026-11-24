@@ -7,8 +7,14 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
     case temporary
     case logs
     case custom
+    case protectedData
 
     public var id: String { rawValue }
+
+    /// 可供用户新建自定义目录时选择的类别（排除仅供受保护展示用的 protectedData）
+    public static var userSelectableCases: [ScanCategory] {
+        [.sessions, .cache, .temporary, .logs, .custom]
+    }
 
     /// 界面展示的简体中文标签
     public var displayName: String {
@@ -23,6 +29,8 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
             return "日志"
         case .custom:
             return "自定义"
+        case .protectedData:
+            return "核心保护项"
         }
     }
 
@@ -39,6 +47,8 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
             return "doc.text"
         case .custom:
             return "folder.badge.gearshape"
+        case .protectedData:
+            return "lock.shield.fill"
         }
     }
 
@@ -55,6 +65,8 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
             return "调试输出与崩溃转储日志，移入废纸篓不会影响客户端数据与设置。"
         case .custom:
             return "用户手动添加的自定义扫描目录，扫描与清理时仍会自动跳过凭据、配置与数据库文件。"
+        case .protectedData:
+            return "包含账号凭据、核心配置、已装插件、运行时组件、项目记忆或主数据库，仅做透明展示占用大小，已锁定保护不建议清理。"
         }
     }
 }

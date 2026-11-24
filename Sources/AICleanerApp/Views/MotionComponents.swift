@@ -69,14 +69,162 @@ struct AmbientAuroraBackdrop: View {
     }
 }
 
-// MARK: - 2. 轨道雷达扫描核心动效（首次全盘只读扫描 Hero）
+// MARK: - 2A. 初始待扫描欢迎核心视图（与扫描中雷达等尺寸，切换零抖动）
+
+struct ScanReadyHeroView: View {
+    let totalBuiltInProfilesCount: Int
+    let historicalFreedBytes: Int64
+    let onStartScan: () -> Void
+    let onOpenHistory: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: 22) {
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { timeline in
+                let elapsed = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate
+                let breathe = reduceMotion ? 1.0 : (0.97 + 0.03 * sin(elapsed * 1.6))
+                let slowRotation = Angle.degrees((elapsed * 9).truncatingRemainder(dividingBy: 360))
+
+                ZStack {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(colorScheme == .dark ? 0.22 : 0.15),
+                                    Color(red: 0.24, green: 0.58, blue: 1.00).opacity(colorScheme == .dark ? 0.08 : 0.06),
+                                    .clear
+                                ],
+                                center: .center,
+                                startRadius: 18,
+                                endRadius: 96
+                            )
+                        )
+                        .frame(width: 192, height: 192)
+                        .scaleEffect(breathe)
+
+                    Circle()
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.45),
+                                    Color(red: 0.24, green: 0.60, blue: 1.00).opacity(0.28),
+                                    Color.primary.opacity(0.06),
+                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.45)
+                                ],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 1.3, lineCap: .round, dash: [8, 8])
+                        )
+                        .frame(width: 152, height: 152)
+                        .rotationEffect(slowRotation)
+
+                    Circle()
+                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.07), lineWidth: 1)
+                        .frame(width: 112, height: 112)
+
+                    ZStack {
+                        Circle()
+                            .fill(AppTheme.brandGradient)
+                            .frame(width: 60, height: 60)
+                            .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.40), radius: 14, y: 4)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(
+                                        LinearGradient(
+                                            colors: [Color.white.opacity(0.55), Color.white.opacity(0.08)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1.0
+                                    )
+                            )
+
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .scaleEffect(breathe)
+                }
+                .frame(width: 210, height: 210)
+            }
+
+            VStack(spacing: 6) {
+                Text("AI 客户端空间清理")
+                    .font(.system(.title2, design: .rounded).weight(.bold))
+                Text("支持只读扫描 \(totalBuiltInProfilesCount) 款国内外主流 AI 客户端的缓存、日志、会话与受保护资产，清理一律移入系统废纸篓")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+
+            HStack(spacing: 12) {
+                Button(action: onStartScan) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 13.5, weight: .bold))
+                        Text("开始扫描")
+                    }
+                    .padding(.horizontal, 12)
+                }
+                .buttonStyle(
+                    GlowingPillButtonStyle(
+                        gradient: AppTheme.gradient(for: .recommended),
+                        glowColor: AppTheme.color(for: .recommended),
+                        isEnabled: true
+                    )
+                )
+            }
+            .frame(height: 44)
+
+            HStack(spacing: 18) {
+                featureHint(symbol: "checkmark.shield.fill", color: AppTheme.color(for: .recommended), text: "严格只读扫描")
+                featureHint(symbol: "trash.circle.fill", color: Color(red: 0.24, green: 0.68, blue: 1.00), text: "仅移入废纸篓可还原")
+                if historicalFreedBytes > 0 {
+                    Button(action: onOpenHistory) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(AppTheme.color(for: .recommended))
+                            Text("历史累计已释放 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    featureHint(symbol: "sparkles", color: Color(red: 0.56, green: 0.48, blue: 0.98), text: "内置 \(totalBuiltInProfilesCount) 款客户端规则")
+                }
+            }
+            .frame(height: 18)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func featureHint(symbol: String, color: Color, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.caption2)
+                .foregroundStyle(color)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - 2B. 轨道雷达扫描核心动效（全盘只读扫描中 Hero）
 
 struct OrbitalScannerHero: View {
+    var onCancel: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 22) {
             TimelineView(.animation(paused: reduceMotion)) { timeline in
                 let elapsed = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate
                 let sweepAngle = Angle.degrees((elapsed * 120).truncatingRemainder(dividingBy: 360))
@@ -163,13 +311,25 @@ struct OrbitalScannerHero: View {
 
             VStack(spacing: 6) {
                 Text("正在以只读雷达扫描本机 AI 客户端…")
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .font(.system(.title2, design: .rounded).weight(.bold))
                 Text("并发检索 31 款国内外主流 AI 客户端的会话、缓存与受保护资产，绝不修改任何文件")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 440)
+                    .frame(maxWidth: 460)
             }
+
+            HStack {
+                if let onCancel {
+                    Button("取消扫描", action: onCancel)
+                        .buttonStyle(.bordered)
+                        .controlSize(.regular)
+                }
+            }
+            .frame(height: 44)
+
+            Color.clear
+                .frame(height: 18)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -80,10 +80,10 @@ struct ContentView: View {
                 .help("添加自定义扫描目录 (⌘⇧A)")
 
                 Button {
-                    viewModel.rescan()
+                    viewModel.startScan()
                 } label: {
                     ZStack {
-                        Image(systemName: "arrow.clockwise")
+                        Image(systemName: viewModel.hasScanResults ? "arrow.clockwise" : "play.fill")
                             .opacity(viewModel.isScanning ? 0 : 1)
                         if viewModel.isScanning {
                             ProgressView()
@@ -93,7 +93,7 @@ struct ContentView: View {
                     .frame(width: 18, height: 18)
                 }
                 .disabled(viewModel.isScanning || viewModel.isCleaning)
-                .help("重新执行只读扫描 (⌘R)")
+                .help(viewModel.hasScanResults ? "重新执行只读扫描 (⌘R)" : "开始只读扫描 (⌘R)")
             }
         }
         .sheet(isPresented: $viewModel.showingTrashConfirmation) {
@@ -132,9 +132,6 @@ struct ContentView: View {
         }
         .onChange(of: viewModel.appearanceMode) { _, newMode in
             applyWindowAppearance(newMode)
-        }
-        .task {
-            viewModel.initialScanIfNeeded()
         }
     }
 

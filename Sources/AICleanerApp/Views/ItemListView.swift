@@ -10,8 +10,28 @@ struct ItemListView: View {
 
     var body: some View {
         if viewModel.isScanning && viewModel.report == nil {
-            OrbitalScannerHero()
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            OrbitalScannerHero(onCancel: {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                    viewModel.cancelScan()
+                }
+            })
+            .transition(.opacity)
+        } else if viewModel.report == nil {
+            ScanReadyHeroView(
+                totalBuiltInProfilesCount: BuiltInClientRules.allProfiles.count,
+                historicalFreedBytes: viewModel.totalHistoricalFreedBytes,
+                onStartScan: {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                        viewModel.startScan()
+                    }
+                },
+                onOpenHistory: {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                        viewModel.sidebarSelection = .history
+                    }
+                }
+            )
+            .transition(.opacity)
         } else {
             VStack(spacing: 0) {
                 heroDashboardCard
@@ -25,6 +45,7 @@ struct ItemListView: View {
 
                 listContent
             }
+            .transition(.opacity)
         }
     }
 
@@ -57,6 +78,36 @@ struct ItemListView: View {
                         }
 
                         Spacer(minLength: 8)
+
+                        // 返回待扫描状态按钮（固定高度 30pt，清爽克制不抢主按钮焦点）
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                                viewModel.returnToIdleState()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.backward")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text("返回待扫描")
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .frame(height: 30)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.065 : 0.045))
+                            )
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
+                            )
+                            .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.97))
+                        .disabled(viewModel.isCleaning)
+                        .help("清空当前扫描结果并返回待扫描首页")
 
                         if !viewModel.scopedRecommendedItems.isEmpty {
                             Button {

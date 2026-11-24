@@ -366,16 +366,49 @@ final class CleanerViewModel {
         filteredItems.filter { selectedItemIDs.contains($0.id) }.count
     }
 
+    var hasScanResults: Bool {
+        report != nil
+    }
+
+    var isIdleReadyToScan: Bool {
+        report == nil && !isScanning
+    }
+
     var hasActiveFilters: Bool {
         !searchText.isEmpty || selectedCategory != nil || selectedRecommendation != nil || selectedAgeFilter != .all
     }
 
     // MARK: - Actions
 
-    func initialScanIfNeeded() {
-        if report == nil && !isScanning {
-            rescan()
+    /// 由用户主动触发扫描（从待扫描首页、工具栏或菜单启动）
+    func startScan() {
+        if sidebarSelection == .history {
+            sidebarSelection = .allClients
         }
+        rescan()
+    }
+
+    /// 取消当前正在进行的扫描任务
+    func cancelScan() {
+        scanTask?.cancel()
+        scanTask = nil
+        isScanning = false
+    }
+
+    /// 从扫描结果页返回初始「待扫描」状态（保留历史清理统计与自定义目录配置）
+    func returnToIdleState() {
+        scanTask?.cancel()
+        scanTask = nil
+        isScanning = false
+        report = nil
+        selectedItemIDs.removeAll()
+        lastCleanupResult = nil
+        errorBannerMessage = nil
+        hoveredRecommendation = nil
+        pendingRiskItemToSelect = nil
+        clearAllFilters()
+        collapsedSections = [.notRecommended]
+        sidebarSelection = .allClients
     }
 
     func rescan() {
@@ -541,7 +574,9 @@ final class CleanerViewModel {
             if case let .client(currentID) = sidebarSelection, currentID == removedProfileID {
                 sidebarSelection = .allClients
             }
-            rescan()
+            if hasScanResults {
+                rescan()
+            }
         } catch {
             errorBannerMessage = "移除自定义目录失败：\(error.localizedDescription)"
         }

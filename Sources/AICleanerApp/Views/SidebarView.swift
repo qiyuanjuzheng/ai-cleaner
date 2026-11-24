@@ -59,11 +59,23 @@ struct SidebarView: View {
 
                     sectionHeader(
                         title: "AI 客户端",
-                        trailing: viewModel.report.map { "\($0.detectedBuiltInClientsCount)" }
+                        trailing: viewModel.report.map { "\($0.detectedBuiltInClientsCount)" } ?? (viewModel.isScanning ? "扫描中" : "待扫描")
                     )
                     .padding(.top, 14)
 
-                    if viewModel.builtInSummaries.isEmpty && !viewModel.isScanning {
+                    if viewModel.isIdleReadyToScan {
+                        Text("点击「开始扫描」识别本机客户端")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                    } else if viewModel.isScanning && viewModel.builtInSummaries.isEmpty {
+                        Text("正在检索本机 AI 客户端…")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                    } else if viewModel.builtInSummaries.isEmpty {
                         Text("暂未检测到已安装的 AI 客户端")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
@@ -90,7 +102,7 @@ struct SidebarView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.tertiary)
                         Spacer()
-                        if !viewModel.customSummaries.isEmpty {
+                        if !viewModel.customDirectories.isEmpty {
                             Button {
                                 viewModel.showingAddCustomSheet = true
                             } label: {
@@ -108,7 +120,7 @@ struct SidebarView: View {
                     .frame(height: 22)
                     .padding(.top, 14)
 
-                    if viewModel.customSummaries.isEmpty {
+                    if viewModel.customDirectories.isEmpty {
                         Button {
                             viewModel.showingAddCustomSheet = true
                         } label: {
@@ -123,10 +135,43 @@ struct SidebarView: View {
                                 Spacer()
                             }
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
+                            .frame(height: 34)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                    } else if viewModel.customSummaries.isEmpty {
+                        ForEach(viewModel.customDirectories) { dir in
+                            HStack(spacing: 2) {
+                                HStack(spacing: 9) {
+                                    Image(systemName: "folder.fill")
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundStyle(Color.teal.opacity(0.82))
+                                        .frame(width: 20, alignment: .center)
+                                    Text(dir.displayName)
+                                        .font(.callout)
+                                        .foregroundStyle(Color.primary.opacity(0.85))
+                                        .lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    Text("待扫描")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .padding(.leading, 11)
+                                .padding(.trailing, 6)
+                                .frame(height: 34)
+
+                                Button {
+                                    viewModel.removeCustomDirectory(id: dir.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundStyle(.tertiary)
+                                        .frame(width: 20, height: 20)
+                                }
+                                .buttonStyle(.plain)
+                                .help("从扫描列表中移除（不删除磁盘文件）")
+                            }
+                        }
                     } else {
                         ForEach(viewModel.customSummaries) { summary in
                             HStack(spacing: 2) {
@@ -179,8 +224,13 @@ struct SidebarView: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
+                } else if viewModel.isScanning {
+                    Text("正在只读扫描本机目录…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 } else {
-                    Text("只读扫描 · 仅移入废纸篓")
+                    Text("待扫描 · 仅执行只读检索")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)

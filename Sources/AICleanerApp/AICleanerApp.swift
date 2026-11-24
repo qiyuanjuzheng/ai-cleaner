@@ -61,11 +61,16 @@ struct AICleanerApp: App {
             CommandGroup(replacing: .newItem) {}
 
             CommandMenu("扫描与清理") {
-                Button("重新扫描") {
-                    viewModel.rescan()
+                Button(viewModel.hasScanResults ? "重新扫描" : "开始扫描") {
+                    viewModel.startScan()
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(viewModel.isScanning || viewModel.isCleaning)
+
+                Button("返回待扫描状态") {
+                    viewModel.returnToIdleState()
+                }
+                .disabled((!viewModel.hasScanResults && !viewModel.isScanning) || viewModel.isCleaning)
 
                 Button("添加自定义目录…") {
                     viewModel.showingAddCustomSheet = true

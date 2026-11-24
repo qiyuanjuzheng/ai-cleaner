@@ -43,6 +43,21 @@ struct SidebarView: View {
                         select(.allClients)
                     }
 
+                    SidebarClientTile(
+                        title: "历史清理趋势",
+                        cleanableBytes: viewModel.totalHistoricalFreedBytes,
+                        protectedBytes: 0,
+                        symbolName: "chart.line.uptrend.xyaxis",
+                        tint: Color(red: 0.24, green: 0.72, blue: 0.98),
+                        isSelected: viewModel.sidebarSelection == .history,
+                        namespace: sidebarNamespace,
+                        emphasizeBytesTint: viewModel.totalHistoricalFreedBytes > 0
+                            ? AppTheme.color(for: .recommended)
+                            : nil
+                    ) {
+                        select(.history)
+                    }
+
                     sectionHeader(
                         title: "AI 客户端",
                         trailing: viewModel.report.map { "\($0.detectedBuiltInClientsCount)" }
@@ -207,6 +222,7 @@ private struct SidebarClientTile: View {
     let tint: Color
     let isSelected: Bool
     let namespace: Namespace.ID
+    var emphasizeBytesTint: Color? = nil
     let action: () -> Void
 
     @State private var isHovered: Bool = false
@@ -230,8 +246,8 @@ private struct SidebarClientTile: View {
 
                 if cleanableBytes > 0 {
                     Text(CleanerFormatting.formatBytes(cleanableBytes))
-                        .font(.caption.monospacedDigit().weight(isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? .primary : .secondary)
+                        .font(.caption.monospacedDigit().weight(isSelected || emphasizeBytesTint != nil ? .semibold : .regular))
+                        .foregroundStyle(emphasizeBytesTint ?? (isSelected ? Color.primary : Color.secondary))
                         .contentTransition(.numericText())
                 } else if protectedBytes > 0 {
                     Image(systemName: "lock.fill")

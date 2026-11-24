@@ -43,4 +43,20 @@ public enum CleanerFormatting {
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
     }
+
+    /// 格式化趋势图坐标轴日期（月-日）
+    public static func formatShortMonthDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "MM-dd"
+        return formatter.string(from: date)
+    }
+
+    /// 格式化趋势图完整日期（年-月-日）
+    public static func formatDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
 }

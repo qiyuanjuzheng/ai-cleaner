@@ -40,14 +40,23 @@ struct ContentView: View {
                         .overlay(alignment: .bottom) { Divider() }
                     }
 
-                    ItemListView(viewModel: viewModel)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if viewModel.sidebarSelection == .history {
+                        CleanupHistoryView(viewModel: viewModel)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.opacity)
+                    } else {
+                        ItemListView(viewModel: viewModel)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.opacity)
+                    }
                 }
 
-                // 智能悬浮操作岛（仅勾选或清理完成时轻盈浮现）
-                BottomActionBar(viewModel: viewModel)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 18)
+                // 智能悬浮操作岛（仅在清理列表视图、勾选或清理完成时轻盈浮现）
+                if viewModel.sidebarSelection != .history {
+                    BottomActionBar(viewModel: viewModel)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 18)
+                }
             }
         }
         .navigationSplitViewStyle(.balanced)

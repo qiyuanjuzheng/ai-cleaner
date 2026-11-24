@@ -6,6 +6,7 @@ import SwiftUI
 
 enum SidebarSelection: Hashable {
     case allClients
+    case history
     case client(String)
 }
 
@@ -49,11 +50,15 @@ final class CleanerViewModel {
     private let scanEngine: ScanEngine
     private let trashCleaner: TrashCleaner
     private let customDirectoryStore: CustomDirectoryStore
+    private let historyStore: CleanupHistoryStore
     private let safetyGuard: SafetyGuard
 
     // MARK: - Published UI State
     var report: ScanReport?
     var customDirectories: [CustomScanDirectory] = []
+    var historyRecords: [CleanupHistoryRecord] = []
+    var historyRange: CleanupTrendRange = .days30
+    var historyMetricMode: CleanupTrendMetricMode = .cumulative
     var sidebarSelection: SidebarSelection = .allClients
 
     var searchText: String = ""
@@ -80,14 +85,17 @@ final class CleanerViewModel {
 
     init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        customDirectoryStore: CustomDirectoryStore? = nil
+        customDirectoryStore: CustomDirectoryStore? = nil,
+        historyStore: CleanupHistoryStore? = nil
     ) {
         let guardInstance = SafetyGuard(homeDirectory: homeDirectory)
         self.safetyGuard = guardInstance
         self.scanEngine = ScanEngine(homeDirectory: homeDirectory, safetyGuard: guardInstance)
         self.trashCleaner = TrashCleaner(safetyGuard: guardInstance)
         self.customDirectoryStore = customDirectoryStore ?? CustomDirectoryStore(safetyGuard: guardInstance)
+        self.historyStore = historyStore ?? CleanupHistoryStore()
         self.customDirectories = self.customDirectoryStore.load()
+        self.historyRecords = self.historyStore.load()
     }
 
     // MARK: - Derived Data
@@ -107,10 +115,21 @@ final class CleanerViewModel {
 
     /// 驱动背景极光随当前选中 AI 客户端实时平滑变色
     var activeAccentColor: Color {
+        if sidebarSelection == .history {
+            return Color(red: 0.14, green: 0.80, blue: 0.66)
+        }
         if let summary = activeSummary {
             return AppTheme.color(forAccentToken: summary.profile.accentToken)
         }
         return Color(red: 0.16, green: 0.78, blue: 0.64)
+    }
+
+    var historySummary: CleanupHistorySummary {
+        CleanupHistoryAnalytics.summarize(records: historyRecords, range: historyRange)
+    }
+
+    var totalHistoricalFreedBytes: Int64 {
+        historyRecords.reduce(0) { $0 + $1.freedBytes }
     }
 
     var highlightedRingTier: CleanupRecommendation? {
@@ -120,7 +139,7 @@ final class CleanerViewModel {
     /// 当前侧边栏分组下的所有可清理条目（「建议清理」+「按需清理」）
     var scopedCleanableItems: [CleanableItem] {
         switch sidebarSelection {
-        case .allClients:
+        case .allClients, .history:
             return report?.allItems ?? []
         case let .client(clientID):
             return report?.clientSummaries.first(where: { $0.id == clientID })?.items ?? []
@@ -130,7 +149,7 @@ final class CleanerViewModel {
     /// 当前侧边栏分组下所有透明展示的「不建议清理（锁定保护）」条目
     var scopedProtectedItems: [CleanableItem] {
         switch sidebarSelection {
-        case .allClients:
+        case .allClients, .history:
             return report?.allProtectedItems ?? []
         case let .client(clientID):
             return report?.clientSummaries.first(where: { $0.id == clientID })?.protectedItems ?? []
@@ -506,6 +525,12 @@ final class CleanerViewModel {
             self.lastCleanupResult = result
             if result.trashedCount > 0 {
                 self.cleanupCelebrationID = UUID()
+                do {
+                    _ = try self.historyStore.record(result: result)
+                    self.historyRecords = self.historyStore.load()
+                } catch {
+                    self.errorBannerMessage = "清理已完成，但记录历史统计失败：\(error.localizedDescription)"
+                }
             }
             self.isCleaning = false
             self.showingTrashConfirmation = false
@@ -516,6 +541,30 @@ final class CleanerViewModel {
             // 清理完成后立即刷新列表，反馈真实剩余空间
             self.rescan()
         }
+    }
+
+    func deleteHistoryRecord(id: UUID) {
+        do {
+            historyRecords = try historyStore.delete(id: id)
+        } catch {
+            errorBannerMessage = "删除历史统计记录失败：\(error.localizedDescription)"
+        }
+    }
+
+    func clearAllHistoryRecords() {
+        do {
+            try historyStore.clearAll()
+            historyRecords = []
+        } catch {
+            errorBannerMessage = "清空历史统计记录失败：\(error.localizedDescription)"
+        }
+    }
+
+    func clientVisualMeta(for clientID: String) -> (symbolName: String, tint: Color) {
+        if let profile = BuiltInClientRules.allProfiles.first(where: { $0.id == clientID }) {
+            return (profile.symbolName, AppTheme.color(forAccentToken: profile.accentToken))
+        }
+        return ("folder.fill", Color(red: 0.18, green: 0.78, blue: 0.74))
     }
 
     func dismissCleanupBanner() {

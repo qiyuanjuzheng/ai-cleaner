@@ -27,11 +27,21 @@ struct AICleanerApp: App {
            !overridePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let homeURL = URL(fileURLWithPath: overridePath, isDirectory: true).standardizedFileURL
             let guardInstance = SafetyGuard(homeDirectory: homeURL)
-            let storageURL = homeURL
-                .appendingPathComponent(".aicleaner-sandbox-config", isDirectory: true)
-                .appendingPathComponent("custom-directories.json")
-            let store = CustomDirectoryStore(storageURL: storageURL, safetyGuard: guardInstance)
-            _viewModel = State(initialValue: CleanerViewModel(homeDirectory: homeURL, customDirectoryStore: store))
+            let sandboxConfigDir = homeURL.appendingPathComponent(".aicleaner-sandbox-config", isDirectory: true)
+            let store = CustomDirectoryStore(
+                storageURL: sandboxConfigDir.appendingPathComponent("custom-directories.json"),
+                safetyGuard: guardInstance
+            )
+            let historyStore = CleanupHistoryStore(
+                storageURL: sandboxConfigDir.appendingPathComponent("cleanup-history.json")
+            )
+            _viewModel = State(
+                initialValue: CleanerViewModel(
+                    homeDirectory: homeURL,
+                    customDirectoryStore: store,
+                    historyStore: historyStore
+                )
+            )
         } else {
             _viewModel = State(initialValue: CleanerViewModel())
         }
@@ -59,6 +69,11 @@ struct AICleanerApp: App {
                     viewModel.showingAddCustomSheet = true
                 }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
+
+                Button("查看历史清理趋势") {
+                    viewModel.sidebarSelection = .history
+                }
+                .keyboardShortcut("2", modifiers: .command)
 
                 Divider()
 

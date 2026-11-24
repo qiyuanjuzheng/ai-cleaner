@@ -130,9 +130,17 @@ struct BottomActionBar: View {
                             Text(CleanerFormatting.formatBytes(result.freedBytes))
                                 .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
                                 .foregroundStyle(tint)
-                            Text("（\(result.trashedCount) 项已移入系统废纸篓）")
+                            Text("（\(result.trashedCount) 项已移入废纸篓）")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            Button("查看趋势 →") {
+                                withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.80)) {
+                                    viewModel.dismissCleanupBanner()
+                                    viewModel.sidebarSelection = .history
+                                }
+                            }
+                            .buttonStyle(.link)
+                            .font(.caption.weight(.semibold))
                         }
                     } else {
                         Text("本次未移入任何条目")

@@ -59,7 +59,7 @@ struct BottomActionBar: View {
                 Text("·")
                     .foregroundStyle(.tertiary)
 
-                Text("预计移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
+                Text("拟移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
                     .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
                     .foregroundStyle(hasRisk ? AppTheme.color(for: .reviewSuggested) : AppTheme.color(for: .recommended))
                     .contentTransition(.numericText())
@@ -69,7 +69,7 @@ struct BottomActionBar: View {
                 .frame(height: 16)
                 .opacity(0.45)
 
-            Button("清空") {
+            Button("清空选择") {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
                     viewModel.clearAllSelection()
                 }
@@ -89,7 +89,7 @@ struct BottomActionBar: View {
                     } else {
                         Image(systemName: "trash.fill")
                     }
-                    Text(viewModel.isCleaning ? "移入中…" : "移入废纸篓…")
+                    Text(viewModel.isCleaning ? "正在移入…" : "移入废纸篓…")
                         .lineLimit(1)
                 }
                 .fixedSize(horizontal: true, vertical: false)
@@ -141,7 +141,7 @@ struct BottomActionBar: View {
                             Text("（\(result.trashedCount) 项）")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Button("查看趋势 →") {
+                            Button("查看趋势") {
                                 viewModel.dismissCleanupBanner()
                                 viewModel.sidebarSelection = .history
                             }
@@ -149,16 +149,17 @@ struct BottomActionBar: View {
                             .font(.caption.weight(.semibold))
                         }
                     } else {
-                        Text("本次未移入任何条目")
+                        Text("未移入废纸篓")
                             .font(.callout.weight(.medium))
                     }
 
                     if !result.skippedProtectedItems.isEmpty {
-                        Text("安全护栏自动拦截 \(result.skippedProtectedItems.count) 项受保护目标")
+                        Text("已跳过 \(result.skippedProtectedItems.count) 项受保护条目")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                    } else if !result.failedItems.isEmpty {
-                        Text("有 \(result.failedItems.count) 项未能移入废纸篓：\(result.failedItems.first?.reason ?? "")")
+                    }
+                    if let failure = result.failedItems.first {
+                        Text("移入失败 \(result.failedItems.count) 项。\(failure.reason)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }

@@ -28,10 +28,10 @@ struct SidebarView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    sectionHeader(title: "空间总览")
+                    sectionHeader(title: "总览")
 
                     SidebarClientTile(
-                        title: "全部 AI 客户端",
+                        title: "空间总览",
                         cleanableBytesText: viewModel.reportTotalBytesText,
                         hasProtectedOnly: (viewModel.report?.totalSizeBytes ?? 0) == 0 && (viewModel.report?.protectedSizeBytes ?? 0) > 0,
                         symbolName: "sparkles.rectangle.stack.fill",
@@ -104,7 +104,7 @@ struct SidebarView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .help("添加自定义扫描目录 (⌘⇧A)")
+                            .help("添加自定义目录 (⌘⇧A)")
                         }
                     }
                     .padding(.horizontal, 10)
@@ -160,7 +160,7 @@ struct SidebarView: View {
                                         .frame(width: 20, height: 20)
                                 }
                                 .buttonStyle(.plain)
-                                .help("从扫描列表中移除（不删除磁盘文件）")
+                                .help("从扫描列表移除目录（保留文件）")
                             }
                         }
                     } else {
@@ -188,7 +188,7 @@ struct SidebarView: View {
                                             .frame(width: 20, height: 20)
                                     }
                                     .buttonStyle(.plain)
-                                    .help("从扫描列表中移除（不删除磁盘文件）")
+                                    .help("从扫描列表移除目录（保留文件）")
                                 }
                             }
                         }
@@ -275,7 +275,7 @@ private struct SidebarClientTile: View {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 9.5))
                         .foregroundStyle(.quaternary)
-                        .help("仅含受保护资产")
+                        .help("仅有不建议清理的条目")
                 }
             }
             .padding(.leading, 11)

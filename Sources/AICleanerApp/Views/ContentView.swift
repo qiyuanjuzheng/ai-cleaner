@@ -77,16 +77,16 @@ struct ContentView: View {
                 Button {
                     viewModel.appearanceMode = viewModel.appearanceMode.next
                 } label: {
-                    Label(viewModel.appearanceMode.rawValue, systemImage: viewModel.appearanceMode.symbolName)
+                    Label(viewModel.appearanceMode.displayName, systemImage: viewModel.appearanceMode.symbolName)
                 }
-                .help("切换外观：浅色磨砂 / 跟随系统 / 深色极光（当前：\(viewModel.appearanceMode.rawValue)）")
+                .help("切换外观（当前：\(viewModel.appearanceMode.displayName)）")
 
                 Button {
                     viewModel.showingAddCustomSheet = true
                 } label: {
                     Label("添加自定义目录", systemImage: "folder.badge.plus")
                 }
-                .help("添加自定义扫描目录 (⌘⇧A)")
+                .help("添加自定义目录 (⌘⇧A)")
 
                 Button {
                     viewModel.startScan()
@@ -102,7 +102,8 @@ struct ContentView: View {
                     .frame(width: 18, height: 18)
                 }
                 .disabled(viewModel.isScanning || viewModel.isCleaning)
-                .help(viewModel.hasScanResults ? "重新执行只读扫描 (⌘R)" : "开始只读扫描 (⌘R)")
+                .accessibilityLabel(viewModel.hasScanResults ? "重新扫描" : "开始扫描")
+                .help(viewModel.hasScanResults ? "重新扫描 (⌘R)" : "开始扫描 (⌘R)")
             }
         }
         .sheet(isPresented: $viewModel.showingTrashConfirmation) {
@@ -114,7 +115,7 @@ struct ContentView: View {
                 .preferredColorScheme(viewModel.appearanceMode.colorScheme)
         }
         .alert(
-            "确认强制勾选「不建议清理」项？",
+            "这项不建议清理，仍要勾选吗？",
             isPresented: Binding(
                 get: { viewModel.pendingRiskItemToSelect != nil },
                 set: { isPresented in
@@ -128,12 +129,12 @@ struct ContentView: View {
             Button("取消", role: .cancel) {
                 viewModel.cancelRiskItemSelection()
             }
-            Button("了解风险，仍然勾选", role: .destructive) {
+            Button("仍要勾选", role: .destructive) {
                 viewModel.confirmRiskItemSelection(item)
             }
         } message: { item in
             Text(
-                "\(item.clientName) · \(item.displayName)（\(CleanerFormatting.formatBytes(item.sizeBytes))）\n\n风险提示：\(item.safetyNote)\n\n勾选后将在移入废纸篓前再次要求确认；清理仅移入系统废纸篓，随时可放回原处。"
+                "\(item.clientName) · \(item.displayName)（\(CleanerFormatting.formatBytes(item.sizeBytes))）\n\n\(item.safetyNote)\n\n移入废纸篓前还需再次确认。"
             )
         }
         .onAppear {

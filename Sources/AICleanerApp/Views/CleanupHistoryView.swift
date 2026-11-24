@@ -42,7 +42,7 @@ struct CleanupHistoryView: View {
                 }
             }
         }
-        .alert("清空全部历史清理统计？", isPresented: $showingClearAlert) {
+        .alert("清空统计记录？", isPresented: $showingClearAlert) {
             Button("取消", role: .cancel) {}
             Button("清空统计记录", role: .destructive) {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.20)) {
@@ -50,7 +50,7 @@ struct CleanupHistoryView: View {
                 }
             }
         } message: {
-            Text("清空本应用保存的废纸篓统计记录。")
+            Text("此操作会清空趋势和排行，废纸篓中的文件会保留。")
         }
     }
 
@@ -102,7 +102,7 @@ struct CleanupHistoryView: View {
 
             if !summary.isEmpty {
                 Menu {
-                    Button("清空全部历史统计…", role: .destructive) {
+                    Button("清空统计记录…", role: .destructive) {
                         showingClearAlert = true
                     }
                 } label: {
@@ -123,7 +123,7 @@ struct CleanupHistoryView: View {
                         .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
                 )
                 .fixedSize()
-                .help("更多统计操作")
+                .help("统计选项")
             }
         }
         .frame(height: 44)
@@ -137,19 +137,21 @@ struct CleanupHistoryView: View {
                 title: "累计已移入废纸篓",
                 value: formatKPIBytes(summary.totalFreedBytes),
                 subtitle: summary.totalRuns > 0
-                    ? "共 \(summary.totalRuns) 次清理 · \(summary.totalTrashedItems) 个条目"
-                    : "尚未产生清理记录",
+                    ? "共 \(summary.totalRuns) 次清理 · \(summary.totalTrashedItems) 项"
+                    : "暂无记录",
                 accent: AppTheme.color(for: .recommended)
             )
 
             verticalDivider
 
             kpiMetricCell(
-                title: "\(viewModel.historyRange.rawValue)已移入废纸篓",
+                title: viewModel.historyRange == .allTime
+                    ? "全部时间已移入废纸篓"
+                    : "\(viewModel.historyRange.rawValue)已移入废纸篓",
                 value: formatKPIBytes(summary.rangeFreedBytes),
                 subtitle: summary.rangeRuns > 0
                     ? "周期内 \(summary.rangeRuns) 次清理 · \(summary.rangeTrashedItems) 项"
-                    : "当前时间窗口内无记录",
+                    : "此时间范围内暂无记录",
                 accent: Color(red: 0.24, green: 0.72, blue: 0.98)
             )
 
@@ -238,7 +240,7 @@ struct CleanupHistoryView: View {
 
             VStack(spacing: 0) {
                 if summary.topClients.isEmpty {
-                    Text("暂无客户端维度数据")
+                    Text("暂无客户端统计")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(16)
@@ -409,7 +411,7 @@ private struct HistoryTrendChartCard: View {
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         if !summary.isEmpty {
-                            Text("悬停查看移入大小")
+                            Text("悬停查看详情")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -571,7 +573,7 @@ private struct HistoryTrendChartCard: View {
             }
         }
         .chartYScale(domain: 0...yUpper)
-        .chartYAxisLabel("已移入废纸篓的大小")
+        .chartYAxisLabel("已移入废纸篓")
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6))
@@ -675,7 +677,7 @@ private struct HistoryTrendChartCard: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "sparkles")
-                        Text("前往查看可清理项")
+                        Text(viewModel.hasScanResults ? "查看扫描结果" : "返回扫描")
                     }
                 }
                 .buttonStyle(
@@ -733,7 +735,7 @@ private struct HistoryLogRow: View {
                             .background(Circle().fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06)))
                     }
                     .buttonStyle(.plain)
-                    .help("移除此条统计记录（不影响废纸篓文件）")
+                    .help("删除这条统计记录（保留废纸篓文件）")
                 } else {
                     Color.clear
                 }
@@ -762,7 +764,7 @@ private struct HistoryLogRow: View {
     private var clientHeadline: String {
         let names = record.clientBreakdown.map(\.clientName)
         if names.isEmpty {
-            return "清理任务"
+            return "清理记录"
         }
         if names.count <= 2 {
             return names.joined(separator: "、")
@@ -772,7 +774,7 @@ private struct HistoryLogRow: View {
 
     private var detailLine: String {
         if record.sampleItemNames.isEmpty {
-            return "已安全移入系统废纸篓"
+            return "已移入废纸篓"
         }
         return record.sampleItemNames.joined(separator: " / ")
     }

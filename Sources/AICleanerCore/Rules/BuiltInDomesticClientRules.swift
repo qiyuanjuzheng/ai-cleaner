@@ -49,7 +49,7 @@ extension BuiltInClientRules {
                 category: .temporary,
                 mode: .children,
                 recommendation: .reviewSuggested,
-                explanation: "会话修改文件时自动创建的备份快照，确认对应任务完成后可勾选清理释放数百 MB 空间。"
+                explanation: "会话修改文件时创建的备份。确认无需恢复后可勾选。"
             ),
             // 建议清理：缓存/追踪/日志/临时
             ScanRule(
@@ -68,7 +68,7 @@ extension BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "会话中缓存的临时二进制大对象，建议清理释放空间。"
+                explanation: "会话缓存的临时文件。"
             ),
             ScanRule(
                 id: "workbuddy-logs",
@@ -609,7 +609,7 @@ extension BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .reviewSuggested,
-                explanation: "本地工程语义检索索引，体积常达数百 MB；清理可释放大量空间，下次打开项目时会自动重新建索引。"
+                explanation: "本地工程搜索索引，下次打开项目时会重新生成。"
             ),
             protectedRule(
                 id: "lingma-protected-bin",
@@ -667,7 +667,7 @@ extension BuiltInClientRules {
                 category: .temporary,
                 mode: .directory,
                 recommendation: .reviewSuggested,
-                explanation: "Computer Use 执行期间留存的截图/运行产物，确认无需回看后可清理释放空间。"
+                explanation: "Computer Use 运行时保存的截图和产物。确认无需回看后可勾选。"
             ),
             ScanRule(
                 id: "zcode-logs",

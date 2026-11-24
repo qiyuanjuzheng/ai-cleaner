@@ -27,11 +27,11 @@ public enum CleanupRecommendation: String, CaseIterable, Codable, Hashable, Send
     public var shortGuidance: String {
         switch self {
         case .recommended:
-            return "安全可重建或已过时，可放心移入废纸篓"
+            return "缓存、日志或临时文件，可移入废纸篓"
         case .reviewSuggested:
-            return "确认是一次性会话或无用产物后再勾选"
+            return "确认无需保留后再勾选"
         case .notRecommended:
-            return "核心配置、记忆、插件或主库，默认不选；如需删除可手动勾选并二次确认"
+            return "凭据和主库已锁定；插件、模型权重等需单独勾选并两次确认"
         }
     }
 

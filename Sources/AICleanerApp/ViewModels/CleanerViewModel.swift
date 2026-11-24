@@ -302,12 +302,12 @@ final class CleanerViewModel {
     private(set) var customSummaries: [ClientScanSummary] = []
     private(set) var builtInSidebarEntries: [SidebarClientEntry] = []
     private(set) var customSidebarEntries: [SidebarClientEntry] = []
-    private(set) var reportTotalBytesText: String = "0 B"
+    private(set) var reportTotalBytesText: String = ""
     private(set) var reportScannedTimeText: String = ""
 
     private(set) var activeSummary: ClientScanSummary? = nil
-    private(set) var headerTitleText: String = "全部 AI 客户端"
-    private(set) var headerSubtitleText: String = "只读扫描本机 AI 客户端空间占用"
+    private(set) var headerTitleText: String = "空间总览"
+    private(set) var headerSubtitleText: String = ""
 
     private(set) var scopedCleanableItems: [CleanableItem] = []
     private(set) var scopedProtectedItems: [CleanableItem] = []
@@ -564,12 +564,12 @@ final class CleanerViewModel {
             homeDirectory: homeDirectory
         )
 
-        let headerTitle = summary?.profile.name ?? "全部 AI 客户端"
+        let headerTitle = summary?.profile.name ?? "空间总览"
         let headerSubtitle: String
         if let summary {
-            headerSubtitle = "\(summary.profile.description) · 总占用 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
+            headerSubtitle = "扫描项共 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
         } else {
-            headerSubtitle = "已识别 \(report.detectedBuiltInClientsCount) 款 AI 客户端 · 总占用 \(CleanerFormatting.formatBytes(report.totalDiskFootprintBytes))"
+            headerSubtitle = "\(report.detectedBuiltInClientsCount) 个 AI 客户端 · 扫描项共 \(CleanerFormatting.formatBytes(report.totalDiskFootprintBytes))"
         }
 
         return CachedScopeData(
@@ -763,7 +763,7 @@ final class CleanerViewModel {
         customSummaries = []
         builtInSidebarEntries = []
         customSidebarEntries = []
-        reportTotalBytesText = "0 B"
+        reportTotalBytesText = ""
         reportScannedTimeText = ""
         clientSummaryByID = [:]
         allDisplayedItemsByID = [:]
@@ -773,8 +773,8 @@ final class CleanerViewModel {
         hasAppliedCurrentScope = false
 
         activeSummary = nil
-        headerTitleText = "全部 AI 客户端"
-        headerSubtitleText = "只读扫描本机 AI 客户端空间占用"
+        headerTitleText = "空间总览"
+        headerSubtitleText = ""
         scopedCleanableItems = []
         scopedProtectedItems = []
         scopedItems = []
@@ -798,8 +798,8 @@ final class CleanerViewModel {
         guard let cached = scopeCache[selection] ?? scopeCache[.allClients] else {
             hasAppliedCurrentScope = false
             activeSummary = nil
-            headerTitleText = "全部 AI 客户端"
-            headerSubtitleText = "只读扫描本机 AI 客户端空间占用"
+            headerTitleText = "空间总览"
+            headerSubtitleText = ""
             scopedCleanableItems = []
             scopedProtectedItems = []
             scopedItems = []
@@ -1200,6 +1200,11 @@ final class CleanerViewModel {
         selectedItemIDs.removeAll()
     }
 
+    func abbreviatedPath(for item: CleanableItem) -> String {
+        presentationByID[item.id]?.abbreviatedPath
+            ?? CleanerFormatting.abbreviatePath(item.url, homeDirectory: scanEngine.homeDirectory)
+    }
+
     func revealInFinder(_ item: CleanableItem) {
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
@@ -1274,7 +1279,7 @@ final class CleanerViewModel {
                     _ = try self.historyStore.record(result: result)
                     self.historyRecords = self.historyStore.load()
                 } catch {
-                    self.errorBannerMessage = "清理已完成，但记录历史统计失败：\(error.localizedDescription)"
+                    self.errorBannerMessage = "文件已移入废纸篓，保存统计记录失败：\(error.localizedDescription)"
                 }
             }
             self.isCleaning = false
@@ -1292,7 +1297,7 @@ final class CleanerViewModel {
         do {
             historyRecords = try historyStore.delete(id: id)
         } catch {
-            errorBannerMessage = "删除历史统计记录失败：\(error.localizedDescription)"
+            errorBannerMessage = "删除统计记录失败：\(error.localizedDescription)"
         }
     }
 
@@ -1301,7 +1306,7 @@ final class CleanerViewModel {
             try historyStore.clearAll()
             historyRecords = []
         } catch {
-            errorBannerMessage = "清空历史统计记录失败：\(error.localizedDescription)"
+            errorBannerMessage = "清空统计记录失败：\(error.localizedDescription)"
         }
     }
 

@@ -38,10 +38,10 @@ struct TrashConfirmationSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(hasHighRiskItems ? "高风险确认 · 移入系统废纸篓" : "确认移入系统废纸篓")
+                    Text(hasHighRiskItems ? "确认移入废纸篓（含高风险项）" : "确认移入废纸篓")
                         .font(.system(.title3, design: .rounded).weight(.bold))
                     HStack(spacing: 5) {
-                        Text("预计移入 \(viewModel.selectedItems.count) 个条目，共")
+                        Text("拟移入 \(viewModel.selectedItems.count) 项，共")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Text(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))
@@ -60,10 +60,10 @@ struct TrashConfirmationSheet: View {
                         .padding(.top, 1)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("包含 \(viewModel.selectedNotRecommendedItems.count) 项「不建议清理」目标（\(CleanerFormatting.formatBytes(viewModel.selectedNotRecommendedTotalBytes))）")
+                        Text("包含 \(viewModel.selectedNotRecommendedItems.count) 项「不建议清理」条目（\(CleanerFormatting.formatBytes(viewModel.selectedNotRecommendedTotalBytes))）")
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(riskColor)
-                        Text("删除核心配置、插件、技能库、本地模型、运行时可能导致对应客户端需要重新登录、重新下载组件或丢失历史状态。请核对下方标红条目后再确认。")
+                        Text("移入这些条目可能导致配置、登录或历史状态丢失，也可能需要重新下载插件或模型。如需恢复，请在废纸篓中选择「放回原处」。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -84,7 +84,7 @@ struct TrashConfirmationSheet: View {
                     Image(systemName: "checkmark.shield.fill")
                         .foregroundStyle(AppTheme.color(for: .recommended))
                         .padding(.top, 1)
-                    Text("安全清理保证：本应用仅调用 macOS 系统废纸篓接口，不执行不可逆永久删除。清理后如发现需要还原，可在「废纸篓」中选择「放回原处」。")
+                    Text("如需恢复，请在废纸篓中选择「放回原处」。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -149,7 +149,7 @@ struct TrashConfirmationSheet: View {
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
 
-                                            Text(CleanerFormatting.abbreviatePath(item.url))
+                                            Text(viewModel.abbreviatedPath(for: item))
                                                 .font(.caption2.monospaced())
                                                 .foregroundStyle(.secondary)
                                                 .lineLimit(1)
@@ -204,7 +204,7 @@ struct TrashConfirmationSheet: View {
                             }
                         }
 
-                        Text("我已确认上述风险，仍要将这 \(viewModel.selectedNotRecommendedItems.count) 项「不建议清理」条目移入系统废纸篓（可在废纸篓中还原）")
+                        Text("我了解风险，仍要移入废纸篓。")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
@@ -252,7 +252,7 @@ struct TrashConfirmationSheet: View {
                         } else {
                             Image(systemName: "trash.fill")
                         }
-                        Text(viewModel.isCleaning ? "正在移入…" : (hasHighRiskItems ? "确认并强制移入废纸篓" : "确认移入废纸篓"))
+                        Text(viewModel.isCleaning ? "正在移入…" : "移入废纸篓")
                     }
                 }
                 .buttonStyle(

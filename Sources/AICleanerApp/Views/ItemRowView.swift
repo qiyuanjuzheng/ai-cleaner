@@ -115,6 +115,7 @@ struct ItemRowView: View, Equatable {
                     .animation(reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.66), value: isSelected)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(isSelected ? "取消勾选" : "勾选并确认风险")
             }
 
             HStack(alignment: .center, spacing: 11) {
@@ -252,7 +253,7 @@ struct ItemRowView: View, Equatable {
                         Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
                     } else {
                         Label(
-                            isSelected ? "取消勾选（不建议清理）" : "强制勾选（需风险确认）…",
+                            isSelected ? "取消勾选" : "勾选并确认风险…",
                             systemImage: isSelected ? "checkmark.square" : "exclamationmark.shield"
                         )
                     }

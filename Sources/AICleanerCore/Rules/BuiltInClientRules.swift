@@ -80,7 +80,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "JS/WASM 编译缓存，可安全移入废纸篓并在启动时重建。"
+                explanation: "JS/WASM 编译缓存，下次启动时自动重建。"
             ),
             ScanRule(
                 id: "\(prefix)-gpu-cache",
@@ -98,7 +98,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "持久化图形渲染缓存，建议清理。"
+                explanation: "持久化图形渲染缓存，清理后按需重建。"
             ),
             ScanRule(
                 id: "\(prefix)-shader-cache",
@@ -107,7 +107,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "Skia/图形着色器编译缓存，建议清理。"
+                explanation: "Skia 图形着色器编译缓存，清理后按需重建。"
             ),
             ScanRule(
                 id: "\(prefix)-graphite-dawn-cache",
@@ -116,7 +116,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "图形引擎着色器缓存，可安全清理。"
+                explanation: "图形引擎着色器缓存，清理后按需重建。"
             ),
             ScanRule(
                 id: "\(prefix)-dawn-graphite",
@@ -125,7 +125,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "图形后端着色器缓存，可安全清理。"
+                explanation: "图形后端着色器缓存，清理后按需重建。"
             ),
             ScanRule(
                 id: "\(prefix)-dawn-webgpu",
@@ -134,7 +134,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "WebGPU 图形缓存，可安全清理。"
+                explanation: "WebGPU 图形缓存，清理后按需重建。"
             ),
             ScanRule(
                 id: "\(prefix)-crashpad",
@@ -143,7 +143,7 @@ public enum BuiltInClientRules {
                 category: .logs,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "应用异常退出时收集的崩溃诊断文件，建议定期清理。"
+                explanation: "应用异常退出时生成的崩溃诊断日志。"
             ),
             ScanRule(
                 id: "\(prefix)-app-logs",
@@ -200,7 +200,7 @@ public enum BuiltInClientRules {
                 category: .sessions,
                 mode: .projectSessions,
                 recommendation: .reviewSuggested,
-                explanation: "按单条对话展开各项目下的聊天会话（.jsonl 及子代理/产物目录），并保留每个项目的 memory/ 与 sessions-index.json。"
+                explanation: "本地会话记录及会话产物。"
             ),
             ScanRule(
                 id: "claude-code-transcripts",
@@ -238,7 +238,7 @@ public enum BuiltInClientRules {
                 category: .cache,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "终端大段文本粘贴生成的临时缓存，建议清理。"
+                explanation: "终端粘贴长文本生成的临时缓存。"
             ),
             ScanRule(
                 id: "claude-code-shell-snapshots",
@@ -284,7 +284,7 @@ public enum BuiltInClientRules {
                 category: .temporary,
                 mode: .directory,
                 recommendation: .reviewSuggested,
-                explanation: "用于会话内撤销编辑的历史文件快照，确认无需回滚近期会话修改后可放心清理。"
+                explanation: "用于回滚会话中的文件修改。确认无需回滚后可勾选。"
             ),
             // 不建议清理（透明展示 + 锁定保护）
             protectedRule(
@@ -360,7 +360,7 @@ public enum BuiltInClientRules {
                 category: .temporary,
                 mode: .directory,
                 recommendation: .recommended,
-                explanation: "会话执行期间产生的大体积临时目录，建议优先清理。"
+                explanation: "会话执行时生成的临时文件。"
             ),
             ScanRule(
                 id: "codex-cli-hidden-tmp",
@@ -1238,7 +1238,7 @@ public enum BuiltInClientRules {
                 id: "ollama-protected-models",
                 displayName: "本地大模型权重库 (models)",
                 path: ".ollama/models",
-                reason: "包含已拉取的本地大模型权重文件，重新下载耗时极长，如需删除建议使用 `ollama rm`，不建议直接清理。"
+                reason: "已下载的 Ollama 模型权重。移入后需重新下载才能使用。"
             ),
             protectedRule(
                 id: "ollama-protected-key",

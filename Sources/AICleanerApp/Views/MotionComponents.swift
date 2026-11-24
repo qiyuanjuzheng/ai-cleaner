@@ -1,5 +1,33 @@
 import AICleanerCore
+import AppKit
 import SwiftUI
+
+// MARK: - 0. 统一品牌图标资源加载器（兼容 .app Bundle 与 swift run，且绝不触发 Bundle.module 跨机崩溃）
+
+enum AppBrandIcon {
+    static let brandImage: NSImage? = loadImage(named: "BrandIcon")
+    static let appIconImage: NSImage? = loadImage(named: "AppIcon-1024") ?? brandImage
+
+    private static func loadImage(named name: String) -> NSImage? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            return img
+        }
+        let bundleCandidates = [
+            Bundle.main.bundleURL.appendingPathComponent("AICleaner_AICleanerApp.bundle"),
+            Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("AICleaner_AICleanerApp.bundle")
+        ].compactMap { $0 }
+
+        for candidate in bundleCandidates {
+            if let bundle = Bundle(url: candidate),
+               let url = bundle.url(forResource: name, withExtension: "png"),
+               let img = NSImage(contentsOf: url) {
+                return img
+            }
+        }
+        return nil
+    }
+}
 
 // MARK: - 1. 零主线程开销的柔和极光氛围背景（纯 GPU 径向渐变，取消高频离屏 blur 避免切换掉帧）
 
@@ -96,26 +124,25 @@ struct ScanReadyHeroView: View {
                         .stroke(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.07), lineWidth: 1)
                         .frame(width: 112, height: 112)
 
-                    ZStack {
-                        Circle()
-                            .fill(AppTheme.brandGradient)
-                            .frame(width: 60, height: 60)
-                            .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.40), radius: 14, y: 4)
-                            .overlay(
+                    Group {
+                        if let brandImage = AppBrandIcon.brandImage {
+                            Image(nsImage: brandImage)
+                                .resizable()
+                                .interpolation(.high)
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 74, height: 74)
+                                .shadow(color: Color(red: 0.14, green: 0.52, blue: 0.78).opacity(colorScheme == .dark ? 0.36 : 0.22), radius: 14, y: 5)
+                        } else {
+                            ZStack {
                                 Circle()
-                                    .strokeBorder(
-                                        LinearGradient(
-                                            colors: [Color.white.opacity(0.55), Color.white.opacity(0.08)],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ),
-                                        lineWidth: 1.0
-                                    )
-                            )
-
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 26, weight: .semibold))
-                            .foregroundStyle(.white)
+                                    .fill(AppTheme.brandGradient)
+                                    .frame(width: 60, height: 60)
+                                    .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.40), radius: 14, y: 4)
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 26, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            }
+                        }
                     }
                     .scaleEffect(breathe)
                 }
@@ -272,15 +299,26 @@ struct OrbitalScannerHero: View {
                         .frame(width: 78, height: 78)
                         .rotationEffect(innerRotation)
 
-                    ZStack {
-                        Circle()
-                            .fill(AppTheme.brandGradient)
-                            .frame(width: 50, height: 50)
-                            .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.48), radius: 12)
+                    Group {
+                        if let brandImage = AppBrandIcon.brandImage {
+                            Image(nsImage: brandImage)
+                                .resizable()
+                                .interpolation(.high)
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 60, height: 60)
+                                .shadow(color: Color(red: 0.14, green: 0.62, blue: 0.80).opacity(0.32), radius: 12, y: 3)
+                        } else {
+                            ZStack {
+                                Circle()
+                                    .fill(AppTheme.brandGradient)
+                                    .frame(width: 50, height: 50)
+                                    .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.48), radius: 12)
 
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(.white)
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundStyle(.white)
+                            }
+                        }
                     }
                     .scaleEffect(pulse)
                 }
@@ -664,25 +702,34 @@ struct BrandLogoEmblem: View {
                 }
             }
 
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(AppTheme.brandGradient)
-                .frame(width: 27, height: 27)
-                .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.40), radius: 6, y: 1.5)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.50), Color.white.opacity(0.08)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.8
-                        )
-                )
+            if let brandImage = AppBrandIcon.brandImage {
+                Image(nsImage: brandImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 28, height: 28)
+                    .shadow(color: Color.black.opacity(0.14), radius: 3, y: 1)
+            } else {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(AppTheme.brandGradient)
+                    .frame(width: 27, height: 27)
+                    .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.40), radius: 6, y: 1.5)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.50), Color.white.opacity(0.08)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 0.8
+                            )
+                    )
 
-            Image(systemName: "sparkles")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+            }
         }
         .frame(width: 32, height: 32)
     }

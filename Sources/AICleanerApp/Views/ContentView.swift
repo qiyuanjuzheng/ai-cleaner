@@ -82,13 +82,15 @@ struct ContentView: View {
                 Button {
                     viewModel.rescan()
                 } label: {
-                    if viewModel.isScanning {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 16, height: 16)
-                    } else {
-                        Label("重新扫描", systemImage: "arrow.clockwise")
+                    ZStack {
+                        Image(systemName: "arrow.clockwise")
+                            .opacity(viewModel.isScanning ? 0 : 1)
+                        if viewModel.isScanning {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
                     }
+                    .frame(width: 18, height: 18)
                 }
                 .disabled(viewModel.isScanning || viewModel.isCleaning)
                 .help("重新执行只读扫描 (⌘R)")

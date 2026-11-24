@@ -158,6 +158,7 @@ struct OrbitalScannerHero: View {
                     }
                     .scaleEffect(pulse)
                 }
+                .frame(width: 210, height: 210)
             }
 
             VStack(spacing: 6) {
@@ -553,10 +554,11 @@ struct BrandLogoEmblem: View {
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.white)
         }
+        .frame(width: 32, height: 32)
     }
 }
 
-// MARK: - 7. 顶边极光扫描光束（重新扫描时的实时能量反馈）
+// MARK: - 7. 顶边极光扫描光束（Canvas 严格裁剪，绝不溢出卡片边界）
 
 struct AuroraScanSweepBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -566,37 +568,53 @@ struct AuroraScanSweepBar: View {
             if reduceMotion {
                 Rectangle()
                     .fill(AppTheme.brandGradient)
-                    .frame(height: 2)
-                    .opacity(0.75)
+                    .opacity(0.70)
             } else {
-                TimelineView(.animation) { timeline in
-                    let phase = (timeline.date.timeIntervalSinceReferenceDate * 0.85).truncatingRemainder(dividingBy: 1.0)
-                    GeometryReader { proxy in
-                        let beamWidth = max(120, proxy.size.width * 0.34)
-                        let travel = proxy.size.width + beamWidth
-                        let xPos = CGFloat(phase) * travel - beamWidth
-
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        .clear,
-                                        Color(red: 0.14, green: 0.88, blue: 0.64),
-                                        Color(red: 0.30, green: 0.68, blue: 1.00),
-                                        .clear
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: beamWidth, height: 2.2)
-                            .shadow(color: Color(red: 0.16, green: 0.86, blue: 0.66).opacity(0.85), radius: 5, y: 1)
-                            .offset(x: xPos)
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                    let phase = (timeline.date.timeIntervalSinceReferenceDate * 0.78)
+                        .truncatingRemainder(dividingBy: 1.0)
+                    Canvas { context, size in
+                        drawSweepBeam(in: &context, size: size, phase: phase)
                     }
-                    .frame(height: 2.5)
                 }
             }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: 2.5)
+        .clipped()
         .allowsHitTesting(false)
+    }
+
+    private func drawSweepBeam(in context: inout GraphicsContext, size: CGSize, phase: Double) {
+        guard size.width > 1, size.height > 0 else { return }
+        let bounds = CGRect(origin: .zero, size: size)
+        context.clip(to: Path(bounds))
+
+        // 极淡底轨，明确标示加载条范围严格位于卡片内部
+        context.fill(
+            Path(bounds),
+            with: .color(Color(red: 0.14, green: 0.82, blue: 0.62).opacity(0.14))
+        )
+
+        let beamWidth = min(max(96, size.width * 0.30), size.width * 0.55)
+        let travel = size.width + beamWidth
+        let startX = CGFloat(phase) * travel - beamWidth
+        let beamRect = CGRect(x: startX, y: 0, width: beamWidth, height: size.height)
+
+        let gradient = Gradient(stops: [
+            .init(color: .clear, location: 0.0),
+            .init(color: Color(red: 0.14, green: 0.84, blue: 0.60).opacity(0.85), location: 0.35),
+            .init(color: Color(red: 0.24, green: 0.68, blue: 1.00).opacity(0.95), location: 0.65),
+            .init(color: .clear, location: 1.0)
+        ])
+
+        context.fill(
+            Path(roundedRect: beamRect, cornerRadius: size.height / 2),
+            with: .linearGradient(
+                gradient,
+                startPoint: CGPoint(x: beamRect.minX, y: size.height / 2),
+                endPoint: CGPoint(x: beamRect.maxX, y: size.height / 2)
+            )
+        )
     }
 }

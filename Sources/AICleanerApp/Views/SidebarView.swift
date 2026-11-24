@@ -9,8 +9,8 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 极简品牌顶栏
-            HStack(spacing: 10) {
+            // 极简品牌顶栏（固定高度，扫描态切换绝不引起侧边栏上下跳动）
+            HStack(spacing: 9) {
                 BrandLogoEmblem(isScanning: viewModel.isScanning)
 
                 Text("AI Cleaner")
@@ -18,14 +18,13 @@ struct SidebarView: View {
 
                 Spacer()
 
-                if viewModel.isScanning {
-                    ProgressView()
-                        .controlSize(.small)
-                }
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 16, height: 16)
+                    .opacity(viewModel.isScanning ? 1.0 : 0.0)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 14)
+            .frame(height: 48)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
@@ -106,8 +105,8 @@ struct SidebarView: View {
                         }
                     }
                     .padding(.horizontal, 10)
-                    .padding(.top, 16)
-                    .padding(.bottom, 4)
+                    .frame(height: 22)
+                    .padding(.top, 14)
 
                     if viewModel.customSummaries.isEmpty {
                         Button {
@@ -170,7 +169,7 @@ struct SidebarView: View {
                 .padding(.vertical, 6)
             }
 
-            // 极简底部安全状态行（无重复大按钮）
+            // 极简底部安全状态行（固定高度）
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.shield.fill")
                     .font(.system(size: 11))
@@ -179,20 +178,22 @@ struct SidebarView: View {
                     Text("只读扫描 \(CleanerFormatting.formatTime(scannedAt))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 } else {
                     Text("只读扫描 · 仅移入废纸篓")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
                 Spacer()
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .frame(height: 34)
         }
     }
 
     private func select(_ selection: SidebarSelection) {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.80)) {
+        withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82)) {
             viewModel.sidebarSelection = selection
         }
     }
@@ -210,7 +211,7 @@ struct SidebarView: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.bottom, 4)
+        .frame(height: 22)
     }
 }
 
@@ -258,7 +259,7 @@ private struct SidebarClientTile: View {
             }
             .padding(.leading, 11)
             .padding(.trailing, 10)
-            .padding(.vertical, 7)
+            .frame(height: 34)
             .background(
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 8.5, style: .continuous)

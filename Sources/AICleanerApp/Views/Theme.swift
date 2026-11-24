@@ -287,17 +287,21 @@ struct GlowingPillButtonStyle: ButtonStyle {
                             LinearGradient(
                                 colors: [
                                     .clear,
-                                    Color.white.opacity(0.36),
-                                    Color.white.opacity(0.10),
+                                    Color.white.opacity(0.34),
+                                    Color.white.opacity(0.08),
                                     .clear
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
-                            .frame(width: max(32, proxy.size.width * 0.40))
+                            .frame(width: max(32, proxy.size.width * 0.38), height: proxy.size.height * 1.6)
                             .rotationEffect(.degrees(18))
-                            .offset(x: sheenProgress * (proxy.size.width + 60))
+                            .offset(
+                                x: sheenProgress * (proxy.size.width + 60),
+                                y: -proxy.size.height * 0.3
+                            )
                         }
+                        .clipped()
                         .clipShape(Capsule(style: .continuous))
                         .allowsHitTesting(false)
                     }

@@ -106,7 +106,7 @@ struct BottomActionBar: View {
         }
         .padding(.leading, 18)
         .padding(.trailing, 10)
-        .padding(.vertical, 9)
+        .frame(height: 48)
         .background(
             Capsule(style: .continuous)
                 .fill(.ultraThinMaterial)

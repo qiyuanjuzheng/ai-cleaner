@@ -43,7 +43,7 @@ struct ItemListView: View {
                 )
 
                 VStack(alignment: .leading, spacing: 11) {
-                    // 标题行 + 唯一主行动按钮
+                    // 标题行 + 唯一主行动按钮（锁定固定高度，切换有无建议项的客户端绝不上下抖动）
                     HStack(alignment: .center, spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(viewModel.activeSummary?.profile.name ?? "全部 AI 客户端")
@@ -85,8 +85,9 @@ struct ItemListView: View {
                             .help("自动勾选当前视图中所有「建议清理」项，绝不勾选「按需清理」或「不建议清理」项")
                         }
                     }
+                    .frame(height: 44)
 
-                    // 统一三档交互式指标条（悬停联动圆环高亮 + 点击筛选，彻底消除 3 张大卡片的视觉割裂）
+                    // 统一三档交互式指标条（固定高度，悬停/点击零跳动）
                     HStack(spacing: 4) {
                         tierMetricSegment(
                             tier: .recommended,
@@ -105,6 +106,7 @@ struct ItemListView: View {
                         )
                     }
                     .padding(3)
+                    .frame(height: 52)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.035))
@@ -112,15 +114,13 @@ struct ItemListView: View {
                 }
             }
 
-            // 融入底边的 3.5pt 极细比例条（无冗余重复文字）
-            if viewModel.scopedTotalFootprintBytes > 0 {
-                HairlineStorageBar(
-                    recommendedBytes: viewModel.scopedRecommendedBytes,
-                    reviewBytes: viewModel.scopedReviewSuggestedBytes,
-                    protectedBytes: viewModel.scopedProtectedBytes,
-                    highlightedTier: viewModel.highlightedRingTier
-                )
-            }
+            // 始终占位渲染的 3.5pt 极细比例条（切换空目录或零空间客户端时卡片高度 100% 恒定）
+            HairlineStorageBar(
+                recommendedBytes: viewModel.scopedRecommendedBytes,
+                reviewBytes: viewModel.scopedReviewSuggestedBytes,
+                protectedBytes: viewModel.scopedProtectedBytes,
+                highlightedTier: viewModel.highlightedRingTier
+            )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -135,10 +135,11 @@ struct ItemListView: View {
         .overlay(alignment: .top) {
             if viewModel.isScanning {
                 AuroraScanSweepBar()
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .padding(.horizontal, 14)
                     .transition(.opacity)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.85)
@@ -182,16 +183,17 @@ struct ItemListView: View {
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.tertiary)
                     }
-                    Text(CleanerFormatting.formatBytes(bytes))
+                    Text(bytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(bytes))
                         .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
                         .foregroundStyle(bytes > 0 ? (isSelected || isHovered ? tint : Color.primary) : Color.secondary.opacity(0.55))
                         .contentTransition(.numericText())
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6.5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -274,8 +276,7 @@ struct ItemListView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 5.5)
-            .frame(width: 215)
+            .frame(width: 215, height: 30)
             .background(
                 RoundedRectangle(cornerRadius: 8.5, style: .continuous)
                     .fill(AppTheme.glassCardFill(for: colorScheme))
@@ -337,11 +338,11 @@ struct ItemListView: View {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 26)
+                    .frame(width: 28, height: 28)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .frame(width: 30, height: 28)
+            .frame(width: 30, height: 30)
             .background(
                 RoundedRectangle(cornerRadius: 8.5, style: .continuous)
                     .fill(AppTheme.glassCardFill(for: colorScheme))
@@ -361,6 +362,7 @@ struct ItemListView: View {
             .fixedSize()
             .help("时间范围、排序与批量勾选")
         }
+        .frame(height: 32)
     }
 
     private func shortCategoryTitle(_ category: ScanCategory) -> String {
@@ -396,7 +398,7 @@ struct ItemListView: View {
             Text(title)
                 .font(.caption.weight(isSelected ? .semibold : .regular))
                 .padding(.horizontal, 10)
-                .padding(.vertical, 4.5)
+                .frame(height: 24)
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .background {
                     if isSelected {
@@ -455,12 +457,12 @@ struct ItemListView: View {
                                 section: section,
                                 isCollapsed: isCollapsed,
                                 onToggleCollapse: {
-                                    withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
+                                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                                         viewModel.toggleSectionCollapsed(section.recommendation)
                                     }
                                 },
                                 onSelectSection: {
-                                    withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.80)) {
+                                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                                         viewModel.selectSection(section.recommendation)
                                     }
                                 }
@@ -653,6 +655,6 @@ private struct CleanSectionHeader: View {
             }
         }
         .padding(.horizontal, 4)
-        .padding(.top, 2)
+        .frame(height: 28)
     }
 }

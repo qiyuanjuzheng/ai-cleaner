@@ -84,7 +84,7 @@ struct CleanupHistoryView: View {
                         Text(range.rawValue)
                             .font(.caption.weight(isSelected ? .semibold : .regular))
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
+                            .frame(height: 24)
                             .foregroundStyle(isSelected ? .primary : .secondary)
                             .background {
                                 if isSelected {
@@ -119,11 +119,11 @@ struct CleanupHistoryView: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 26)
+                        .frame(width: 28, height: 28)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 30, height: 28)
+                .frame(width: 30, height: 30)
                 .background(
                     RoundedRectangle(cornerRadius: 8.5, style: .continuous)
                         .fill(AppTheme.glassCardFill(for: colorScheme))
@@ -136,6 +136,7 @@ struct CleanupHistoryView: View {
                 .help("更多统计操作")
             }
         }
+        .frame(height: 44)
     }
 
     // MARK: - 2. 统一三列玻璃指标条（克制零割裂）
@@ -173,7 +174,7 @@ struct CleanupHistoryView: View {
                 accent: Color(red: 0.60, green: 0.50, blue: 0.98)
             )
         }
-        .padding(.vertical, 14)
+        .frame(height: 92)
         .background(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -232,40 +233,33 @@ struct CleanupHistoryView: View {
     private var trendChartCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 12) {
-                if let point = hoveredPoint, !summary.isEmpty {
-                    HStack(spacing: 10) {
-                        Text(CleanerFormatting.formatDay(point.date))
-                            .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.primary)
-
-                        Text("当日 +\(CleanerFormatting.formatBytes(point.dailyFreedBytes))")
-                            .font(.caption.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(AppTheme.color(for: .recommended))
-                            .contentTransition(.numericText())
-
-                        Text("·")
-                            .foregroundStyle(.tertiary)
-
-                        Text("累计 \(CleanerFormatting.formatBytes(point.cumulativeFreedBytes))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .contentTransition(.numericText())
-
-                        if point.cleanupRuns > 0 {
-                            Text("（\(point.cleanupRuns) 次 · \(point.trashedCount) 项）")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let point = hoveredPoint, !summary.isEmpty {
+                        HStack(spacing: 8) {
+                            Text(CleanerFormatting.formatDay(point.date))
+                                .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.primary)
+                            Text("当日 +\(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(AppTheme.color(for: .recommended))
+                                .contentTransition(.numericText())
                         }
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 2) {
+
+                        Text("累计 \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : " · 当日无清理")")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
                         Text(viewModel.historyMetricMode == .cumulative ? "累计释放空间趋势" : "单日释放空间分布")
                             .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
                         Text(summary.isEmpty ? "完成首次安全清理后将自动绘制空间趋势曲线" : "鼠标悬停图表可实时查看每日释放与累计体积")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
+                .frame(height: 36, alignment: .leading)
 
                 Spacer(minLength: 8)
 
@@ -281,7 +275,7 @@ struct CleanupHistoryView: View {
                             Text(mode.rawValue)
                                 .font(.caption.weight(isSelected ? .semibold : .regular))
                                 .padding(.horizontal, 9)
-                                .padding(.vertical, 4)
+                                .frame(height: 24)
                                 .foregroundStyle(isSelected ? .primary : .secondary)
                                 .background {
                                     if isSelected {
@@ -303,6 +297,7 @@ struct CleanupHistoryView: View {
                 )
                 .fixedSize(horizontal: true, vertical: false)
             }
+            .frame(height: 36)
 
             if summary.isEmpty {
                 emptyChartPlaceholder
@@ -617,7 +612,7 @@ struct CleanupHistoryView: View {
                             .frame(height: 3.5)
                         }
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .frame(height: 46)
 
                         if index < topList.count - 1 {
                             Rectangle()
@@ -737,7 +732,7 @@ private struct HistoryLogRow: View {
             .frame(minWidth: 108, alignment: .trailing)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .frame(height: 54)
         .background(isHovered ? Color.primary.opacity(colorScheme == .dark ? 0.04 : 0.03) : Color.clear)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
         .onHover { hovering in

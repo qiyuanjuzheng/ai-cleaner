@@ -162,7 +162,7 @@ struct ItemRowView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 9.5)
+        .frame(height: 54)
         .background(rowBackground)
         .help("\(item.safetyNote)\n路径：\(CleanerFormatting.abbreviatePath(item.url))")
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)

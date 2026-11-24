@@ -10,29 +10,34 @@ final class ClientLogoResolverTests: XCTestCase {
         let builtInIDs = Set(BuiltInClientRules.allProfiles.map(\.id))
         let unmapped = ClientLogoResolver.configuredClientIDs.subtracting(builtInIDs)
         XCTAssertTrue(unmapped.isEmpty, "Unexpected client IDs in ClientLogoResolver: \(unmapped)")
+        XCTAssertEqual(ClientLogoResolver.configuredClientIDs, builtInIDs)
     }
 
     @MainActor
-    func testEveryBundledMarkHasValidDistinctLightAndDarkAssets() throws {
+    func testEveryBundledMarkLoadsValidAssetsAndThemedMarksDifferBetweenLightAndDark() throws {
         let resolver = ClientLogoResolver(applicationURLs: { _ in [] })
-        XCTAssertFalse(ClientLogoResolver.bundledMarkNames.isEmpty)
+        let marks = ClientLogoResolver.configuredBundledMarks
+        XCTAssertEqual(marks.count, 30)
 
-        for mark in ClientLogoResolver.bundledMarkNames {
+        for (clientID, mark) in marks {
             let light = try XCTUnwrap(
-                resolver.bundledImage(named: mark, colorScheme: .light),
-                "Missing light asset for \(mark)"
+                resolver.bundledImage(for: mark, colorScheme: .light),
+                "Missing light asset for \(clientID)"
             )
             let dark = try XCTUnwrap(
-                resolver.bundledImage(named: mark, colorScheme: .dark),
-                "Missing dark asset for \(mark)"
+                resolver.bundledImage(for: mark, colorScheme: .dark),
+                "Missing dark asset for \(clientID)"
             )
-            XCTAssertTrue(light.isValid)
-            XCTAssertTrue(dark.isValid)
-            XCTAssertNotEqual(
-                light.tiffRepresentation,
-                dark.tiffRepresentation,
-                "Expected distinct light/dark assets for \(mark)"
-            )
+            XCTAssertTrue(light.isValid, "Invalid light asset for \(clientID)")
+            XCTAssertTrue(dark.isValid, "Invalid dark asset for \(clientID)")
+
+            if case .themed = mark {
+                XCTAssertNotEqual(
+                    light.tiffRepresentation,
+                    dark.tiffRepresentation,
+                    "Expected distinct light/dark assets for themed client \(clientID)"
+                )
+            }
         }
     }
 
@@ -54,35 +59,69 @@ final class ClientLogoResolverTests: XCTestCase {
     }
 
     @MainActor
-    func testUnifiedChatGPTBundleIsNotShownAsStandaloneCodex() async throws {
-        let chatGPT = try FixtureApp(
+    func testUnifiedChatGPTBundleUsesDedicatedCodexResourcesWithoutLeakingChatGPTIcon() async throws {
+        // Unified ChatGPT.app WITHOUT embedded icon-codex-*.png must NOT leak ChatGPT's icon into Codex.
+        let chatGPTOnly = try FixtureApp(
             name: "ChatGPT",
             bundleID: "com.openai.codex",
-            executable: "ChatGPT"
+            executable: "ChatGPT",
+            iconColor: .systemRed
         )
-        let resolver = ClientLogoResolver(applicationURLs: { bundleID in
-            bundleID == "com.openai.codex" ? [chatGPT.url] : []
+        let resolverWithoutCodexIcon = ClientLogoResolver(applicationURLs: { bundleID in
+            bundleID == "com.openai.codex" ? [chatGPTOnly.url] : []
         })
+        let chatGPTIcon = try XCTUnwrap(resolverWithoutCodexIcon.image(for: "chatgpt-desktop", colorScheme: .light))
+        let codexFallback = try XCTUnwrap(resolverWithoutCodexIcon.image(for: "codex", colorScheme: .light))
+        XCTAssertNotEqual(chatGPTIcon.tiffRepresentation, codexFallback.tiffRepresentation)
 
-        XCTAssertNotNil(resolver.image(for: "chatgpt-desktop", colorScheme: .light))
-        XCTAssertNil(resolver.image(for: "codex", colorScheme: .light))
+        // Unified ChatGPT.app WITH embedded icon-codex-light.png / icon-codex-dark-color.png resolves real local Codex icons.
+        let unifiedWithCodex = try FixtureApp(
+            name: "ChatGPT",
+            bundleID: "com.openai.codex",
+            executable: "ChatGPT",
+            iconColor: .systemRed,
+            extraImages: [
+                "icon-codex-light.png": .systemBlue,
+                "icon-codex-dark-color.png": .systemIndigo
+            ]
+        )
+        let resolverWithCodexIcon = ClientLogoResolver(applicationURLs: { bundleID in
+            bundleID == "com.openai.codex" ? [unifiedWithCodex.url] : []
+        })
+        let codexLight = try XCTUnwrap(resolverWithCodexIcon.image(for: "codex", colorScheme: .light))
+        let codexDark = try XCTUnwrap(resolverWithCodexIcon.image(for: "codex", colorScheme: .dark))
+        XCTAssertNotEqual(codexLight.tiffRepresentation, chatGPTIcon.tiffRepresentation)
+        XCTAssertNotEqual(codexLight.tiffRepresentation, codexFallback.tiffRepresentation)
+        XCTAssertNotEqual(codexLight.tiffRepresentation, codexDark.tiffRepresentation)
 
+        // Standalone Codex.app resolves Codex directly without affecting ChatGPT Desktop.
         let standaloneCodex = try FixtureApp(
             name: "Codex",
             bundleID: "com.openai.codex",
-            executable: "Codex"
+            executable: "Codex",
+            iconColor: .systemTeal
         )
-        let codexResolver = ClientLogoResolver(applicationURLs: { bundleID in
+        let codexOnlyResolver = ClientLogoResolver(applicationURLs: { bundleID in
             bundleID == "com.openai.codex" ? [standaloneCodex.url] : []
         })
-        XCTAssertNotNil(codexResolver.image(for: "codex", colorScheme: .light))
-        XCTAssertNil(codexResolver.image(for: "chatgpt-desktop", colorScheme: .light))
+        let standaloneIcon = try XCTUnwrap(codexOnlyResolver.image(for: "codex", colorScheme: .light))
+        let chatGPTFallback = try XCTUnwrap(codexOnlyResolver.image(for: "chatgpt-desktop", colorScheme: .light))
+        XCTAssertNotEqual(standaloneIcon.tiffRepresentation, codexFallback.tiffRepresentation)
+        XCTAssertNotEqual(standaloneIcon.tiffRepresentation, chatGPTFallback.tiffRepresentation)
     }
 
     @MainActor
     func testWindsurfExcludesRebrandedDevinBundleAndClaudeDesktopExcludesClaudeCode() async throws {
-        let devin = try FixtureApp(name: "Devin", bundleID: "com.exafunction.windsurf")
-        let claudeDesktop = try FixtureApp(name: "Claude", bundleID: "com.anthropic.claudefordesktop")
+        let devin = try FixtureApp(
+            name: "Devin",
+            bundleID: "com.exafunction.windsurf",
+            iconColor: .systemPurple
+        )
+        let claudeDesktop = try FixtureApp(
+            name: "Claude",
+            bundleID: "com.anthropic.claudefordesktop",
+            iconColor: .systemOrange
+        )
         let resolver = ClientLogoResolver(applicationURLs: { bundleID in
             switch bundleID {
             case "com.exafunction.windsurf": return [devin.url]
@@ -90,102 +129,99 @@ final class ClientLogoResolverTests: XCTestCase {
             default: return []
             }
         })
+        let fallbackOnly = ClientLogoResolver(applicationURLs: { _ in [] })
 
-        XCTAssertNil(resolver.image(for: "windsurf", colorScheme: .light))
-        XCTAssertNotNil(resolver.image(for: "claude-desktop", colorScheme: .light))
-        XCTAssertNil(resolver.image(for: "claude-code", colorScheme: .light))
+        // Devin.app must NOT override Windsurf's bundled mark.
+        let windsurfResolved = try XCTUnwrap(resolver.image(for: "windsurf", colorScheme: .light))
+        let windsurfFallback = try XCTUnwrap(fallbackOnly.image(for: "windsurf", colorScheme: .light))
+        XCTAssertEqual(windsurfResolved.tiffRepresentation, windsurfFallback.tiffRepresentation)
 
-        let windsurf = try FixtureApp(name: "Windsurf", bundleID: "com.exafunction.windsurf")
+        // Claude.app supplies claude-desktop only; claude-code keeps its dedicated CLI mark.
+        let desktopClaude = try XCTUnwrap(resolver.image(for: "claude-desktop", colorScheme: .light))
+        let cliClaude = try XCTUnwrap(resolver.image(for: "claude-code", colorScheme: .light))
+        XCTAssertNotEqual(desktopClaude.tiffRepresentation, cliClaude.tiffRepresentation)
+
+        // Real Windsurf.app overrides bundled fallback.
+        let windsurf = try FixtureApp(
+            name: "Windsurf",
+            bundleID: "com.exafunction.windsurf",
+            iconColor: .systemCyan
+        )
         let windsurfResolver = ClientLogoResolver(applicationURLs: { bundleID in
             bundleID == "com.exafunction.windsurf" ? [windsurf.url] : []
         })
-        XCTAssertNotNil(windsurfResolver.image(for: "windsurf", colorScheme: .light))
+        let windsurfDesktop = try XCTUnwrap(windsurfResolver.image(for: "windsurf", colorScheme: .light))
+        XCTAssertNotEqual(windsurfDesktop.tiffRepresentation, windsurfFallback.tiffRepresentation)
     }
 
     @MainActor
     func testRegionalAndChannelAliasesMatchWithoutCrossProductMisattribution() async throws {
-        let traeCN = try FixtureApp(name: "Trae CN", bundleID: "cn.trae.app")
-        let workBuddyAI = try FixtureApp(name: "WorkBuddy AI", bundleID: "com.workbuddy.workbuddy-ai")
-        let codeBuddy = try FixtureApp(name: "CodeBuddy", bundleID: "com.tencent.codebuddy")
-        let zedPreview = try FixtureApp(
-            name: "Zed Preview",
-            bundleID: "dev.zed.Zed-Preview",
-            iconColor: .systemBlue
-        )
+        let traeCN = try FixtureApp(name: "Trae CN", bundleID: "cn.trae.app", iconColor: .systemGreen)
+        let workBuddyAI = try FixtureApp(name: "WorkBuddy AI", bundleID: "com.workbuddy.workbuddy-ai", iconColor: .systemMint)
+        let codeBuddy = try FixtureApp(name: "CodeBuddy", bundleID: "com.tencent.codebuddy", iconColor: .systemYellow)
+        let qoderIDE = try FixtureApp(name: "Qoder", bundleID: "com.qoder.ide", iconColor: .systemPink)
+        let zedPreview = try FixtureApp(name: "Zed Preview", bundleID: "dev.zed.Zed-Preview", iconColor: .systemBlue)
 
         let resolver = ClientLogoResolver(applicationURLs: { bundleID in
             switch bundleID {
             case "cn.trae.app": return [traeCN.url]
             case "com.workbuddy.workbuddy-ai": return [workBuddyAI.url]
             case "com.tencent.codebuddy": return [codeBuddy.url]
+            case "com.qoder.ide": return [qoderIDE.url]
             case "dev.zed.Zed-Preview": return [zedPreview.url]
             default: return []
             }
         })
+        let fallbackOnly = ClientLogoResolver(applicationURLs: { _ in [] })
 
-        XCTAssertNotNil(resolver.image(for: "trae", colorScheme: .dark))
-        XCTAssertNotNil(resolver.image(for: "workbuddy", colorScheme: .light))
-        let zedPreviewImage = try XCTUnwrap(resolver.image(for: "zed", colorScheme: .light))
-        let zedBundledImage = try XCTUnwrap(resolver.bundledImage(named: "zed", colorScheme: .light))
-        XCTAssertNotEqual(zedPreviewImage.tiffRepresentation, zedBundledImage.tiffRepresentation)
+        for (cid, scheme) in [("trae", ColorScheme.dark), ("workbuddy", .light), ("qoder", .light), ("zed", .light)] {
+            let resolved = try XCTUnwrap(resolver.image(for: cid, colorScheme: scheme))
+            let bundled = try XCTUnwrap(fallbackOnly.image(for: cid, colorScheme: scheme))
+            XCTAssertNotEqual(resolved.tiffRepresentation, bundled.tiffRepresentation, "\(cid) should use local alias app icon")
+        }
 
-        // CodeBuddy alone must not supply a logo for WorkBuddy.
+        // CodeBuddy alone must not override WorkBuddy.
         let codeBuddyOnly = ClientLogoResolver(applicationURLs: { bundleID in
             bundleID == "com.tencent.codebuddy" ? [codeBuddy.url] : []
         })
-        XCTAssertNil(codeBuddyOnly.image(for: "workbuddy", colorScheme: .light))
+        let wbWithCodeBuddy = try XCTUnwrap(codeBuddyOnly.image(for: "workbuddy", colorScheme: .light))
+        let wbFallback = try XCTUnwrap(fallbackOnly.image(for: "workbuddy", colorScheme: .light))
+        XCTAssertEqual(wbWithCodeBuddy.tiffRepresentation, wbFallback.tiffRepresentation)
     }
 
     @MainActor
-    func testCLIClientsUseVerifiedBundledMarksOrTextFallback() async throws {
+    func testCLIClientsResolveDistinctVerifiedMarks() async throws {
         let resolver = ClientLogoResolver(applicationURLs: { _ in [] })
 
-        for cliID in ["opencode", "pi"] {
-            let light = try XCTUnwrap(resolver.image(for: cliID, colorScheme: .light))
-            let dark = try XCTUnwrap(resolver.image(for: cliID, colorScheme: .dark))
+        for themedCLI in ["opencode", "pi", "copilot"] {
+            let light = try XCTUnwrap(resolver.image(for: themedCLI, colorScheme: .light))
+            let dark = try XCTUnwrap(resolver.image(for: themedCLI, colorScheme: .dark))
             XCTAssertNotEqual(light.tiffRepresentation, dark.tiffRepresentation)
         }
 
-        // Claude Code has no redistributable official logo and must stay text-only.
-        XCTAssertNil(resolver.image(for: "claude-code", colorScheme: .light))
-        XCTAssertNil(resolver.image(for: "claude-code", colorScheme: .dark))
-    }
-
-    @MainActor
-    func testCombinedMultiProductAndUnverifiedClientsUseTextFallback() async throws {
-        let antigravity = try FixtureApp(name: "Antigravity", bundleID: "com.google.antigravity")
-        let zcode = try FixtureApp(name: "ZCode", bundleID: "dev.zcode.app")
-        let doubao = try FixtureApp(name: "Doubao", bundleID: "com.bot.pc.doubao")
-        let resolver = ClientLogoResolver(applicationURLs: { bundleID in
-            switch bundleID {
-            case "com.google.antigravity": return [antigravity.url]
-            case "dev.zcode.app": return [zcode.url]
-            case "com.bot.pc.doubao": return [doubao.url]
-            default: return []
-            }
-        })
-
-        for textOnlyID in ["gemini-antigravity", "zcode", "doubao", "lingma", "stepfun", "unknown-client"] {
-            XCTAssertNil(resolver.image(for: textOnlyID, colorScheme: .light), "\(textOnlyID) should stay text-only")
-            XCTAssertNil(resolver.image(for: textOnlyID, colorScheme: .dark), "\(textOnlyID) should stay text-only")
+        for singleCLI in ["claude-code", "lingma", "stepfun"] {
+            XCTAssertNotNil(resolver.image(for: singleCLI, colorScheme: .light))
+            XCTAssertNotNil(resolver.image(for: singleCLI, colorScheme: .dark))
         }
     }
 
     @MainActor
-    func testWrongBundleIDMissingIconNonAPPLAndTrashedAppsAreIgnored() async throws {
-        let wrongBundle = try FixtureApp(name: "Kiro", bundleID: "example.kiro")
-        let noIcon = try FixtureApp(name: "Kiro", bundleID: "dev.kiro.desktop", includeIcon: false)
-        let nonAPPL = try FixtureApp(name: "Kiro", bundleID: "dev.kiro.desktop", packageType: "BNDL")
+    func testWrongBundleIDMissingIconNonAPPLTrashedAndUnbundledClientsFallBackToText() async throws {
+        let wrongBundle = try FixtureApp(name: "WorkDaddy", bundleID: "example.workdaddy")
+        let noIcon = try FixtureApp(name: "WorkDaddy", bundleID: "com.workdaddy.launcher", includeIcon: false)
+        let nonAPPL = try FixtureApp(name: "WorkDaddy", bundleID: "com.workdaddy.launcher", packageType: "BNDL")
         let trashed = try FixtureApp(
-            name: "Kiro",
-            bundleID: "dev.kiro.desktop",
+            name: "WorkDaddy",
+            bundleID: "com.workdaddy.launcher",
             subpath: ".Trash"
         )
         let resolver = ClientLogoResolver(applicationURLs: { _ in
             [wrongBundle.url, noIcon.url, nonAPPL.url, trashed.url]
         })
 
-        XCTAssertNil(resolver.image(for: "kiro", colorScheme: .light))
+        XCTAssertNil(resolver.image(for: "workdaddy", colorScheme: .light))
+        XCTAssertNil(resolver.image(for: "workdaddy", colorScheme: .dark))
+        XCTAssertNil(resolver.image(for: "unknown-client", colorScheme: .light))
     }
 
     @MainActor
@@ -195,12 +231,12 @@ final class ClientLogoResolverTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let claudeDebug = root.appendingPathComponent(".claude/debug/run.log")
+        let workDaddyLog = root.appendingPathComponent("Library/Application Support/WorkDaddy/daemon.log")
         try FileManager.default.createDirectory(
-            at: claudeDebug.deletingLastPathComponent(),
+            at: workDaddyLog.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try Data(repeating: 0x41, count: 2048).write(to: claudeDebug)
+        try Data(repeating: 0x41, count: 2048).write(to: workDaddyLog)
 
         let piSession = root.appendingPathComponent(".pi/agent/sessions/demo-workspace/session.jsonl")
         try FileManager.default.createDirectory(
@@ -230,14 +266,14 @@ final class ClientLogoResolverTests: XCTestCase {
         }
 
         let ids = Set(viewModel.builtInSidebarEntries.map(\.id))
-        XCTAssertTrue(ids.contains("claude-code"))
+        XCTAssertTrue(ids.contains("workdaddy"))
         XCTAssertTrue(ids.contains("pi"))
 
-        viewModel.sidebarSelection = .client("claude-code")
-        XCTAssertEqual(viewModel.headerTitleText, "Claude Code")
+        viewModel.sidebarSelection = .client("workdaddy")
+        XCTAssertEqual(viewModel.headerTitleText, "WorkDaddy")
         XCTAssertFalse(viewModel.filteredItems.isEmpty)
 
-        // Ensure history ranking still lists text-only clients cleanly.
+        // Ensure history ranking still lists unmapped / missing-logo clients cleanly.
         let sampleItem = try XCTUnwrap(viewModel.filteredItems.first)
         let result = CleanupResult(
             trashedItems: [
@@ -253,8 +289,8 @@ final class ClientLogoResolverTests: XCTestCase {
             customDirectoryStore: customStore,
             historyStore: historyStore
         )
-        XCTAssertEqual(reloaded.historySummary.topClients.first?.clientID, "claude-code")
-        XCTAssertEqual(reloaded.historySummary.topClients.first?.clientName, "Claude Code")
+        XCTAssertEqual(reloaded.historySummary.topClients.first?.clientID, "workdaddy")
+        XCTAssertEqual(reloaded.historySummary.topClients.first?.clientName, "WorkDaddy")
     }
 }
 
@@ -269,6 +305,7 @@ private final class FixtureApp {
         packageType: String = "APPL",
         includeIcon: Bool = true,
         iconColor: NSColor = .systemOrange,
+        extraImages: [String: NSColor] = [:],
         subpath: String? = nil
     ) throws {
         let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -287,30 +324,37 @@ private final class FixtureApp {
         ]
         if includeIcon {
             plist["CFBundleIconFile"] = "AppIcon.png"
-            let rep = try XCTUnwrap(
-                NSBitmapImageRep(
-                    bitmapDataPlanes: nil,
-                    pixelsWide: 64,
-                    pixelsHigh: 64,
-                    bitsPerSample: 8,
-                    samplesPerPixel: 4,
-                    hasAlpha: true,
-                    isPlanar: false,
-                    colorSpaceName: .deviceRGB,
-                    bytesPerRow: 0,
-                    bitsPerPixel: 0
-                )
-            )
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-            iconColor.setFill()
-            NSBezierPath(roundedRect: NSRect(x: 4, y: 4, width: 56, height: 56), xRadius: 12, yRadius: 12).fill()
-            NSGraphicsContext.restoreGraphicsState()
-            let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
-            try png.write(to: resources.appendingPathComponent("AppIcon.png"))
+            try Self.writeSolidIcon(color: iconColor, to: resources.appendingPathComponent("AppIcon.png"))
+        }
+        for (fileName, color) in extraImages {
+            try Self.writeSolidIcon(color: color, to: resources.appendingPathComponent(fileName))
         }
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: contents.appendingPathComponent("Info.plist"))
+    }
+
+    private static func writeSolidIcon(color: NSColor, to url: URL) throws {
+        let rep = try XCTUnwrap(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: 64,
+                pixelsHigh: 64,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            )
+        )
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 4, y: 4, width: 56, height: 56), xRadius: 12, yRadius: 12).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        let png = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+        try png.write(to: url)
     }
 
     deinit {

@@ -31,18 +31,41 @@ final class BuiltInRulesAndEndToEndTests: XCTestCase {
 
     func testBuiltInClientProfilesIntegrityAndSafetyCompliance() {
         let profiles = BuiltInClientRules.allProfiles
-        let expectedIDs: Set<String> = [
+        let expectedCoreIDs: Set<String> = [
             "claude-code",
-            "cursor",
             "codex",
+            "workbuddy",
+            "doubao",
+            "workdaddy",
+            "cursor",
+            "deepseek",
+            "trae",
+            "qoder",
+            "lingma",
+            "kiro",
+            "zcode",
             "windsurf",
             "claude-desktop",
             "chatgpt-desktop",
             "opencode",
             "pi",
-            "gemini-antigravity"
+            "gemini-antigravity",
+            "multica",
+            "copilot",
+            "cherry-studio",
+            "anythingllm",
+            "t3-code",
+            "stepfun",
+            "kimi",
+            "yuanbao",
+            "ollama",
+            "lm-studio",
+            "chatbox",
+            "jan",
+            "zed"
         ]
-        XCTAssertEqual(Set(profiles.map(\.id)), expectedIDs)
+        XCTAssertEqual(profiles.count, expectedCoreIDs.count)
+        XCTAssertEqual(Set(profiles.map(\.id)), expectedCoreIDs)
 
         let safetyGuard = SafetyGuard(homeDirectory: sandbox.homeURL)
         var seenRuleIDs: Set<String> = []
@@ -56,6 +79,13 @@ final class BuiltInRulesAndEndToEndTests: XCTestCase {
             for rule in profile.rules {
                 XCTAssertTrue(seenRuleIDs.insert(rule.id).inserted, "规则 ID 不应重复：\(rule.id)")
                 XCTAssertFalse(rule.explanation.isEmpty)
+
+                // 「不建议清理」仅做只读体积透明展示，绝不进入可清理链路
+                if rule.recommendation == .notRecommended {
+                    XCTAssertEqual(rule.category, .protectedData)
+                    continue
+                }
+
                 let resolvedURL = rule.resolveURL(homeDirectory: sandbox.homeURL)
                 switch rule.mode {
                 case .directory:

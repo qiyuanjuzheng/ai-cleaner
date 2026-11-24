@@ -417,10 +417,6 @@ final class CleanerViewModel {
         report != nil
     }
 
-    var isIdleReadyToScan: Bool {
-        report == nil && !isScanning
-    }
-
     var hasActiveFilters: Bool {
         !searchText.isEmpty || selectedCategory != nil || selectedRecommendation != nil || selectedAgeFilter != .all
     }

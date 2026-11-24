@@ -59,24 +59,14 @@ struct SidebarView: View {
 
                     sectionHeader(
                         title: "AI 客户端",
-                        trailing: viewModel.report.map { "\($0.detectedBuiltInClientsCount)" } ?? (viewModel.isScanning ? "扫描中" : "待扫描")
+                        trailing: viewModel.isScanning
+                            ? "扫描中"
+                            : viewModel.report.map { "\($0.detectedBuiltInClientsCount)" } ?? "待扫描"
                     )
                     .padding(.top, 14)
 
-                    if viewModel.isIdleReadyToScan {
-                        Text("点击「开始扫描」识别本机客户端")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                    } else if viewModel.isScanning && viewModel.builtInSidebarEntries.isEmpty {
-                        Text("正在检索本机 AI 客户端…")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                    } else if viewModel.builtInSidebarEntries.isEmpty {
-                        Text("暂未检测到已安装的 AI 客户端")
+                    if viewModel.hasScanResults && !viewModel.isScanning && viewModel.builtInSidebarEntries.isEmpty {
+                        Text("未检测到 AI 客户端")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 12)
@@ -208,24 +198,14 @@ struct SidebarView: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: viewModel.sidebarSelection)
             }
 
-            // 极简底部安全状态行（固定 34pt 高度）
+            // 固定底栏高度，扫描结果切换时保持侧边栏布局稳定。
             HStack(spacing: 6) {
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.color(for: .recommended))
                 if !viewModel.reportScannedTimeText.isEmpty {
-                    Text("只读扫描 \(viewModel.reportScannedTimeText)")
+                    Image(systemName: "clock")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Text("上次扫描 \(viewModel.reportScannedTimeText)")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                } else if viewModel.isScanning {
-                    Text("正在只读扫描本机目录…")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                } else {
-                    Text("待扫描 · 仅执行只读检索")
-                        .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }

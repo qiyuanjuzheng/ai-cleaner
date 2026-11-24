@@ -38,7 +38,6 @@ struct AmbientAuroraBackdrop: View {
 // MARK: - 2A. 初始待扫描欢迎核心视图（与扫描中雷达等尺寸，切换零抖动）
 
 struct ScanReadyHeroView: View {
-    let totalBuiltInProfilesCount: Int
     let historicalFreedBytes: Int64
     var isVisible: Bool = true
     let onStartScan: () -> Void
@@ -125,12 +124,11 @@ struct ScanReadyHeroView: View {
             VStack(spacing: 6) {
                 Text("AI 客户端空间清理")
                     .font(.system(.title2, design: .rounded).weight(.bold))
-                Text("支持只读扫描 \(totalBuiltInProfilesCount) 款国内外主流 AI 客户端的缓存、日志、会话与受保护资产，清理一律移入系统废纸篓")
+                Text("只读扫描会话、缓存和日志等文件")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 460)
             }
+            .frame(height: 50)
 
             HStack(spacing: 12) {
                 Button(action: onStartScan) {
@@ -151,40 +149,26 @@ struct ScanReadyHeroView: View {
             }
             .frame(height: 44)
 
-            HStack(spacing: 18) {
-                featureHint(symbol: "checkmark.shield.fill", color: AppTheme.color(for: .recommended), text: "严格只读扫描")
-                featureHint(symbol: "trash.circle.fill", color: Color(red: 0.24, green: 0.68, blue: 1.00), text: "仅移入废纸篓可还原")
+            HStack {
                 if historicalFreedBytes > 0 {
                     Button(action: onOpenHistory) {
                         HStack(spacing: 5) {
                             Image(systemName: "chart.line.uptrend.xyaxis")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(AppTheme.color(for: .recommended))
-                            Text("历史累计已释放 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
+                            Text("累计释放 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .buttonStyle(.plain)
-                } else {
-                    featureHint(symbol: "sparkles", color: Color(red: 0.56, green: 0.48, blue: 0.98), text: "内置 \(totalBuiltInProfilesCount) 款客户端规则")
+                    .help("查看历史清理趋势")
                 }
             }
             .frame(height: 18)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func featureHint(symbol: String, color: Color, text: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: symbol)
-                .font(.caption2)
-                .foregroundStyle(color)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 }
 
@@ -287,15 +271,9 @@ struct OrbitalScannerHero: View {
                 .frame(width: 210, height: 210)
             }
 
-            VStack(spacing: 6) {
-                Text("正在以只读雷达扫描本机 AI 客户端…")
-                    .font(.system(.title2, design: .rounded).weight(.bold))
-                Text("并发检索 31 款国内外主流 AI 客户端的会话、缓存与受保护资产，绝不修改任何文件")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 460)
-            }
+            Text("正在只读扫描…")
+                .font(.system(.title2, design: .rounded).weight(.bold))
+                .frame(height: 50)
 
             HStack {
                 if let onCancel {

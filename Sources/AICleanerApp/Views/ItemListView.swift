@@ -15,7 +15,6 @@ struct ItemListView: View {
             }
         } else if viewModel.report == nil {
             ScanReadyHeroView(
-                totalBuiltInProfilesCount: BuiltInClientRules.allProfiles.count,
                 historicalFreedBytes: viewModel.totalHistoricalFreedBytes,
                 isVisible: isVisible,
                 onStartScan: {
@@ -475,9 +474,7 @@ private struct VirtualizedItemListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView {
-                    Label("当前目录很干净", systemImage: "checkmark.seal.fill")
-                } description: {
-                    Text("该分组下暂无可清理条目。")
+                    Label("暂无可清理条目", systemImage: "checkmark.seal.fill")
                 } actions: {
                     Button("重新扫描") {
                         viewModel.rescan()

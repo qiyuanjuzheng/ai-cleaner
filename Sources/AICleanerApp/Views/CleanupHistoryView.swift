@@ -58,13 +58,8 @@ struct CleanupHistoryView: View {
 
     private var headerRow: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("历史清理趋势")
-                    .font(.system(.title2, design: .rounded).weight(.bold))
-                Text("统计每次安全移入系统废纸篓所释放的磁盘空间变化")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text("历史清理趋势")
+                .font(.system(.title2, design: .rounded).weight(.bold))
 
             Spacer(minLength: 8)
 
@@ -402,10 +397,11 @@ private struct HistoryTrendChartCard: View {
                         Text(viewModel.historyMetricMode == .cumulative ? "累计释放空间趋势" : "单日释放空间分布")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        Text(summary.isEmpty ? "完成首次安全清理后将自动绘制空间趋势曲线" : "鼠标悬停图表可实时查看每日释放与累计体积")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        if !summary.isEmpty {
+                            Text("悬停查看数值")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .frame(height: 36, alignment: .leading)
@@ -657,14 +653,8 @@ private struct HistoryTrendChartCard: View {
                         .foregroundStyle(AppTheme.color(for: .recommended))
                 }
 
-                Text("暂无历史清理统计")
+                Text("暂无清理记录")
                     .font(.headline)
-
-                Text("执行一次移入废纸篓操作后，这里将自动记录每次释放的磁盘体积与客户端分布。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
 
                 Button {
                     viewModel.sidebarSelection = .allClients

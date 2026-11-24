@@ -7,25 +7,30 @@ struct ItemListView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if viewModel.isScanning && viewModel.report == nil {
-            OrbitalScannerHero(isVisible: isVisible) {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
-                    viewModel.cancelScan()
+        if viewModel.report == nil {
+            ZStack {
+                if viewModel.isScanning {
+                    OrbitalScannerHero(isVisible: isVisible) {
+                        viewModel.cancelScan()
+                    }
+                    .transition(.opacity)
+                } else {
+                    ScanReadyHeroView(
+                        historicalFreedBytes: viewModel.totalHistoricalFreedBytes,
+                        isVisible: isVisible && !viewModel.isScanning,
+                        onStartScan: {
+                            viewModel.startScan()
+                        },
+                        onOpenHistory: {
+                            viewModel.sidebarSelection = .history
+                        }
+                    )
+                    .allowsHitTesting(!viewModel.isScanning)
+                    .transition(.opacity)
                 }
             }
-        } else if viewModel.report == nil {
-            ScanReadyHeroView(
-                historicalFreedBytes: viewModel.totalHistoricalFreedBytes,
-                isVisible: isVisible,
-                onStartScan: {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
-                        viewModel.startScan()
-                    }
-                },
-                onOpenHistory: {
-                    viewModel.sidebarSelection = .history
-                }
-            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: viewModel.isScanning)
         } else {
             VStack(spacing: 0) {
                 HeroDashboardHeaderView(viewModel: viewModel)

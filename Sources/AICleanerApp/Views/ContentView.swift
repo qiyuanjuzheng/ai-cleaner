@@ -70,7 +70,7 @@ struct ContentView: View {
                 } label: {
                     Label(viewModel.appearanceMode.rawValue, systemImage: viewModel.appearanceMode.symbolName)
                 }
-                .help("切换外观：深色极光 / 浅色磨砂 / 跟随系统（当前：\(viewModel.appearanceMode.rawValue)）")
+                .help("切换外观：浅色磨砂 / 跟随系统 / 深色极光（当前：\(viewModel.appearanceMode.rawValue)）")
 
                 Button {
                     viewModel.showingAddCustomSheet = true

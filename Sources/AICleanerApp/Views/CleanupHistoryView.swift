@@ -416,7 +416,7 @@ struct CleanupHistoryView: View {
                     y: .value("数值", activeY)
                 )
                 .symbolSize(38)
-                .foregroundStyle(Color.white)
+                .foregroundStyle(colorScheme == .dark ? Color.white : emerald)
             }
         }
         .chartYScale(domain: 0...yUpper)

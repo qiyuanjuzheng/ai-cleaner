@@ -4,8 +4,10 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 同步默认深色极光外观到 AppKit 窗口与 macOS Liquid Glass 工具栏/侧边栏，避免明暗割裂
-        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        // 默认使用原生浅色磨砂外观，避免启动瞬间出现暗色闪烁或 Liquid Glass 明暗割裂
+        let savedRaw = UserDefaults.standard.string(forKey: "aiCleaner.appearanceMode.v2")
+        let initialMode = savedRaw.flatMap(AppAppearanceMode.init(rawValue:)) ?? .light
+        NSApplication.shared.appearance = initialMode.nsAppearance
         // 确保无论是通过 `swift run` 启动还是作为 `.app` 双击启动，都能作为常规前台应用展示窗口并响应快捷键
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)

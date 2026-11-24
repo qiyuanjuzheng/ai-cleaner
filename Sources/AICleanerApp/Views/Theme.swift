@@ -3,41 +3,41 @@ import AppKit
 import SwiftUI
 
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
-    case dark = "深色极光"
     case light = "浅色磨砂"
+    case dark = "深色极光"
     case system = "跟随系统"
 
     var id: String { rawValue }
 
     var colorScheme: ColorScheme? {
         switch self {
-        case .dark: return .dark
         case .light: return .light
+        case .dark: return .dark
         case .system: return nil
         }
     }
 
     var nsAppearance: NSAppearance? {
         switch self {
-        case .dark: return NSAppearance(named: .darkAqua)
         case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
         case .system: return nil
         }
     }
 
     var symbolName: String {
         switch self {
-        case .dark: return "moon.stars.fill"
         case .light: return "sun.max.fill"
+        case .dark: return "moon.stars.fill"
         case .system: return "circle.lefthalf.filled"
         }
     }
 
     var next: AppAppearanceMode {
         switch self {
-        case .dark: return .light
         case .light: return .system
         case .system: return .dark
+        case .dark: return .light
         }
     }
 }
@@ -170,32 +170,32 @@ enum AppTheme {
     static func canvasBackground(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
             ? Color(red: 0.055, green: 0.062, blue: 0.085)
-            : Color(red: 0.955, green: 0.962, blue: 0.978)
+            : Color(red: 0.952, green: 0.960, blue: 0.976)
     }
 
     static func glassCardFill(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
             ? Color.white.opacity(0.042)
-            : Color.white.opacity(0.82)
+            : Color.white.opacity(0.88)
     }
 
     static func glassElevatedFill(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
             ? Color(red: 0.095, green: 0.108, blue: 0.145).opacity(0.92)
-            : Color.white.opacity(0.94)
+            : Color.white.opacity(0.96)
     }
 
     static func hairlineDivider(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
             ? Color.white.opacity(0.065)
-            : Color.black.opacity(0.06)
+            : Color.black.opacity(0.065)
     }
 
     static func specularRimGradient(for colorScheme: ColorScheme, accent: Color? = nil) -> LinearGradient {
         if let accent {
             return LinearGradient(
                 colors: [
-                    accent.opacity(colorScheme == .dark ? 0.60 : 0.55),
+                    accent.opacity(colorScheme == .dark ? 0.60 : 0.50),
                     accent.opacity(colorScheme == .dark ? 0.18 : 0.22)
                 ],
                 startPoint: .topLeading,
@@ -205,7 +205,7 @@ enum AppTheme {
         return LinearGradient(
             colors: colorScheme == .dark
                 ? [Color.white.opacity(0.14), Color.white.opacity(0.03)]
-                : [Color.white.opacity(0.95), Color.black.opacity(0.06)],
+                : [Color.black.opacity(0.06), Color.black.opacity(0.09)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )

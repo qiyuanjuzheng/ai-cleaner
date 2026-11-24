@@ -76,13 +76,18 @@ final class CleanerViewModel {
     /// 当用户尝试手动勾选一条「不建议清理」项时，先暂存到此触发风险确认弹窗
     var pendingRiskItemToSelect: CleanableItem? = nil
 
-    var appearanceMode: AppAppearanceMode = .dark
+    var appearanceMode: AppAppearanceMode = .light {
+        didSet {
+            UserDefaults.standard.set(appearanceMode.rawValue, forKey: Self.appearanceStorageKey)
+        }
+    }
     var hoveredRecommendation: CleanupRecommendation? = nil
     var cleanupCelebrationID: UUID = UUID()
 
     var lastCleanupResult: CleanupResult?
     var errorBannerMessage: String?
 
+    private static let appearanceStorageKey = "aiCleaner.appearanceMode.v2"
     private var scanTask: Task<Void, Never>?
 
     init(
@@ -98,6 +103,12 @@ final class CleanerViewModel {
         self.historyStore = historyStore ?? CleanupHistoryStore()
         self.customDirectories = self.customDirectoryStore.load()
         self.historyRecords = self.historyStore.load()
+        if let savedRaw = UserDefaults.standard.string(forKey: Self.appearanceStorageKey),
+           let savedMode = AppAppearanceMode(rawValue: savedRaw) {
+            self.appearanceMode = savedMode
+        } else {
+            self.appearanceMode = .light
+        }
     }
 
     // MARK: - Derived Data

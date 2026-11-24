@@ -1,39 +1,46 @@
 # AI Cleaner
 
-面向 macOS 的原生 SwiftUI 可视化 AI 客户端聊天会话与空间清理工具。
+AI Cleaner 是一款 macOS 原生 SwiftUI 应用，可扫描 31 款 AI 客户端的会话、缓存、日志和临时文件。
 
-支持 **31 款国内外主流 macOS AI 客户端**，不仅扫描缓存、临时文件与日志，还深入识别各客户端的**聊天会话目录与一次性任务工作目录**，并以**「建议清理 / 按需清理 / 不建议清理」三档直观标识 + 空间占比分布条**呈现，让你一眼分清哪些可以放心删、哪些需要确认、哪些绝不该动。
+## 界面截图
 
----
+### 扫描结果
 
-## 核心特性
+![空间总览与按需清理会话](docs/screenshots/scan-results.png)
 
-- **三档清理建议，一目了然**：
-  - 🟢 **建议清理**：缓存、日志、临时文件、自动更新包；提供**「一键勾选建议清理」**按钮，放心移入系统废纸篓。
-  - 🟠 **按需清理**：聊天会话、一次性任务产出目录（如 `~/WorkBuddy`、`~/Doubao`、`~/DoubaoWork`）、会话回滚快照、可重建的代码索引及用户自定义目录；自动只读提取 JSONL 会话的**项目名 + 首条提问摘要**，便于辨认对话。超过 14 天未活跃的会话和归档会话须逐条勾选，批量勾选及反选会跳过这些条目。
-  - 🛡️ **不建议清理**：展示占用、保护原因与 Finder 定位入口。登录凭据和已知主数据库显示为锁定。插件、模型权重等可覆盖条目须单独勾选，并通过两次风险确认。
-- **可视化空间仪表盘**：
-  - 顶部三档交互卡片 + 类 macOS 系统存储比例条，点击卡片即可快速切换对应建议等级。
-  - 每条列表项直接内联展示中文建议原因与迷你体积占比条，并按「建议清理 → 按需清理 → 不建议清理」自动分组折叠。
-  - 支持关键词搜索（搜会话摘要/项目名/路径/建议说明）、时间范围筛选（全部 / 7 天前 / 30 天前 / 90 天前）、分类计数胶囊、按体积/时间/名称排序、在 Finder 中显示与自定义目录管理。
-- **覆盖 31 款国内外主流 AI 客户端**（侧边栏仅展示本机实际存在的客户端，无多余噪音）：
-  - **国内 AI 客户端与工作伙伴**：WorkBuddy（腾讯 WorkBuddy / CodeBuddy）、豆包工作伙伴 / 豆包（Doubao / DoubaoWork）、WorkDaddy、DeepSeek Harness、Trae / Trae CN、Qoder、通义灵码（Lingma）、ZCode / 智谱清言（ChatGLM）、阶跃星辰（StepFun）、Kimi、腾讯元宝。
-  - **国际主流编程与桌面 AI 客户端**：Claude Code、Codex、Cursor、Windsurf、Claude Desktop、ChatGPT Desktop、OpenCode、Pi、Gemini / Antigravity、Kiro、GitHub Copilot、Multica、Cherry Studio、AnythingLLM、T3 Code、Ollama、LM Studio、Chatbox、Jan、Zed。
-- **移入废纸篓趋势**：按日或累计查看成功移入的文件大小，可按时间范围筛选并查看客户端排行。
-- **纵深安全防护**：
-  - 扫描严格只读（JSONL 摘要仅读取头部前 64 KB），绝不修改任何文件。
-  - 清理动作统一调用 macOS 原生 `FileManager.trashItem(at:resultingItemURL:)` 进入系统废纸篓，随时可「放回原处」。
+### 移入废纸篓确认
 
----
+![待移入条目和恢复提示](docs/screenshots/trash-confirmation.png)
 
-## 安全边界与防护策略
+### 历史趋势
 
-1. **禁止高风险目录及会话总容器整体删除**：`SafetyGuard` 拦截系统目录、用户主目录、`~/.ssh`、`~/Library/Keychains`、`~/Library/Cookies`、`~/Library/HTTPStorages`，以及各客户端根目录与会话总目录（如 `~/.claude/projects`、`~/.codex/sessions`、`~/.workbuddy/projects`、`~/WorkBuddy`、`~/Doubao`），防止一键清空全部历史。
-2. **硬保护**。普通清理和强制清理都拦截已知登录凭据、密钥、登录态目录和客户端主数据库，包括 `auth.json`、`Cookies`、`Local Storage`、`opencode.db`、`thread_history_1.sqlite`、`state.vscdb` 及相应的 `-wal`、`-shm`、`-journal` 文件。移入废纸篓前会复核目标及其后代。系统缓存目录 `~/Library/Caches/` 下可重建的 URLCache `Cache.db` 及其附属文件可按原规则清理。普通清理还会跳过核心配置、项目记忆、插件和其他数据库。
-3. **符号链接防护**：不穿透符号链接，自动拦截指向目录外部或受保护路径的符号链接。
-4. **仅移入废纸篓**：默认不执行不可逆永久删除。
+![累计移入废纸篓趋势与客户端排行](docs/screenshots/cleanup-trends.png)
 
----
+## 使用流程
+
+1. 打开应用，点击「开始扫描」。扫描结束后，在「空间总览」查看扫描项及占用大小，也可切换到单个客户端。需要刷新结果时点击「重新扫描」。
+2. 按类别、时间或清理等级缩小范围，或搜索条目名称、会话摘要、项目或路径。需要检查其他文件时，选择「添加自定义目录」，可添加缓存、导出文件或日志所在的文件夹。
+3. 批量勾选建议清理项，或逐条勾选需要处理的条目。点击「移入废纸篓」后，核对条目、路径和拟移入的大小，再确认。需要恢复文件时，在 macOS 废纸篓中选择「放回原处」。
+4. 在「移入废纸篓趋势」中查看累计、单日和客户端排行。统计仅计入成功移入的条目。查看超过 180 天的全部历史时，非累计趋势按周汇总。
+
+## 清理分级
+
+| 等级 | 常见条目 | 如何选择 |
+| --- | --- | --- |
+| 建议清理 | 缓存、日志、临时文件、更新包 | 「勾选建议清理项」作用于当前客户端或目录。空间总览中的按钮覆盖全部客户端和自定义目录。 |
+| 按需清理 | 聊天会话、任务产出、快照、可重建索引 | 超过 14 天未活跃的会话及归档会话须逐条勾选。建议清理、分组勾选、全选和反选都会跳过它们。 |
+| 不建议清理 | 凭据、主数据库、插件、模型权重 | 查看条目旁的保护原因。凭据和主库锁定。可覆盖的插件、模型权重等条目须通过两次风险确认。 |
+
+## 扫描与保护
+
+- 扫描仅读取文件。非压缩 JSONL 会话仅读取开头最多 64 KB，用于提取项目名和首条提问摘要。
+- 普通和强制清理均保护已知凭据、密钥、登录态目录、客户端主库及其 `-wal`、`-shm`、`-journal` 附属文件，例如 `auth.json`、`Cookies`、`opencode.db`、`thread_history_1.sqlite` 和 `state.vscdb`。移入前会重新检查目标和目录后代。`~/Library/Caches/` 下可重建的 URLCache `Cache.db` 及其附属文件可按缓存规则清理。
+- 系统和敏感目录、用户主目录、客户端根目录及会话总目录受保护。扫描目录时不会穿透符号链接。文件清理调用 macOS 的系统废纸篓接口。
+
+## 支持的客户端
+
+- **国内客户端**　WorkBuddy（腾讯 WorkBuddy / CodeBuddy）、豆包工作伙伴 / 豆包（Doubao / DoubaoWork）、WorkDaddy、DeepSeek Harness、Trae / Trae CN、Qoder、通义灵码（Lingma）、ZCode / 智谱清言（ChatGLM）、阶跃星辰（StepFun）、Kimi、腾讯元宝。
+- **其他客户端**　Claude Code、Codex、Cursor、Windsurf、Claude Desktop、ChatGPT Desktop、OpenCode、Pi、Gemini / Antigravity、Kiro、GitHub Copilot、Multica、Cherry Studio、AnythingLLM、T3 Code、Ollama、LM Studio、Chatbox、Jan、Zed。
 
 ## 环境要求
 
@@ -79,23 +86,25 @@ open "dist/AI Cleaner.app"
 ai-cleaner/
 ├── Package.swift
 ├── README.md
+├── docs/screenshots/                             # macOS 应用界面截图
 ├── scripts/package-app.sh                        # 打包 dist/AI Cleaner.app 脚本
 ├── Sources/
 │   ├── AICleanerCore/
-│   │   ├── Models/                               # CleanupRecommendation / ScanCategory / ScanRule / CleanableItem
+│   │   ├── Models/                               # CleanupRecommendation / ScanCategory / ScanRule / CleanableItem / CleanupHistoryRecord
 │   │   ├── Rules/
 │   │   │   ├── BuiltInClientRules.swift          # 国际主流 & 本地大模型客户端规则（20 款）
 │   │   │   ├── BuiltInDomesticClientRules.swift  # 国内 AI 客户端与工作伙伴规则（11 款）
-│   │   │   └── SafetyGuard.swift                 # 路径/凭据/记忆库/数据库/符号链接安全护栏
+│   │   │   └── SafetyGuard.swift                 # 路径、凭据、主数据库与符号链接保护
 │   │   └── Services/
-│   │       ├── DirectorySizer.swift              # 严格只读目录体积统计
-│   │       ├── SessionMetadataReader.swift       # 严格只读 JSONL 会话项目与首条提问摘要
-│   │       ├── ScanEngine.swift                  # 并发扫描引擎与三档建议分类
+│   │       ├── DirectorySizer.swift              # 只读目录体积统计
+│   │       ├── SessionMetadataReader.swift       # 只读 JSONL 会话项目与首条提问摘要
+│   │       ├── ScanEngine.swift                  # 并发扫描引擎与三档清理分级
 │   │       ├── CustomDirectoryStore.swift        # 自定义目录 JSON 持久化
-│   │       └── TrashCleaner.swift                # 系统废纸篓安全清理（强制拒绝锁定保护项）
+│   │       ├── CleanupHistoryStore.swift         # 移入废纸篓历史统计持久化与聚合
+│   │       └── TrashCleaner.swift                # 系统废纸篓移入与清理前复核
 │   └── AICleanerApp/
 │       ├── AICleanerApp.swift                    # 应用入口与菜单快捷键
-│       ├── ViewModels/CleanerViewModel.swift     # 仪表盘统计、分组筛选与清理状态管理
-│       └── Views/                                # 侧边栏、三档概览仪表盘、比例条、分组列表与弹窗
-└── Tests/AICleanerCoreTests/                     # 全隔离临时沙箱单元测试
+│       ├── ViewModels/CleanerViewModel.swift     # 空间总览、分组筛选、勾选与历史状态管理
+│       └── Views/                                # 侧边栏、空间总览、分组列表、确认弹窗与趋势图
+└── Tests/                                        # 核心逻辑及界面模型的隔离测试
 ```

@@ -38,7 +38,9 @@ final class BuiltInRulesAndEndToEndTests: XCTestCase {
             "windsurf",
             "claude-desktop",
             "chatgpt-desktop",
-            "opencode"
+            "opencode",
+            "pi",
+            "gemini-antigravity"
         ]
         XCTAssertEqual(Set(profiles.map(\.id)), expectedIDs)
 
@@ -55,11 +57,20 @@ final class BuiltInRulesAndEndToEndTests: XCTestCase {
                 XCTAssertTrue(seenRuleIDs.insert(rule.id).inserted, "规则 ID 不应重复：\(rule.id)")
                 XCTAssertFalse(rule.explanation.isEmpty)
                 let resolvedURL = rule.resolveURL(homeDirectory: sandbox.homeURL)
-                let decision = safetyGuard.validateTarget(resolvedURL)
-                XCTAssertTrue(
-                    decision.isAllowed,
-                    "内置规则 [\(rule.id)] 路径不应与安全护栏冲突：\(resolvedURL.path) -> \(decision.blockReason ?? "")"
-                )
+                switch rule.mode {
+                case .directory:
+                    let decision = safetyGuard.validateTarget(resolvedURL)
+                    XCTAssertTrue(
+                        decision.isAllowed,
+                        "整目录内置规则 [\(rule.id)] 路径不应与安全护栏冲突：\(resolvedURL.path) -> \(decision.blockReason ?? "")"
+                    )
+                case .children, .projectSessions, .recursiveFiles:
+                    let containerDecision = safetyGuard.validateBuiltInContainer(resolvedURL)
+                    XCTAssertTrue(
+                        containerDecision.isAllowed,
+                        "展开式内置规则 [\(rule.id)] 容器路径应允许进入逐项扫描：\(resolvedURL.path) -> \(containerDecision.blockReason ?? "")"
+                    )
+                }
             }
         }
     }

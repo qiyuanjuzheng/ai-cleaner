@@ -1,6 +1,6 @@
 import Foundation
 
-/// 单次清理中按客户端维度的释放明细
+/// 单次清理中按客户端统计的移入明细
 public struct ClientCleanupDelta: Identifiable, Codable, Hashable, Sendable {
     public var id: String { clientID }
     public let clientID: String
@@ -21,7 +21,7 @@ public struct ClientCleanupDelta: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-/// 单次清理中按类别维度的释放明细
+/// 单次清理中按类别统计的移入明细
 public struct CategoryCleanupDelta: Identifiable, Codable, Hashable, Sendable {
     public var id: String { category.rawValue }
     public let category: ScanCategory
@@ -71,15 +71,15 @@ public struct CleanupHistoryRecord: Identifiable, Codable, Hashable, Sendable {
     public static func from(result: CleanupResult, at timestamp: Date? = nil) -> CleanupHistoryRecord? {
         guard !result.trashedItems.isEmpty else { return nil }
 
-        let items = result.trashedItems.map(\.item)
+        let items = result.trashedItems
 
-        let byClient = Dictionary(grouping: items, by: \.clientID)
+        let byClient = Dictionary(grouping: items, by: \.item.clientID)
         let clientBreakdown: [ClientCleanupDelta] = byClient.compactMap { clientID, grouped in
             guard let first = grouped.first else { return nil }
-            let sum = grouped.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            let sum = grouped.reduce(Int64(0)) { $0 + $1.trashedBytes }
             return ClientCleanupDelta(
                 clientID: clientID,
-                clientName: first.clientName,
+                clientName: first.item.clientName,
                 freedBytes: sum,
                 itemCount: grouped.count
             )
@@ -91,9 +91,9 @@ public struct CleanupHistoryRecord: Identifiable, Codable, Hashable, Sendable {
             return lhs.clientName.localizedCaseInsensitiveCompare(rhs.clientName) == .orderedAscending
         }
 
-        let byCategory = Dictionary(grouping: items, by: \.category)
+        let byCategory = Dictionary(grouping: items, by: \.item.category)
         let categoryBreakdown: [CategoryCleanupDelta] = byCategory.map { category, grouped in
-            let sum = grouped.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            let sum = grouped.reduce(Int64(0)) { $0 + $1.trashedBytes }
             return CategoryCleanupDelta(
                 category: category,
                 freedBytes: sum,
@@ -103,9 +103,9 @@ public struct CleanupHistoryRecord: Identifiable, Codable, Hashable, Sendable {
         .sorted { $0.freedBytes > $1.freedBytes }
 
         let topItemNames = items
-            .sorted { $0.sizeBytes > $1.sizeBytes }
+            .sorted { $0.trashedBytes > $1.trashedBytes }
             .prefix(3)
-            .map(\.displayName)
+            .map(\.item.displayName)
 
         return CleanupHistoryRecord(
             timestamp: timestamp ?? result.completedAt,
@@ -139,13 +139,20 @@ public enum CleanupTrendRange: String, CaseIterable, Identifiable, Sendable {
 
 /// 趋势图指标展示模式
 public enum CleanupTrendMetricMode: String, CaseIterable, Identifiable, Sendable {
-    case cumulative = "累计释放"
-    case daily = "单日释放"
+    case cumulative = "累计"
+    case daily = "单日"
 
     public var id: String { rawValue }
+
+    public func bytes(for point: CleanupTrendPoint) -> Int64 {
+        switch self {
+        case .cumulative: return point.cumulativeFreedBytes
+        case .daily: return point.dailyFreedBytes
+        }
+    }
 }
 
-/// 趋势图单个时间桶（按自然日聚合）
+/// 趋势图单个时间桶（按日或按周聚合）
 public struct CleanupTrendPoint: Identifiable, Hashable, Sendable {
     public var id: Date { date }
     public let date: Date
@@ -169,7 +176,7 @@ public struct CleanupTrendPoint: Identifiable, Hashable, Sendable {
     }
 }
 
-/// 按客户端汇总的历史累计释放排行
+/// 按客户端汇总已移入废纸篓的大小
 public struct ClientSavingsSummary: Identifiable, Hashable, Sendable {
     public var id: String { clientID }
     public let clientID: String
@@ -204,6 +211,7 @@ public struct CleanupHistorySummary: Equatable, Sendable {
     public let rangeTrashedItems: Int
     public let largestSingleRunBytes: Int64
     public let averagePerRunBytes: Int64
+    public let usesWeeklyBuckets: Bool
     public let points: [CleanupTrendPoint]
     public let topClients: [ClientSavingsSummary]
     public let recentRecords: [CleanupHistoryRecord]
@@ -242,7 +250,7 @@ public enum CleanupHistoryAnalytics {
             windowStart = calendar.date(byAdding: .day, value: -6, to: todayStart) ?? todayStart
         }
 
-        // 统计窗口之前的基线累计释放量，确保累计曲线真实连续不归零
+        // 统计窗口之前的累计移入基线，确保累计曲线真实连续不归零
         var baselineCumulative: Int64 = 0
         var inRangeRecords: [CleanupHistoryRecord] = []
         for record in sortedAsc {
@@ -278,7 +286,8 @@ public enum CleanupHistoryAnalytics {
         var points: [CleanupTrendPoint] = []
         var runningCumulative = baselineCumulative
 
-        if range == .allTime && dayDiff > 180 {
+        let usesWeeklyBuckets = range == .allTime && dayDiff > 180
+        if usesWeeklyBuckets {
             var cursor = windowStart
             while cursor <= todayStart {
                 let nextCursor = calendar.date(byAdding: .day, value: 7, to: cursor) ?? todayStart.addingTimeInterval(7 * 86400)
@@ -319,7 +328,7 @@ public enum CleanupHistoryAnalytics {
             }
         }
 
-        // 按客户端汇总当前窗口内的释放排行（窗口内无数据时回退显示历史总排行）
+        // 按客户端汇总当前窗口内的移入排行（窗口内无数据时回退显示历史总排行）
         let rankingSource = inRangeRecords.isEmpty ? sortedAsc : inRangeRecords
         var clientTotals: [String: (name: String, bytes: Int64, items: Int)] = [:]
         for record in rankingSource {
@@ -358,6 +367,7 @@ public enum CleanupHistoryAnalytics {
             rangeTrashedItems: rangeTrashedItems,
             largestSingleRunBytes: largestSingleRunBytes,
             averagePerRunBytes: averagePerRunBytes,
+            usesWeeklyBuckets: usesWeeklyBuckets,
             points: points,
             topClients: topClients,
             recentRecords: sortedDesc

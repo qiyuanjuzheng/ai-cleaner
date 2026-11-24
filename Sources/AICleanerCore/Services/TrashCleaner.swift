@@ -20,7 +20,7 @@ public struct SystemTrashPerformer: TrashPerforming {
 /// 安全清理服务：
 /// - 每次移入废纸篓前再次执行 SafetyGuard 深度校验；
 /// - 统一通过 `TrashPerforming`（默认 macOS 系统废纸篓）执行可恢复移除；
-/// - 精确统计实际释放空间与异常项。
+/// - 统计已移入废纸篓的大小与异常项。
 public struct TrashCleaner: Sendable {
     public let safetyGuard: SafetyGuard
     public let performer: any TrashPerforming
@@ -38,7 +38,7 @@ public struct TrashCleaner: Sendable {
 
     /// 将选中的条目批量安全移入系统废纸篓。
     /// - Parameter allowNotRecommendedOverride: 默认 `false`（严格拦截任何「不建议清理」项）；
-    ///   仅在用户通过双重风险提醒并显式确认覆盖后才应传入 `true`，此时仍会强制执行操作系统与敏感根目录底线校验。
+    ///   仅在用户通过双重风险提醒并显式确认覆盖后才应传入 `true`，此时仍会校验目标及其后代的硬保护规则。
     public func trash(
         items: [CleanableItem],
         allowNotRecommendedOverride: Bool = false
@@ -47,53 +47,56 @@ public struct TrashCleaner: Sendable {
         var trashed: [TrashedItemRecord] = []
         var skippedProtected: [CleanupFailure] = []
         var failed: [CleanupFailure] = []
-        var actualFreedBytes: Int64 = 0
+        var trashedBytes: Int64 = 0
 
         // 按路径去重，若同时包含父目录与子项则按父目录优先避免重复处理
         let deduplicated = deduplicateNestedItems(items)
 
         for item in deduplicated {
-            let url = item.url.standardizedFileURL
-
-            // 0. 检查「不建议清理」条目的风险覆盖授权
-            if !item.isCleanable {
-                guard allowNotRecommendedOverride else {
-                    skippedProtected.append(
-                        CleanupFailure(item: item, reason: "该条目已标记为「不建议清理」，未确认风险覆盖前不可移入废纸篓")
-                    )
-                    continue
-                }
-
-                // 即使显式覆盖，仍强制死守系统目录、隐私敏感子树、客户端顶层根目录与越界符号链接底线
-                let overrideDecision = safetyGuard.validateUserOverrideTarget(url, fileManager: fileManager)
-                if let blockReason = overrideDecision.blockReason {
-                    skippedProtected.append(CleanupFailure(item: item, reason: blockReason))
-                    continue
-                }
-            } else {
-                // 1. 普通条目执行完整二次安全校验（含子目录内容检查）
-                let safetyDecision = safetyGuard.validateTargetRecursively(url, fileManager: fileManager)
-                if let blockReason = safetyDecision.blockReason {
-                    skippedProtected.append(CleanupFailure(item: item, reason: blockReason))
-                    continue
-                }
+            let url = URL(fileURLWithPath: item.url.path).standardizedFileURL
+            let isOverride = !item.isCleanable && allowNotRecommendedOverride
+            if let reason = item.hardProtectionReason {
+                skippedProtected.append(CleanupFailure(item: item, reason: reason))
+                continue
+            }
+            guard item.isCleanable || isOverride else {
+                skippedProtected.append(CleanupFailure(
+                    item: item, reason: "该条目已标记为「不建议清理」，未确认风险覆盖前不可移入废纸篓"
+                ))
+                continue
             }
 
-            // 2. 检查文件当前是否仍存在
+            let targetCheck = isOverride
+                ? safetyGuard.validateUserOverrideTarget(url, fileManager: fileManager)
+                : safetyGuard.validateTarget(url, fileManager: fileManager)
+            if let reason = targetCheck.blockReason {
+                skippedProtected.append(CleanupFailure(item: item, reason: reason))
+                continue
+            }
+
             let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
             if !fileManager.fileExists(atPath: url.path) && !isSymlink {
                 failed.append(CleanupFailure(item: item, reason: "条目不存在或已被外部移除"))
                 continue
             }
 
-            // 3. 实时计算移入前的真实字节数，确保「实际释放空间」反馈准确
+            // 在最后一次安全校验前计算大小，缩短校验与移动之间的间隔。
             let liveSize = sizer.inspect(url: url, safetyGuard: nil, fileManager: fileManager)?.sizeBytes ?? item.sizeBytes
 
-            // 4. 调用 macOS 系统废纸篓 API
+            // 使用新的 URL 读取当前类型，避免复用体积扫描缓存的文件属性。
+            let safetyDecision = safetyGuard.validateTargetRecursively(
+                URL(fileURLWithPath: url.path), fileManager: fileManager, allowUserOverride: isOverride
+            )
+            if let reason = safetyDecision.blockReason {
+                skippedProtected.append(CleanupFailure(item: item, reason: reason))
+                continue
+            }
+
             do {
                 let resultingURL = try performer.trashItem(at: url)
-                trashed.append(TrashedItemRecord(item: item, resultingTrashURL: resultingURL))
-                actualFreedBytes += max(0, liveSize)
+                let record = TrashedItemRecord(item: item, resultingTrashURL: resultingURL, trashedBytes: liveSize)
+                trashed.append(record)
+                trashedBytes += record.trashedBytes
             } catch {
                 failed.append(
                     CleanupFailure(
@@ -108,7 +111,7 @@ public struct TrashCleaner: Sendable {
             trashedItems: trashed,
             skippedProtectedItems: skippedProtected,
             failedItems: failed,
-            freedBytes: actualFreedBytes,
+            freedBytes: trashedBytes,
             completedAt: Date()
         )
     }

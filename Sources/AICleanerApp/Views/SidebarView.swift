@@ -43,7 +43,7 @@ struct SidebarView: View {
                     }
 
                     SidebarClientTile(
-                        title: "历史清理趋势",
+                        title: "移入废纸篓趋势",
                         cleanableBytesText: viewModel.totalHistoricalFreedBytesText,
                         hasProtectedOnly: false,
                         symbolName: "chart.line.uptrend.xyaxis",
@@ -56,6 +56,7 @@ struct SidebarView: View {
                     ) {
                         select(.history)
                     }
+                    .help("累计已移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.totalHistoricalFreedBytes))")
 
                     sectionHeader(
                         title: "AI 客户端",

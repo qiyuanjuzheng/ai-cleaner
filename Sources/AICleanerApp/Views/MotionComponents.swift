@@ -156,13 +156,13 @@ struct ScanReadyHeroView: View {
                             Image(systemName: "chart.line.uptrend.xyaxis")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(AppTheme.color(for: .recommended))
-                            Text("累计释放 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
+                            Text("累计已移入废纸篓 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("查看历史清理趋势")
+                    .help("查看移入废纸篓趋势")
                 }
             }
             .frame(height: 18)
@@ -461,7 +461,7 @@ struct StorageRingGauge: View {
         case .recommended: return "建议清理"
         case .reviewSuggested: return "按需清理"
         case .notRecommended: return "已保护"
-        case nil: return "可释放"
+        case nil: return "可清理"
         }
     }
 

@@ -14,15 +14,21 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
     public let category: ScanCategory
     public let recommendation: CleanupRecommendation
     public let safetyNote: String
+    public let hardProtectionReason: String?
+    public let requiresIndividualSelection: Bool
     public let sizeBytes: Int64
     public let fileCount: Int
     public let modifiedAt: Date
     public let isDirectory: Bool
     public let isCustom: Bool
 
-    /// 是否属于常规/批量可清理条目（`notRecommended` 不参与一键全选或批量选择，仅支持用户显式风险确认后手动移入废纸篓）
+    /// 是否属于常规可清理条目（`notRecommended` 不参与一键全选或批量选择，仅支持用户显式风险确认后手动移入废纸篓）
     public var isCleanable: Bool {
         recommendation.isCleanable
+    }
+
+    public var isBulkSelectable: Bool {
+        isCleanable && !requiresIndividualSelection
     }
 
     public init(
@@ -39,7 +45,9 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         fileCount: Int,
         modifiedAt: Date,
         isDirectory: Bool,
-        isCustom: Bool
+        isCustom: Bool,
+        hardProtectionReason: String? = nil,
+        requiresIndividualSelection: Bool = false
     ) {
         let standardized = url.standardizedFileURL
         self.id = "\(clientID)::\(standardized.path)"
@@ -50,7 +58,9 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         self.fileName = fileName
         self.url = standardized
         self.category = category
-        if let recommendation {
+        if hardProtectionReason != nil {
+            self.recommendation = .notRecommended
+        } else if let recommendation {
             self.recommendation = recommendation
         } else {
             switch category {
@@ -62,7 +72,9 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
                 self.recommendation = .notRecommended
             }
         }
-        self.safetyNote = safetyNote
+        self.safetyNote = hardProtectionReason ?? safetyNote
+        self.hardProtectionReason = hardProtectionReason
+        self.requiresIndividualSelection = requiresIndividualSelection
         self.sizeBytes = sizeBytes
         self.fileCount = fileCount
         self.modifiedAt = modifiedAt
@@ -76,7 +88,7 @@ public struct ClientScanSummary: Identifiable, Hashable, Sendable {
     public let profile: AIClientProfile
     /// 允许清理的条目（「建议清理」+「按需清理」）
     public let items: [CleanableItem]
-    /// 透明展示但锁定保护的「不建议清理」条目（默认不选，仅支持用户显式风险确认后手动移入废纸篓）
+    /// 透明展示的「不建议清理」条目，包括硬保护和可手动覆盖的条目。
     public let protectedItems: [CleanableItem]
     public let skippedProtectedCount: Int
 

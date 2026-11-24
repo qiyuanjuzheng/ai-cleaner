@@ -200,16 +200,17 @@ public enum BuiltInClientRules {
                 category: .sessions,
                 mode: .projectSessions,
                 recommendation: .reviewSuggested,
-                explanation: "按单条对话展开各项目下的聊天会话（.jsonl 及子代理/产物目录），超过 14 天自动标为建议清理；已保护每个项目的 memory/ 与 sessions-index.json。"
+                explanation: "按单条对话展开各项目下的聊天会话（.jsonl 及子代理/产物目录），并保留每个项目的 memory/ 与 sessions-index.json。"
             ),
             ScanRule(
                 id: "claude-code-transcripts",
                 displayName: "历史会话转录目录 (transcripts)",
                 path: ".claude/transcripts",
                 category: .sessions,
-                mode: .directory,
-                recommendation: .recommended,
-                explanation: "自动留存的历史对话转录副本，长期累积体积较大，建议清理释放空间，不影响当前配置与记忆。"
+                mode: .children,
+                recommendation: .reviewSuggested,
+                explanation: "自动留存的历史对话转录副本。",
+                isSessionArchive: true
             ),
             // 建议清理：缓存/日志/临时
             ScanRule(
@@ -329,7 +330,7 @@ public enum BuiltInClientRules {
                 category: .sessions,
                 mode: .recursiveFiles,
                 recommendation: .reviewSuggested,
-                explanation: "按单条对话展示本地会话（.jsonl 与 .jsonl.zst），超过 14 天或压缩归档自动标为建议清理。",
+                explanation: "按单条对话展示本地会话（.jsonl 与 .jsonl.zst）。",
                 allowedFileSuffixes: [".jsonl", ".jsonl.zst"]
             ),
             ScanRule(
@@ -338,8 +339,9 @@ public enum BuiltInClientRules {
                 path: ".codex/archived_sessions",
                 category: .sessions,
                 mode: .children,
-                recommendation: .recommended,
-                explanation: "已归档的历史压缩会话文件，建议清理释放空间。"
+                recommendation: .reviewSuggested,
+                explanation: "已归档的历史会话文件。",
+                isSessionArchive: true
             ),
             ScanRule(
                 id: "codex-multica-sessions",
@@ -875,7 +877,7 @@ public enum BuiltInClientRules {
                 category: .sessions,
                 mode: .projectSessions,
                 recommendation: .reviewSuggested,
-                explanation: "按项目工作区展开单条 Pi 聊天会话（.jsonl），自动提取项目名与首条提问摘要；超过 14 天自动标为建议清理。"
+                explanation: "按项目工作区展开单条 Pi 聊天会话（.jsonl），自动提取项目名与首条提问摘要。"
             ),
             protectedRule(
                 id: "pi-protected-auth",
@@ -913,7 +915,7 @@ public enum BuiltInClientRules {
                 category: .sessions,
                 mode: .children,
                 recommendation: .reviewSuggested,
-                explanation: "单次对话产生的本地产物与草稿目录，超过 14 天自动标为建议清理。"
+                explanation: "单次对话产生的本地产物与草稿目录。"
             ),
             ScanRule(
                 id: "gemini-antigravity-cli-brain",

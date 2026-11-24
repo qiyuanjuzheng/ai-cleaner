@@ -4,7 +4,7 @@ import os
 /// 多客户端只读扫描引擎：
 /// - 严格只读，不修改任何目标目录内容；
 /// - 并发扫描所有内置 AI 客户端规则，仅展示本机实际存在的客户端；
-/// - 自动区分「建议清理」「按需清理」与「不建议清理（锁定保护）」三类条目，让用户一眼辨别清理价值与风险；
+/// - 自动区分「建议清理」「按需清理」与「不建议清理」三类条目，让用户一眼辨别清理价值与风险；
 /// - 结合 SafetyGuard 自动拦截可清理列表中混入的登录态、凭据、核心配置、项目记忆与主数据库。
 public struct ScanEngine: Sendable {
     public let homeDirectory: URL
@@ -12,7 +12,7 @@ public struct ScanEngine: Sendable {
     public let safetyGuard: SafetyGuard
     public let sizer: DirectorySizer
     public let sessionReader: SessionMetadataReader
-    /// 聊天会话超过该天数未活跃时，自动标记为「建议清理」（默认 14 天）
+    /// 聊天会话超过该天数未活跃时，归入「按需清理」并要求逐条勾选（默认 14 天）
     public let staleSessionDays: Int
 
     public init(
@@ -113,7 +113,7 @@ public struct ScanEngine: Sendable {
                 continue
             }
 
-            // 透明展示的「不建议清理（已锁定保护）」规则：严格只读统计体积，放入 protectedItems，永不进入可清理 items
+            // 统计「不建议清理」条目的占用，并判断是否允许风险覆盖。
             if rule.recommendation == .notRecommended {
                 guard let inspection = sizer.inspect(
                     url: targetURL,
@@ -131,6 +131,9 @@ public struct ScanEngine: Sendable {
                 let canonicalPath = targetURL.standardizedFileURL.path
                 guard seenProtectedPaths.insert(canonicalPath).inserted else { continue }
 
+                let hardProtectionReason = safetyGuard.validateTargetRecursively(
+                    targetURL, fileManager: fileManager, allowUserOverride: true
+                ).blockReason
                 protectedItems.append(
                     CleanableItem(
                         clientID: profile.id,
@@ -146,7 +149,8 @@ public struct ScanEngine: Sendable {
                         fileCount: inspection.fileCount,
                         modifiedAt: inspection.modifiedAt,
                         isDirectory: inspection.isDirectory,
-                        isCustom: false
+                        isCustom: false,
+                        hardProtectionReason: hardProtectionReason
                     )
                 )
                 continue
@@ -182,7 +186,7 @@ public struct ScanEngine: Sendable {
                 let canonicalPath = targetURL.standardizedFileURL.path
                 guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                let (recommendation, note) = resolveRecommendation(
+                let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                     rule: rule,
                     url: targetURL,
                     modifiedAt: inspection.modifiedAt,
@@ -204,7 +208,8 @@ public struct ScanEngine: Sendable {
                         fileCount: inspection.fileCount,
                         modifiedAt: inspection.modifiedAt,
                         isDirectory: inspection.isDirectory,
-                        isCustom: profile.isCustom
+                        isCustom: profile.isCustom,
+                        requiresIndividualSelection: requiresIndividualSelection
                     )
                 )
 
@@ -227,7 +232,7 @@ public struct ScanEngine: Sendable {
                     let canonicalPath = targetURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                    let (recommendation, note) = resolveRecommendation(
+                    let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                         rule: rule,
                         url: targetURL,
                         modifiedAt: inspection.modifiedAt,
@@ -249,7 +254,8 @@ public struct ScanEngine: Sendable {
                             fileCount: inspection.fileCount,
                             modifiedAt: inspection.modifiedAt,
                             isDirectory: false,
-                            isCustom: profile.isCustom
+                            isCustom: profile.isCustom,
+                            requiresIndividualSelection: requiresIndividualSelection
                         )
                     )
                     continue
@@ -303,7 +309,7 @@ public struct ScanEngine: Sendable {
                         displayName = childURL.lastPathComponent
                     }
 
-                    let (recommendation, note) = resolveRecommendation(
+                    let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                         rule: rule,
                         url: childURL,
                         modifiedAt: inspection.modifiedAt,
@@ -325,7 +331,8 @@ public struct ScanEngine: Sendable {
                             fileCount: inspection.fileCount,
                             modifiedAt: inspection.modifiedAt,
                             isDirectory: inspection.isDirectory,
-                            isCustom: profile.isCustom
+                            isCustom: profile.isCustom,
+                            requiresIndividualSelection: requiresIndividualSelection
                         )
                     )
                 }
@@ -399,7 +406,7 @@ public struct ScanEngine: Sendable {
                             fileManager: fileManager
                         )
 
-                        let (recommendation, note) = resolveRecommendation(
+                        let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                             rule: rule,
                             url: sessionURL,
                             modifiedAt: inspection.modifiedAt,
@@ -421,7 +428,8 @@ public struct ScanEngine: Sendable {
                                 fileCount: inspection.fileCount,
                                 modifiedAt: inspection.modifiedAt,
                                 isDirectory: inspection.isDirectory,
-                                isCustom: profile.isCustom
+                                isCustom: profile.isCustom,
+                                requiresIndividualSelection: requiresIndividualSelection
                             )
                         )
                     }
@@ -486,7 +494,7 @@ public struct ScanEngine: Sendable {
                         isDirectory: false
                     )
 
-                    let (recommendation, note) = resolveRecommendation(
+                    let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                         rule: rule,
                         url: fileURL,
                         modifiedAt: inspection.modifiedAt,
@@ -508,7 +516,8 @@ public struct ScanEngine: Sendable {
                             fileCount: 1,
                             modifiedAt: inspection.modifiedAt,
                             isDirectory: false,
-                            isCustom: profile.isCustom
+                            isCustom: profile.isCustom,
+                            requiresIndividualSelection: requiresIndividualSelection
                         )
                     )
                 }
@@ -537,37 +546,26 @@ public struct ScanEngine: Sendable {
         )
     }
 
-    /// 针对聊天会话结合活跃时间与归档状态动态细化「建议清理」/「按需清理」提示
+    /// 旧会话和归档会话需由用户逐条确认。
     private func resolveRecommendation(
         rule: ScanRule,
         url: URL,
         modifiedAt: Date,
         referenceNow: Date
-    ) -> (CleanupRecommendation, String) {
-        guard rule.category == .sessions && rule.recommendation == .reviewSuggested else {
-            return (rule.recommendation, rule.explanation)
+    ) -> (CleanupRecommendation, String, Bool) {
+        guard rule.category == .sessions else {
+            return (rule.recommendation, rule.explanation, false)
         }
 
-        let isCompressedArchive = url.lastPathComponent.lowercased().hasSuffix(".zst")
+        if rule.isSessionArchive == true || url.pathExtension.lowercased() == "zst" {
+            return (.reviewSuggested, "已归档的历史会话，确认无需保留后可逐条勾选。", true)
+        }
+
         let staleCutoff = Calendar.current.date(byAdding: .day, value: -staleSessionDays, to: referenceNow) ?? referenceNow
-
-        if isCompressedArchive {
-            return (
-                .recommended,
-                "已压缩归档的历史会话，通常是已完成的一次性对话，建议清理释放空间（移入废纸篓可随时恢复）。"
-            )
-        }
-
         if modifiedAt < staleCutoff {
-            return (
-                .recommended,
-                "超过 \(staleSessionDays) 天未活跃的历史会话，通常为已完成的一次性对话，建议清理（移入废纸篓不影响配置与记忆库）。"
-            )
+            return (.reviewSuggested, "超过 \(staleSessionDays) 天未活跃，确认无需保留后可逐条勾选。", true)
         }
 
-        return (
-            .reviewSuggested,
-            "近期活跃会话（\(staleSessionDays) 天内更新），若确认是一次性对话可直接勾选清理，仍需续聊建议保留。"
-        )
+        return (rule.recommendation, rule.explanation, false)
     }
 }

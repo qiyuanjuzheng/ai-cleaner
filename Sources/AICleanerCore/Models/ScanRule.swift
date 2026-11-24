@@ -20,12 +20,14 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
     public let path: String
     public let category: ScanCategory
     public let mode: ScanTargetMode
-    /// 默认清理建议等级（聊天会话在扫描时会按活跃时间自动细分「建议清理」与「按需清理」）
+    /// 默认清理建议等级（旧会话与归档会话在扫描时归入「按需清理」）
     public let recommendation: CleanupRecommendation
     /// 针对此条规则的中文用途与安全说明
     public let explanation: String
     /// 仅在 `recursiveFiles` 等模式下生效的文件名后缀过滤（为空表示不过滤），例如 `[".jsonl", ".jsonl.zst"]`
     public let allowedFileSuffixes: [String]
+    /// 规则指向历史会话归档，即使文件最近修改也需逐条勾选。
+    public let isSessionArchive: Bool?
 
     public init(
         id: String,
@@ -35,7 +37,8 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
         mode: ScanTargetMode = .directory,
         recommendation: CleanupRecommendation? = nil,
         explanation: String,
-        allowedFileSuffixes: [String] = []
+        allowedFileSuffixes: [String] = [],
+        isSessionArchive: Bool? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -56,6 +59,7 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
         }
         self.explanation = explanation
         self.allowedFileSuffixes = allowedFileSuffixes
+        self.isSessionArchive = isSessionArchive
     }
 
     /// 基于给定的用户主目录解析实际文件系统路径

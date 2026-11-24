@@ -59,7 +59,7 @@ struct BottomActionBar: View {
                 Text("·")
                     .foregroundStyle(.tertiary)
 
-                Text("预计释放 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
+                Text("预计移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
                     .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
                     .foregroundStyle(hasRisk ? AppTheme.color(for: .reviewSuggested) : AppTheme.color(for: .recommended))
                     .contentTransition(.numericText())
@@ -133,12 +133,12 @@ struct BottomActionBar: View {
                 VStack(alignment: .leading, spacing: 1.5) {
                     if result.trashedCount > 0 {
                         HStack(spacing: 5) {
-                            Text("已释放")
+                            Text("已移入废纸篓")
                                 .font(.callout.weight(.medium))
                             Text(CleanerFormatting.formatBytes(result.freedBytes))
                                 .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
                                 .foregroundStyle(tint)
-                            Text("（\(result.trashedCount) 项已移入废纸篓）")
+                            Text("（\(result.trashedCount) 项）")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button("查看趋势 →") {

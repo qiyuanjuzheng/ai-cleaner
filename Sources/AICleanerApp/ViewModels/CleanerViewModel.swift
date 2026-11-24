@@ -98,6 +98,7 @@ struct SectionHeaderRow: Equatable, Sendable {
     let totalBytesText: String
     let isCollapsed: Bool
     let isFirstSection: Bool
+    let supportsBulkSelection: Bool
 }
 
 /// 扁平虚拟化列表中的单条文件行模型（纯值类型，供 `ItemRowContent: Equatable` 跳过无变化行重绘）
@@ -170,7 +171,7 @@ final class CleanerViewModel {
         let scopedTotalFootprintBytes: Int64
         let categoryCounts: [ScanCategory: Int]
         let defaultSortedItems: [CleanableItem]
-        let defaultCleanableItems: [CleanableItem]
+        let defaultBulkSelectableItems: [CleanableItem]
         let defaultSections: [RecommendationSection]
         let defaultMaxBytes: Int64
         let defaultFlatRows: [FlatListRow]
@@ -321,7 +322,7 @@ final class CleanerViewModel {
     private(set) var categoryCounts: [ScanCategory: Int] = [:]
 
     private(set) var filteredItems: [CleanableItem] = []
-    private(set) var filteredCleanableItems: [CleanableItem] = []
+    private(set) var filteredBulkSelectableItems: [CleanableItem] = []
     private(set) var displayedSections: [RecommendationSection] = []
     private(set) var displayedRows: [FlatListRow] = []
     private(set) var maxDisplayedItemBytes: Int64 = 0
@@ -361,12 +362,13 @@ final class CleanerViewModel {
     init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         customDirectoryStore: CustomDirectoryStore? = nil,
-        historyStore: CleanupHistoryStore? = nil
+        historyStore: CleanupHistoryStore? = nil,
+        trashPerformer: any TrashPerforming = SystemTrashPerformer()
     ) {
         let guardInstance = SafetyGuard(homeDirectory: homeDirectory)
         self.safetyGuard = guardInstance
         self.scanEngine = ScanEngine(homeDirectory: homeDirectory, safetyGuard: guardInstance)
-        self.trashCleaner = TrashCleaner(safetyGuard: guardInstance)
+        self.trashCleaner = TrashCleaner(safetyGuard: guardInstance, performer: trashPerformer)
         self.customDirectoryStore = customDirectoryStore ?? CustomDirectoryStore(safetyGuard: guardInstance)
         self.historyStore = historyStore ?? CleanupHistoryStore()
 
@@ -405,8 +407,8 @@ final class CleanerViewModel {
     }
 
     var allVisibleSelected: Bool {
-        guard !filteredCleanableItems.isEmpty else { return false }
-        return filteredCleanableItems.allSatisfy { selectedItemIDs.contains($0.id) }
+        guard !filteredBulkSelectableItems.isEmpty else { return false }
+        return filteredBulkSelectableItems.allSatisfy { selectedItemIDs.contains($0.id) }
     }
 
     var visibleSelectedCount: Int {
@@ -550,7 +552,7 @@ final class CleanerViewModel {
         }
 
         let sorted = sortItems(combined, by: .sizeDescending)
-        let (defaultCleanable, defaultSections, defaultMaxBytes) = bucketItems(sorted)
+        let (defaultBulkSelectable, defaultSections, defaultMaxBytes) = bucketItems(sorted)
         let showClientBadge = (selection == .allClients)
         let defaultFlatRows = buildFlatRows(
             from: defaultSections,
@@ -585,7 +587,7 @@ final class CleanerViewModel {
             scopedTotalFootprintBytes: recBytes + revBytes + proBytes,
             categoryCounts: counts,
             defaultSortedItems: sorted,
-            defaultCleanableItems: defaultCleanable,
+            defaultBulkSelectableItems: defaultBulkSelectable,
             defaultSections: defaultSections,
             defaultMaxBytes: defaultMaxBytes,
             defaultFlatRows: defaultFlatRows
@@ -615,9 +617,9 @@ final class CleanerViewModel {
 
     private nonisolated static func bucketItems(
         _ sorted: [CleanableItem]
-    ) -> (cleanable: [CleanableItem], sections: [RecommendationSection], maxBytes: Int64) {
-        var cleanable: [CleanableItem] = []
-        cleanable.reserveCapacity(sorted.count)
+    ) -> (bulkSelectable: [CleanableItem], sections: [RecommendationSection], maxBytes: Int64) {
+        var bulkSelectable: [CleanableItem] = []
+        bulkSelectable.reserveCapacity(sorted.count)
         var maxBytes: Int64 = 0
         var recBucket: [CleanableItem] = []
         var revBucket: [CleanableItem] = []
@@ -630,8 +632,8 @@ final class CleanerViewModel {
             if item.sizeBytes > maxBytes {
                 maxBytes = item.sizeBytes
             }
-            if item.isCleanable {
-                cleanable.append(item)
+            if item.isBulkSelectable {
+                bulkSelectable.append(item)
             }
             switch item.recommendation {
             case .recommended:
@@ -657,7 +659,7 @@ final class CleanerViewModel {
         if !proBucket.isEmpty {
             sections.append(RecommendationSection(recommendation: .notRecommended, items: proBucket, totalBytes: proTotal))
         }
-        return (cleanable, sections, maxBytes)
+        return (bulkSelectable, sections, maxBytes)
     }
 
     private nonisolated static func buildFlatRows(
@@ -692,7 +694,8 @@ final class CleanerViewModel {
                         totalBytes: section.totalBytes,
                         totalBytesText: CleanerFormatting.formatBytes(section.totalBytes),
                         isCollapsed: isCollapsed,
-                        isFirstSection: sectionIndex == 0
+                        isFirstSection: sectionIndex == 0,
+                        supportsBulkSelection: section.items.contains(where: \.isBulkSelectable)
                     )
                 )
             )
@@ -783,7 +786,7 @@ final class CleanerViewModel {
         scopedTotalFootprintBytes = 0
         categoryCounts = [:]
         filteredItems = []
-        filteredCleanableItems = []
+        filteredBulkSelectableItems = []
         displayedSections = []
         displayedRows = []
         maxDisplayedItemBytes = 0
@@ -808,7 +811,7 @@ final class CleanerViewModel {
             scopedTotalFootprintBytes = 0
             categoryCounts = [:]
             filteredItems = []
-            filteredCleanableItems = []
+            filteredBulkSelectableItems = []
             displayedSections = []
             displayedRows = []
             maxDisplayedItemBytes = 0
@@ -834,7 +837,7 @@ final class CleanerViewModel {
         // O(1) 零排序快速通道：默认筛选与默认排序下直接复用预构建快照
         if !hasActiveFilters && sortOrder == .sizeDescending {
             filteredItems = cached.defaultSortedItems
-            filteredCleanableItems = cached.defaultCleanableItems
+            filteredBulkSelectableItems = cached.defaultBulkSelectableItems
             displayedSections = cached.defaultSections
             maxDisplayedItemBytes = cached.defaultMaxBytes
 
@@ -856,7 +859,7 @@ final class CleanerViewModel {
         // 若筛选已清空且为默认排序，直接走 O(1) 缓存命中
         if !hasActiveFilters && sortOrder == .sizeDescending, let currentScope {
             filteredItems = currentScope.defaultSortedItems
-            filteredCleanableItems = currentScope.defaultCleanableItems
+            filteredBulkSelectableItems = currentScope.defaultBulkSelectableItems
             displayedSections = currentScope.defaultSections
             maxDisplayedItemBytes = currentScope.defaultMaxBytes
             if collapsedSections == Self.defaultCollapsedSections {
@@ -913,9 +916,9 @@ final class CleanerViewModel {
             sorted = Self.sortItems(filtered, by: sortOrder)
         }
 
-        let (cleanable, sections, maxBytes) = Self.bucketItems(sorted)
+        let (bulkSelectable, sections, maxBytes) = Self.bucketItems(sorted)
         filteredItems = sorted
-        filteredCleanableItems = cleanable
+        filteredBulkSelectableItems = bulkSelectable
         displayedSections = sections
         maxDisplayedItemBytes = maxBytes
 
@@ -1053,11 +1056,15 @@ final class CleanerViewModel {
 
             guard !Task.isCancelled else { return }
 
-            let validIDs = Set(bundle.allDisplayedItemsByID.keys)
+            let selectableIDs = Set(bundle.allDisplayedItemsByID.values.lazy
+                .filter { $0.hardProtectionReason == nil }.map(\.id))
             self.suppressCacheRebuild = true
             self.report = bundle.report
             self.isScanning = false
-            self.selectedItemIDs.formIntersection(validIDs)
+            self.selectedItemIDs.formIntersection(selectableIDs)
+            if let pending = self.pendingRiskItemToSelect, !selectableIDs.contains(pending.id) {
+                self.pendingRiskItemToSelect = nil
+            }
 
             if case let .client(clientID) = self.sidebarSelection,
                bundle.clientSummaryByID[clientID] == nil {
@@ -1115,6 +1122,7 @@ final class CleanerViewModel {
             selectedItemIDs.remove(item.id)
             return
         }
+        guard item.hardProtectionReason == nil else { return }
         if item.isCleanable {
             selectedItemIDs.insert(item.id)
         } else {
@@ -1124,8 +1132,10 @@ final class CleanerViewModel {
     }
 
     func confirmRiskItemSelection(_ item: CleanableItem) {
+        defer { pendingRiskItemToSelect = nil }
+        guard let current = allDisplayedItemsByID[item.id],
+              current.hardProtectionReason == nil, !current.isCleanable else { return }
         selectedItemIDs.insert(item.id)
-        pendingRiskItemToSelect = nil
     }
 
     func cancelRiskItemSelection() {
@@ -1143,7 +1153,7 @@ final class CleanerViewModel {
     /// 一键勾选当前视图下的全部「建议清理」项
     func selectRecommendedInScope() {
         var next = selectedItemIDs
-        for item in scopedRecommendedItems where item.isCleanable {
+        for item in scopedRecommendedItems where item.isBulkSelectable {
             next.insert(item.id)
         }
         selectedItemIDs = next
@@ -1152,7 +1162,7 @@ final class CleanerViewModel {
     func selectSection(_ recommendation: CleanupRecommendation) {
         guard recommendation.isCleanable else { return }
         var next = selectedItemIDs
-        for item in filteredCleanableItems where item.recommendation == recommendation {
+        for item in filteredBulkSelectableItems where item.recommendation == recommendation {
             next.insert(item.id)
         }
         selectedItemIDs = next
@@ -1160,7 +1170,7 @@ final class CleanerViewModel {
 
     func selectAllVisible() {
         var next = selectedItemIDs
-        for item in filteredCleanableItems {
+        for item in filteredBulkSelectableItems {
             next.insert(item.id)
         }
         selectedItemIDs = next
@@ -1168,7 +1178,7 @@ final class CleanerViewModel {
 
     func invertVisibleSelection() {
         var next = selectedItemIDs
-        for item in filteredCleanableItems {
+        for item in filteredBulkSelectableItems {
             if next.contains(item.id) {
                 next.remove(item.id)
             } else {

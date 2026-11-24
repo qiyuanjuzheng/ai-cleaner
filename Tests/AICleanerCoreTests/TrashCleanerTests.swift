@@ -96,6 +96,78 @@ final class TrashCleanerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: contaminatedDir.path))
     }
 
+    func testHardProtectedFilesAndContainingDirectoriesNeverReachTrash() throws {
+        let paths = [
+            ".codex/auth.json",
+            ".local/share/opencode/opencode.db",
+            ".local/share/opencode/opencode.db-wal",
+            ".codex/thread_history_1.sqlite-shm",
+            ".workbuddy-ai/workbuddy.db-journal",
+            "Library/Application Support/WorkDaddy/credit-usage.db",
+            ".gemini/antigravity/conversation_summaries.db",
+            "Library/Application Support/Cursor/state.vscdb-journal",
+            "Library/Application Support/Cursor/Network/Cookies-wal",
+            "Library/Application Support/Cursor/Local Storage/000001.ldb",
+            ".workbuddy/security/session.dat",
+            ".codeium/database/index.ldb",
+            "Library/Application Support/WorkDaddy/accounts/account.dat",
+            "keys/client.pem"
+        ]
+        let performer = try SandboxTrashPerformer(mockTrashDir: sandbox.rootURL.appendingPathComponent("MockTrash"))
+        let cleaner = TrashCleaner(safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL), performer: performer)
+
+        for path in paths {
+            let file = try sandbox.createFile(relativeToHome: path, byteCount: 64)
+            let pathProtectedByDirectory = ["000001.ldb", "session.dat", "account.dat", "index.ldb"].contains(file.lastPathComponent)
+            for isOverride in [false, true] {
+                let nestedFile = pathProtectedByDirectory
+                    ? file
+                    : try sandbox.createFile(
+                        relativeToHome: "plugins/\(UUID().uuidString)/nested/\(file.lastPathComponent)", byteCount: 64
+                    )
+                let directory = pathProtectedByDirectory
+                    ? nestedFile.deletingLastPathComponent()
+                    : nestedFile.deletingLastPathComponent().deletingLastPathComponent()
+                for (target, isDirectory) in [(file, false), (directory, true)] {
+                    let item = makeItem(
+                        url: target, sizeBytes: 64, isDirectory: isDirectory,
+                        recommendation: isOverride ? .notRecommended : .recommended
+                    )
+                    let result = cleaner.trash(items: [item], allowNotRecommendedOverride: isOverride)
+                    XCTAssertEqual(result.skippedProtectedItems.count, 1, "\(path), directory=\(isDirectory), override=\(isOverride)")
+                }
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), path)
+        }
+        XCTAssertTrue(performer.trashedInputPaths.isEmpty)
+    }
+
+    func testLateCredentialsBlockBothOrdinaryAndOverrideScansAtTrashTime() throws {
+        try sandbox.createFile(relativeToHome: ".workbuddy/cache/entry.bin", byteCount: 64)
+        try sandbox.createFile(relativeToHome: ".workbuddy-ai/plugins/demo/plugin.js", byteCount: 64)
+        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let cache = try XCTUnwrap(report.allItems.first { $0.ruleID == "workbuddy-cache" })
+        let plugins = try XCTUnwrap(report.allProtectedItems.first { $0.ruleID == "workbuddy-ai-protected-plugins" })
+        try sandbox.createFile(relativeToHome: ".workbuddy/cache/nested/auth.json", byteCount: 64)
+        try sandbox.createFile(relativeToHome: ".workbuddy-ai/plugins/demo/opencode.db-journal", byteCount: 64)
+
+        let performer = try SandboxTrashPerformer(mockTrashDir: sandbox.rootURL.appendingPathComponent("MockTrash"))
+        let cleaner = TrashCleaner(safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL), performer: performer)
+        XCTAssertEqual(cleaner.trash(items: [cache]).skippedProtectedItems.count, 1)
+        XCTAssertEqual(cleaner.trash(items: [plugins], allowNotRecommendedOverride: true).skippedProtectedItems.count, 1)
+        XCTAssertTrue(performer.trashedInputPaths.isEmpty)
+    }
+
+    func testURLCacheDatabaseAndSidecarsRemainCleanable() throws {
+        let paths = ["Cache.db", "Cache.db-wal", "Cache.db-shm", "Cache.db-journal"]
+        let files = try paths.map { try sandbox.createFile(relativeToHome: "Library/Caches/client/\($0)", byteCount: 64) }
+        let cache = makeItem(url: files[0].deletingLastPathComponent(), sizeBytes: 256, isDirectory: true)
+        let performer = try SandboxTrashPerformer(mockTrashDir: sandbox.rootURL.appendingPathComponent("MockTrash"))
+        let cleaner = TrashCleaner(safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL), performer: performer)
+        XCTAssertEqual(cleaner.trash(items: [cache]).trashedCount, 1)
+        XCTAssertEqual(performer.trashedInputPaths.count, 1)
+    }
+
     func testTrashCleanerDeduplicatesNestedItemsAndIsolatesFailures() throws {
         let parentDir = try sandbox.createDirectory(relativeToHome: "cache-group")
         let childFile = try sandbox.createFile(relativeToHome: "cache-group/inner.tmp", byteCount: 1_000)
@@ -122,6 +194,57 @@ final class TrashCleanerTests: XCTestCase {
         XCTAssertEqual(result.failedItems.count, 1)
         XCTAssertEqual(result.failedItems.first?.item.url.path, lockedFile.path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: lockedFile.path))
+    }
+
+    func testHistoryReadsLegacyRecordsAndCountsOnlySuccessfulMovesAtLiveSize() throws {
+        let live = try sandbox.createFile(relativeToHome: "cache/live.bin", byteCount: 1_500)
+        let locked = try sandbox.createFile(relativeToHome: "logs/locked.log", byteCount: 700)
+        let performer = try SandboxTrashPerformer(mockTrashDir: sandbox.rootURL.appendingPathComponent("MockTrash"))
+        performer.failingPaths.insert(locked.path)
+        let cleaner = TrashCleaner(safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL), performer: performer)
+        let store = CleanupHistoryStore(storageURL: sandbox.rootURL.appendingPathComponent("history.json"))
+        let legacyJSON = """
+        [{
+            "id": "6903AE1A-F1B5-45DA-921E-8AB20E120DEB",
+            "timestamp": "2026-04-01T12:00:00Z",
+            "freedBytes": 500,
+            "trashedCount": 1,
+            "clientBreakdown": [],
+            "categoryBreakdown": [],
+            "sampleItemNames": ["legacy.tmp"]
+        }]
+        """
+        try Data(legacyJSON.utf8).write(to: store.storageURL)
+        XCTAssertEqual(store.load().first?.freedBytes, 500)
+
+        let result = cleaner.trash(items: [
+            makeItem(url: live, sizeBytes: 100, isDirectory: false),
+            makeItem(url: locked, sizeBytes: 700, isDirectory: false)
+        ])
+        XCTAssertEqual(result.trashedCount, 1)
+        XCTAssertEqual(result.failedItems.map(\.item.url), [locked])
+        let date = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-04-10T12:00:00Z"))
+        let newRecord = try XCTUnwrap(store.record(result: result, at: date))
+        XCTAssertEqual(newRecord.trashedCount, 1)
+        XCTAssertEqual(newRecord.freedBytes, 1_500)
+        XCTAssertEqual(newRecord.clientBreakdown.map(\.freedBytes), [1_500])
+        XCTAssertEqual(newRecord.categoryBreakdown.map(\.freedBytes), [1_500])
+        XCTAssertEqual(newRecord.sampleItemNames, ["live.bin"])
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let summary = CleanupHistoryAnalytics.summarize(
+            records: store.load(), range: .days7, referenceDate: date, calendar: calendar
+        )
+        XCTAssertEqual(summary.totalTrashedItems, 2)
+        XCTAssertEqual(summary.rangeTrashedItems, 1)
+        XCTAssertEqual(summary.totalFreedBytes, 2_000)
+        XCTAssertEqual(summary.rangeFreedBytes, 1_500)
+        XCTAssertEqual(summary.points.first?.cumulativeFreedBytes, 500)
+        let point = try XCTUnwrap(summary.points.last)
+        XCTAssertEqual(CleanupTrendMetricMode.daily.bytes(for: point), 1_500)
+        XCTAssertEqual(CleanupTrendMetricMode.cumulative.bytes(for: point), 2_000)
+        XCTAssertEqual(summary.topClients.map(\.totalFreedBytes), [1_500])
     }
 
     func testSystemTrashPerformerUsesRealMacOSTrashOnIsolatedTempFile() throws {
@@ -151,7 +274,12 @@ final class TrashCleanerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: trashURL.path))
     }
 
-    private func makeItem(url: URL, sizeBytes: Int64, isDirectory: Bool) -> CleanableItem {
+    private func makeItem(
+        url: URL,
+        sizeBytes: Int64,
+        isDirectory: Bool,
+        recommendation: CleanupRecommendation = .recommended
+    ) -> CleanableItem {
         CleanableItem(
             clientID: "test-client",
             clientName: "Test Client",
@@ -160,6 +288,7 @@ final class TrashCleanerTests: XCTestCase {
             fileName: url.lastPathComponent,
             url: url,
             category: .temporary,
+            recommendation: recommendation,
             safetyNote: "测试用临时条目",
             sizeBytes: sizeBytes,
             fileCount: 1,

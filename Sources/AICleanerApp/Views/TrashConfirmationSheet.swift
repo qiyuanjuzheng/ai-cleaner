@@ -41,7 +41,7 @@ struct TrashConfirmationSheet: View {
                     Text(hasHighRiskItems ? "高风险确认 · 移入系统废纸篓" : "确认移入系统废纸篓")
                         .font(.system(.title3, design: .rounded).weight(.bold))
                     HStack(spacing: 5) {
-                        Text("即将清理 \(viewModel.selectedItems.count) 个条目，预计释放")
+                        Text("预计移入 \(viewModel.selectedItems.count) 个条目，共")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Text(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))
@@ -63,7 +63,7 @@ struct TrashConfirmationSheet: View {
                         Text("包含 \(viewModel.selectedNotRecommendedItems.count) 项「不建议清理」目标（\(CleanerFormatting.formatBytes(viewModel.selectedNotRecommendedTotalBytes))）")
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(riskColor)
-                        Text("删除核心配置、插件、技能库、本地模型、运行时或主数据库可能导致对应客户端需要重新登录、重新下载组件或丢失历史状态。请核对下方标红条目后再确认。")
+                        Text("删除核心配置、插件、技能库、本地模型、运行时可能导致对应客户端需要重新登录、重新下载组件或丢失历史状态。请核对下方标红条目后再确认。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

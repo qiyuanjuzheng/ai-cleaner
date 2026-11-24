@@ -66,7 +66,7 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
         case .custom:
             return "用户手动添加的自定义扫描目录，扫描与清理时仍会自动跳过凭据、配置与数据库文件。"
         case .protectedData:
-            return "包含账号凭据、核心配置、已装插件、运行时组件、项目记忆或主数据库，仅做透明展示占用大小，已锁定保护不建议清理。"
+            return "展示账号凭据、核心配置、已装插件、运行时组件、项目记忆或主数据库的占用大小及保护原因。"
         }
     }
 }

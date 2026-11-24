@@ -50,7 +50,7 @@ struct CleanupHistoryView: View {
                 }
             }
         } message: {
-            Text("该操作仅清空本应用保存的释放空间趋势日志，不会触碰磁盘或系统废纸篓中的任何文件。")
+            Text("清空本应用保存的废纸篓统计记录。")
         }
     }
 
@@ -58,7 +58,7 @@ struct CleanupHistoryView: View {
 
     private var headerRow: some View {
         HStack(alignment: .center, spacing: 12) {
-            Text("历史清理趋势")
+            Text("移入废纸篓趋势")
                 .font(.system(.title2, design: .rounded).weight(.bold))
 
             Spacer(minLength: 8)
@@ -134,7 +134,7 @@ struct CleanupHistoryView: View {
     private var kpiStripCard: some View {
         HStack(spacing: 0) {
             kpiMetricCell(
-                title: "累计已释放空间",
+                title: "累计已移入废纸篓",
                 value: formatKPIBytes(summary.totalFreedBytes),
                 subtitle: summary.totalRuns > 0
                     ? "共 \(summary.totalRuns) 次清理 · \(summary.totalTrashedItems) 个条目"
@@ -145,7 +145,7 @@ struct CleanupHistoryView: View {
             verticalDivider
 
             kpiMetricCell(
-                title: "\(viewModel.historyRange.rawValue)释放",
+                title: "\(viewModel.historyRange.rawValue)已移入废纸篓",
                 value: formatKPIBytes(summary.rangeFreedBytes),
                 subtitle: summary.rangeRuns > 0
                     ? "周期内 \(summary.rangeRuns) 次清理 · \(summary.rangeTrashedItems) 项"
@@ -156,7 +156,7 @@ struct CleanupHistoryView: View {
             verticalDivider
 
             kpiMetricCell(
-                title: "单次最高释放",
+                title: "单次移入废纸篓最大值",
                 value: formatKPIBytes(summary.largestSingleRunBytes),
                 subtitle: summary.totalRuns > 0
                     ? "平均每次 \(CleanerFormatting.formatBytes(summary.averagePerRunBytes))"
@@ -212,7 +212,7 @@ struct CleanupHistoryView: View {
             .frame(width: 1, height: 48)
     }
 
-    // MARK: - 4. 底部双栏：客户端累计释放排行 + 最近清理记录
+    // MARK: - 4. 底部双栏：客户端移入废纸篓排行 + 最近移入废纸篓
 
     private var bottomDetailGrid: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -227,7 +227,7 @@ struct CleanupHistoryView: View {
     private var clientRankingCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("客户端释放排行")
+                Text("客户端移入废纸篓排行")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text(viewModel.historyRange.rawValue)
@@ -319,7 +319,7 @@ struct CleanupHistoryView: View {
     private var recentRecordsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("最近清理记录")
+                Text("最近移入废纸篓")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text("共 \(summary.recentRecords.count) 条")
@@ -370,6 +370,17 @@ private struct HistoryTrendChartCard: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var periodLabel: String {
+        summary.usesWeeklyBuckets ? "当周" : "当日"
+    }
+
+    private var chartMetricLabel: String {
+        if viewModel.historyMetricMode == .cumulative {
+            return "累计已移入废纸篓"
+        }
+        return summary.usesWeeklyBuckets ? "每周已移入废纸篓" : "单日已移入废纸篓"
+    }
+
     private var hoveredPoint: CleanupTrendPoint? {
         guard let hoveredPointDate else { return nil }
         return summary.points.first { $0.date == hoveredPointDate }
@@ -384,21 +395,21 @@ private struct HistoryTrendChartCard: View {
                             Text(CleanerFormatting.formatDay(point.date))
                                 .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.primary)
-                            Text("当日 +\(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
+                            Text("\(periodLabel)已移入废纸篓 \(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
                                 .font(.caption.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(AppTheme.color(for: .recommended))
                         }
 
-                        Text("累计 \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : " · 当日无清理")")
+                        Text("累计已移入废纸篓 \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : "")")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     } else {
-                        Text(viewModel.historyMetricMode == .cumulative ? "累计释放空间趋势" : "单日释放空间分布")
+                        Text(chartMetricLabel)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         if !summary.isEmpty {
-                            Text("悬停查看数值")
+                            Text("悬停查看移入大小")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -408,14 +419,14 @@ private struct HistoryTrendChartCard: View {
 
                 Spacer(minLength: 8)
 
-                // 曲线模式切换（累计释放 / 单日释放）
+                // 曲线模式切换（累计 / 单日）
                 HStack(spacing: 2) {
                     ForEach(CleanupTrendMetricMode.allCases) { mode in
                         let isSelected = viewModel.historyMetricMode == mode
                         Button {
                             viewModel.historyMetricMode = mode
                         } label: {
-                            Text(mode.rawValue)
+                            Text(mode == .daily && summary.usesWeeklyBuckets ? "每周" : mode.rawValue)
                                 .font(.caption.weight(isSelected ? .semibold : .regular))
                                 .padding(.horizontal, 9)
                                 .frame(height: 24)
@@ -467,19 +478,21 @@ private struct HistoryTrendChartCard: View {
 
     private var interactiveTrendChart: some View {
         let points = summary.points
-        let isCumulative = viewModel.historyMetricMode == .cumulative
+        let mode = viewModel.historyMetricMode
+        let metricLabel = chartMetricLabel
+        let isCumulative = mode == .cumulative
         let emerald = AppTheme.color(for: .recommended)
         let cyan = Color(red: 0.20, green: 0.74, blue: 0.96)
-        let maxRaw = points.map { isCumulative ? $0.cumulativeFreedBytes : $0.dailyFreedBytes }.max() ?? 0
+        let maxRaw = points.map { mode.bytes(for: $0) }.max() ?? 0
         let yUpper = max(Int64(1024), Int64(Double(maxRaw) * 1.15))
 
         return Chart {
             if isCumulative {
                 ForEach(points) { point in
-                    let yVal = chartRevealed ? point.cumulativeFreedBytes : 0
+                    let yVal = chartRevealed ? mode.bytes(for: point) : 0
                     AreaMark(
                         x: .value("日期", point.date),
-                        y: .value("累计释放", yVal)
+                        y: .value(metricLabel, yVal)
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(
@@ -496,7 +509,7 @@ private struct HistoryTrendChartCard: View {
 
                     LineMark(
                         x: .value("日期", point.date),
-                        y: .value("累计释放", yVal)
+                        y: .value(metricLabel, yVal)
                     )
                     .interpolationMethod(.monotone)
                     .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
@@ -511,7 +524,7 @@ private struct HistoryTrendChartCard: View {
                     if point.dailyFreedBytes > 0 {
                         PointMark(
                             x: .value("日期", point.date),
-                            y: .value("累计释放", yVal)
+                            y: .value(metricLabel, yVal)
                         )
                         .symbolSize(34)
                         .foregroundStyle(emerald)
@@ -519,10 +532,10 @@ private struct HistoryTrendChartCard: View {
                 }
             } else {
                 ForEach(points) { point in
-                    let yVal = chartRevealed ? point.dailyFreedBytes : 0
+                    let yVal = chartRevealed ? mode.bytes(for: point) : 0
                     BarMark(
                         x: .value("日期", point.date, unit: .day),
-                        y: .value("当日释放", yVal)
+                        y: .value(metricLabel, yVal)
                     )
                     .cornerRadius(4)
                     .foregroundStyle(
@@ -537,34 +550,35 @@ private struct HistoryTrendChartCard: View {
             }
 
             if let active = hoveredPoint {
-                let activeY = isCumulative ? active.cumulativeFreedBytes : active.dailyFreedBytes
+                let activeY = mode.bytes(for: active)
                 RuleMark(x: .value("日期", active.date))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     .foregroundStyle(Color.primary.opacity(colorScheme == .dark ? 0.30 : 0.22))
 
                 PointMark(
                     x: .value("日期", active.date),
-                    y: .value("数值", activeY)
+                    y: .value(metricLabel, activeY)
                 )
                 .symbolSize(90)
                 .foregroundStyle(emerald.opacity(0.28))
 
                 PointMark(
                     x: .value("日期", active.date),
-                    y: .value("数值", activeY)
+                    y: .value(metricLabel, activeY)
                 )
                 .symbolSize(38)
                 .foregroundStyle(colorScheme == .dark ? Color.white : emerald)
             }
         }
         .chartYScale(domain: 0...yUpper)
+        .chartYAxisLabel("已移入废纸篓的大小")
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6))
                     .foregroundStyle(AppTheme.hairlineDivider(for: colorScheme))
                 AxisValueLabel {
                     if let bytes = value.as(Int64.self) {
-                        Text(bytes == 0 ? "0" : CleanerFormatting.formatBytes(bytes))
+                        Text(bytes == 0 ? "0 B" : CleanerFormatting.formatBytes(bytes))
                             .font(.system(size: 10.5).monospacedDigit())
                             .foregroundStyle(Color.secondary.opacity(0.85))
                     }

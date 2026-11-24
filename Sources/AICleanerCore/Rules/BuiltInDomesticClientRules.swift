@@ -22,7 +22,7 @@ extension BuiltInClientRules {
                 category: .sessions,
                 mode: .projectSessions,
                 recommendation: .reviewSuggested,
-                explanation: "按单条对话展开 WorkBuddy 各项目的 .jsonl 会话与伴随产物，超过 14 天自动标为建议清理。"
+                explanation: "按单条对话展开 WorkBuddy 各项目的 .jsonl 会话与伴随产物。"
             ),
             ScanRule(
                 id: "workbuddy-ai-project-sessions",
@@ -31,7 +31,7 @@ extension BuiltInClientRules {
                 category: .sessions,
                 mode: .projectSessions,
                 recommendation: .reviewSuggested,
-                explanation: "按单条展开 WorkBuddy AI 会话记录，超过 14 天自动标为建议清理。"
+                explanation: "按单条展开 WorkBuddy AI 会话记录。"
             ),
             ScanRule(
                 id: "workbuddy-task-folders",
@@ -40,7 +40,7 @@ extension BuiltInClientRules {
                 category: .sessions,
                 mode: .children,
                 recommendation: .reviewSuggested,
-                explanation: "每次新建任务生成的时间戳工作目录（如 2026-11-...），超过 14 天标为建议清理；已自动跳过含 .git 或敏感凭据的目录。"
+                explanation: "每次新建任务生成的时间戳工作目录（如 2026-11-...），会跳过含 .git 或敏感凭据的目录。"
             ),
             ScanRule(
                 id: "workbuddy-workspace-sessions",
@@ -250,7 +250,8 @@ extension BuiltInClientRules {
                 category: .sessions,
                 mode: .children,
                 recommendation: .reviewSuggested,
-                explanation: "按日期保存的豆包协同聊天归档，超过 14 天自动标为建议清理。"
+                explanation: "按日期保存的豆包协同聊天归档。",
+                isSessionArchive: true
             ),
             ScanRule(
                 id: "doubao-sys-cache",
@@ -394,7 +395,7 @@ extension BuiltInClientRules {
                 category: .sessions,
                 mode: .projectSessions,
                 recommendation: .reviewSuggested,
-                explanation: "按工作区展开单条 DeepSeek Harness 聊天会话记录，超过 14 天自动标为建议清理。"
+                explanation: "按工作区展开单条 DeepSeek Harness 聊天会话记录。"
             ),
             ScanRule(
                 id: "deepseek-sys-logs",

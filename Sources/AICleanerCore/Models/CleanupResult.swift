@@ -5,10 +5,12 @@ public struct TrashedItemRecord: Identifiable, Hashable, Sendable {
     public var id: String { item.id }
     public let item: CleanableItem
     public let resultingTrashURL: URL?
+    public let trashedBytes: Int64
 
-    public init(item: CleanableItem, resultingTrashURL: URL?) {
+    public init(item: CleanableItem, resultingTrashURL: URL?, trashedBytes: Int64? = nil) {
         self.item = item
         self.resultingTrashURL = resultingTrashURL
+        self.trashedBytes = max(0, trashedBytes ?? item.sizeBytes)
     }
 }
 

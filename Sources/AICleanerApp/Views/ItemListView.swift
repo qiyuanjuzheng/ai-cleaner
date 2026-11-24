@@ -360,15 +360,15 @@ private struct ItemControlBarView: View {
                 Divider()
 
                 Section("当前列表批量操作") {
-                    Button("全选当前可清理项（\(viewModel.filteredCleanableItems.count)）") {
+                    Button("全选当前可批量勾选项（\(viewModel.filteredBulkSelectableItems.count)）") {
                         viewModel.selectAllVisible()
                     }
-                    .disabled(viewModel.filteredCleanableItems.isEmpty || viewModel.allVisibleSelected)
+                    .disabled(viewModel.filteredBulkSelectableItems.isEmpty || viewModel.allVisibleSelected)
 
-                    Button("反选当前可清理项") {
+                    Button("反选当前可批量勾选项") {
                         viewModel.invertVisibleSelection()
                     }
-                    .disabled(viewModel.filteredCleanableItems.isEmpty)
+                    .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
 
                     Button("清空本页选择") {
                         viewModel.clearVisibleSelection()
@@ -664,7 +664,7 @@ private struct CleanSectionHeader: View, Equatable {
 
             Spacer(minLength: 8)
 
-            if header.recommendation.isCleanable {
+            if header.supportsBulkSelection {
                 Button("勾选本组") {
                     viewModel.selectSection(header.recommendation)
                 }
@@ -674,14 +674,6 @@ private struct CleanSectionHeader: View, Equatable {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(Capsule().fill(tint.opacity(0.11)))
-            } else {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.shield.fill")
-                        .font(.system(size: 9.5))
-                    Text("默认不选 · 手动勾选需二次确认")
-                }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 4)

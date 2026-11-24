@@ -3,247 +3,374 @@ import SwiftUI
 
 struct ItemListView: View {
     @Bindable var viewModel: CleanerViewModel
+    @Namespace private var categoryNamespace
+    @Namespace private var tierNamespace
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerDashboard
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 14)
+        if viewModel.isScanning && viewModel.report == nil {
+            OrbitalScannerHero()
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        } else {
+            VStack(spacing: 0) {
+                heroDashboardCard
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
 
-            Divider()
+                singleControlBar
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
 
-            filterControlBar
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
-
-            Divider()
-
-            listContent
+                listContent
+            }
         }
     }
 
-    // MARK: - Visual Space Dashboard
+    // MARK: - 1. 紧凑高级单焦点空间仪表头
 
-    private var headerDashboard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                if let summary = viewModel.activeSummary {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(AppTheme.color(forAccentToken: summary.profile.accentToken).opacity(0.15))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: summary.profile.symbolName)
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(AppTheme.color(forAccentToken: summary.profile.accentToken))
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(summary.profile.name)
-                                .font(.title2.weight(.semibold))
-                            Text("总占用 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))")
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(summary.profile.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.14))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "sparkles.rectangle.stack.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(Color.accentColor)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("全部 AI 客户端空间总览")
-                                .font(.title2.weight(.semibold))
-                            if let report = viewModel.report {
-                                Text("已识别 \(report.detectedBuiltInClientsCount) 款客户端 · 总占用 \(CleanerFormatting.formatBytes(report.totalDiskFootprintBytes))")
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Text("已自动区分「建议清理」「按需清理」与「不建议清理（锁定保护）」，点击下方卡片可快速筛选。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                if !viewModel.scopedRecommendedItems.isEmpty {
-                    Button {
-                        viewModel.selectRecommendedInScope()
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "checkmark.circle.fill")
-                            Text("一键勾选建议清理 (\(CleanerFormatting.formatBytes(viewModel.scopedRecommendedBytes)))")
-                                .monospacedDigit()
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.color(for: .recommended))
-                    .controlSize(.regular)
-                    .help("自动勾选当前视图下所有标记为「建议清理」的条目，绝不勾选「按需清理」与「不建议清理」项")
-                }
-            }
-
-            // 三档建议概览卡片（同时可点击筛选）
-            HStack(spacing: 10) {
-                RecommendationSummaryCard(
-                    recommendation: .recommended,
-                    sizeBytes: viewModel.scopedRecommendedBytes,
-                    itemCount: viewModel.scopedRecommendedItems.count,
-                    subtitle: "缓存、日志、临时与旧会话",
-                    isSelected: viewModel.selectedRecommendation == .recommended
-                ) {
-                    viewModel.toggleRecommendationFilter(.recommended)
-                }
-
-                RecommendationSummaryCard(
-                    recommendation: .reviewSuggested,
-                    sizeBytes: viewModel.scopedReviewSuggestedBytes,
-                    itemCount: viewModel.scopedReviewSuggestedItems.count,
-                    subtitle: "近期聊天会话与任务目录",
-                    isSelected: viewModel.selectedRecommendation == .reviewSuggested
-                ) {
-                    viewModel.toggleRecommendationFilter(.reviewSuggested)
-                }
-
-                RecommendationSummaryCard(
-                    recommendation: .notRecommended,
-                    sizeBytes: viewModel.scopedProtectedBytes,
-                    itemCount: viewModel.scopedProtectedItems.count,
-                    subtitle: "配置、插件、记忆与主库（已锁定）",
-                    isSelected: viewModel.selectedRecommendation == .notRecommended
-                ) {
-                    viewModel.toggleRecommendationFilter(.notRecommended)
-                }
-            }
-
-            // 类 macOS 系统存储风格的直观比例分布条
-            if viewModel.scopedTotalFootprintBytes > 0 {
-                StorageDistributionBar(
+    private var heroDashboardCard: some View {
+        VStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 18) {
+                // 标志性多段发光空间环
+                StorageRingGauge(
                     recommendedBytes: viewModel.scopedRecommendedBytes,
                     reviewBytes: viewModel.scopedReviewSuggestedBytes,
-                    protectedBytes: viewModel.scopedProtectedBytes
+                    protectedBytes: viewModel.scopedProtectedBytes,
+                    highlightedTier: viewModel.highlightedRingTier,
+                    isScanning: viewModel.isScanning
                 )
+
+                VStack(alignment: .leading, spacing: 11) {
+                    // 标题行 + 唯一主行动按钮
+                    HStack(alignment: .center, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(viewModel.activeSummary?.profile.name ?? "全部 AI 客户端")
+                                .font(.system(.title2, design: .rounded).weight(.bold))
+                                .lineLimit(1)
+
+                            Text(headerSubtitle)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        if !viewModel.scopedRecommendedItems.isEmpty {
+                            Button {
+                                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.78)) {
+                                    viewModel.selectRecommendedInScope()
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "sparkles")
+                                    Text("一键勾选建议清理 · \(CleanerFormatting.formatBytes(viewModel.scopedRecommendedBytes))")
+                                        .monospacedDigit()
+                                        .lineLimit(1)
+                                }
+                                .fixedSize(horizontal: true, vertical: false)
+                            }
+                            .buttonStyle(
+                                GlowingPillButtonStyle(
+                                    gradient: AppTheme.gradient(for: .recommended),
+                                    glowColor: AppTheme.color(for: .recommended),
+                                    isEnabled: !viewModel.isCleaning && !viewModel.isScanning,
+                                    compact: true
+                                )
+                            )
+                            .layoutPriority(1)
+                            .disabled(viewModel.isCleaning || viewModel.isScanning)
+                            .help("自动勾选当前视图中所有「建议清理」项，绝不勾选「按需清理」或「不建议清理」项")
+                        }
+                    }
+
+                    // 统一三档交互式指标条（悬停联动圆环高亮 + 点击筛选，彻底消除 3 张大卡片的视觉割裂）
+                    HStack(spacing: 4) {
+                        tierMetricSegment(
+                            tier: .recommended,
+                            bytes: viewModel.scopedRecommendedBytes,
+                            count: viewModel.scopedRecommendedItems.count
+                        )
+                        tierMetricSegment(
+                            tier: .reviewSuggested,
+                            bytes: viewModel.scopedReviewSuggestedBytes,
+                            count: viewModel.scopedReviewSuggestedItems.count
+                        )
+                        tierMetricSegment(
+                            tier: .notRecommended,
+                            bytes: viewModel.scopedProtectedBytes,
+                            count: viewModel.scopedProtectedItems.count
+                        )
+                    }
+                    .padding(3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.035))
+                    )
+                }
+            }
+
+            // 融入底边的 3.5pt 极细比例条（无冗余重复文字）
+            if viewModel.scopedTotalFootprintBytes > 0 {
+                HairlineStorageBar(
+                    recommendedBytes: viewModel.scopedRecommendedBytes,
+                    reviewBytes: viewModel.scopedReviewSuggestedBytes,
+                    protectedBytes: viewModel.scopedProtectedBytes,
+                    highlightedTier: viewModel.highlightedRingTier
+                )
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .fill(AppTheme.glassCardFill(for: colorScheme))
+                )
+        )
+        .overlay(alignment: .top) {
+            if viewModel.isScanning {
+                AuroraScanSweepBar()
+                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .transition(.opacity)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.85)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.05), radius: 12, y: 4)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: viewModel.isScanning)
+    }
+
+    private var headerSubtitle: String {
+        if let summary = viewModel.activeSummary {
+            return "\(summary.profile.description) · 总占用 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
+        }
+        if let report = viewModel.report {
+            return "已识别 \(report.detectedBuiltInClientsCount) 款 AI 客户端 · 总占用 \(CleanerFormatting.formatBytes(report.totalDiskFootprintBytes))"
+        }
+        return "只读扫描本机 AI 客户端空间占用"
+    }
+
+    private func tierMetricSegment(tier: CleanupRecommendation, bytes: Int64, count: Int) -> some View {
+        let isSelected = viewModel.selectedRecommendation == tier
+        let isHovered = viewModel.hoveredRecommendation == tier
+        let tint = AppTheme.color(for: tier)
+
+        return Button {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.80)) {
+                viewModel.toggleRecommendationFilter(tier)
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: (isSelected || isHovered) ? tint.opacity(0.8) : .clear, radius: 4)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(tier.displayName)
+                            .font(.caption.weight(isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? .primary : .secondary)
+                        Text("\(count)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(CleanerFormatting.formatBytes(bytes))
+                        .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                        .foregroundStyle(bytes > 0 ? (isSelected || isHovered ? tint : Color.primary) : Color.secondary.opacity(0.55))
+                        .contentTransition(.numericText())
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6.5)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint.opacity(colorScheme == .dark ? 0.16 : 0.12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(tint.opacity(0.38), lineWidth: 0.8)
+                        )
+                        .matchedGeometryEffect(id: "activeTierHighlight", in: tierNamespace)
+                } else if isHovered {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.04))
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                if hovering {
+                    viewModel.hoveredRecommendation = tier
+                } else if viewModel.hoveredRecommendation == tier {
+                    viewModel.hoveredRecommendation = nil
+                }
             }
         }
     }
 
-    // MARK: - Filter & Selection Controls
+    // MARK: - 2. 单行极简筛选与搜索栏
 
-    private var filterControlBar: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 10) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("搜索会话摘要、项目名、路径、客户端或建议说明…", text: $viewModel.searchText)
-                        .textFieldStyle(.plain)
-                    if !viewModel.searchText.isEmpty {
-                        Button {
-                            viewModel.searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
+    private var singleControlBar: some View {
+        HStack(spacing: 10) {
+            // 紧凑自适应宽度的滑动胶囊分类切换（不再拉伸留白）
+            HStack(spacing: 2) {
+                categoryFilterButton(title: "全部", category: nil)
+                ForEach(visibleCategories) { category in
+                    categoryFilterButton(title: shortCategoryTitle(category), category: category)
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.8)
-                )
-                .frame(minWidth: 240, maxWidth: .infinity)
-
-                Picker("时间范围", selection: $viewModel.selectedAgeFilter) {
-                    ForEach(ItemAgeFilter.allCases) { filter in
-                        Text(filter.rawValue).tag(filter)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 104)
-                .help("按最后修改时间筛选较早的一次性会话或临时文件")
-
-                Picker("排序", selection: $viewModel.sortOrder) {
-                    ForEach(ItemSortOrder.allCases) { order in
-                        Text(order.rawValue).tag(order)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 150)
             }
+            .padding(3)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.045))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.65)
+            )
+            .fixedSize(horizontal: true, vertical: false)
 
-            HStack(spacing: 6) {
-                HStack(spacing: 4) {
-                    categoryFilterButton(
-                        title: "全部",
-                        count: viewModel.scopedItems.count,
-                        category: nil
-                    )
-                    ForEach(visibleCategories) { category in
-                        categoryFilterButton(
-                            title: category.displayName,
-                            count: viewModel.categoryCounts[category] ?? 0,
-                            category: category
-                        )
-                    }
-                }
+            Spacer(minLength: 8)
 
-                Spacer(minLength: 8)
-
-                if viewModel.hasActiveFilters {
-                    Button("重置筛选") {
+            if viewModel.hasActiveFilters {
+                Button("重置") {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82)) {
                         viewModel.clearAllFilters()
                     }
-                    .buttonStyle(.link)
-                    .font(.caption)
                 }
-
-                Text("可清 \(viewModel.filteredCleanableItems.count) 项（已选 \(viewModel.visibleSelectedCount)）")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-
-                Button("全选可清") {
-                    viewModel.selectAllVisible()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(viewModel.filteredCleanableItems.isEmpty || viewModel.allVisibleSelected)
-
-                Button("反选") {
-                    viewModel.invertVisibleSelection()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(viewModel.filteredCleanableItems.isEmpty)
-
-                Button("清空本页") {
-                    viewModel.clearVisibleSelection()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(viewModel.visibleSelectedCount == 0)
+                .buttonStyle(.link)
+                .font(.caption)
             }
+
+            // 紧凑透明搜索框
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                TextField("搜索会话、项目或路径…", text: $viewModel.searchText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                if !viewModel.searchText.isEmpty {
+                    Button {
+                        viewModel.searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5.5)
+            .frame(width: 215)
+            .background(
+                RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                    .fill(AppTheme.glassCardFill(for: colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
+            )
+
+            // 折叠收纳的「排序 / 时间筛选 / 批量勾选」高级菜单（平时保持界面极简）
+            Menu {
+                Section("时间范围") {
+                    ForEach(ItemAgeFilter.allCases) { filter in
+                        Button {
+                            viewModel.selectedAgeFilter = filter
+                        } label: {
+                            if viewModel.selectedAgeFilter == filter {
+                                Label(filter.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(filter.rawValue)
+                            }
+                        }
+                    }
+                }
+
+                Section("排序方式") {
+                    ForEach(ItemSortOrder.allCases) { order in
+                        Button {
+                            viewModel.sortOrder = order
+                        } label: {
+                            if viewModel.sortOrder == order {
+                                Label(order.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(order.rawValue)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                Section("当前列表批量操作") {
+                    Button("全选当前可清理项（\(viewModel.filteredCleanableItems.count)）") {
+                        viewModel.selectAllVisible()
+                    }
+                    .disabled(viewModel.filteredCleanableItems.isEmpty || viewModel.allVisibleSelected)
+
+                    Button("反选当前可清理项") {
+                        viewModel.invertVisibleSelection()
+                    }
+                    .disabled(viewModel.filteredCleanableItems.isEmpty)
+
+                    Button("清空本页选择") {
+                        viewModel.clearVisibleSelection()
+                    }
+                    .disabled(viewModel.visibleSelectedCount == 0)
+                }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 26)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 30, height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                    .fill(AppTheme.glassCardFill(for: colorScheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
+            )
+            .overlay(alignment: .topTrailing) {
+                if viewModel.selectedAgeFilter != .all || viewModel.sortOrder != .sizeDescending {
+                    Circle()
+                        .fill(AppTheme.color(for: .recommended))
+                        .frame(width: 6, height: 6)
+                        .offset(x: -3, y: 3)
+                }
+            }
+            .fixedSize()
+            .help("时间范围、排序与批量勾选")
+        }
+    }
+
+    private func shortCategoryTitle(_ category: ScanCategory) -> String {
+        switch category {
+        case .sessions: return "会话"
+        case .cache: return "缓存"
+        case .temporary: return "临时"
+        case .logs: return "日志"
+        case .custom: return "自定义"
+        case .protectedData: return "受保护"
         }
     }
 
@@ -258,72 +385,56 @@ struct ItemListView: View {
         }
     }
 
-    private func categoryFilterButton(title: String, count: Int, category: ScanCategory?) -> some View {
+    private func categoryFilterButton(title: String, category: ScanCategory?) -> some View {
         let isSelected = viewModel.selectedCategory == category
-        let pillColor: Color = category.map { AppTheme.color(for: $0) } ?? .accentColor
+
         return Button {
-            viewModel.selectedCategory = category
-        } label: {
-            HStack(spacing: 4) {
-                Text(title)
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.caption2.monospacedDigit())
-                        .opacity(isSelected ? 0.92 : 0.72)
-                }
+            withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.80)) {
+                viewModel.selectedCategory = category
             }
-            .font(.caption.weight(isSelected ? .semibold : .regular))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                Capsule()
-                    .fill(isSelected ? pillColor.opacity(0.16) : Color.clear)
-            )
-            .overlay(
-                Capsule()
-                    .strokeBorder(
-                        isSelected ? pillColor.opacity(0.55) : Color(nsColor: .separatorColor),
-                        lineWidth: 0.8
-                    )
-            )
-            .foregroundStyle(isSelected ? pillColor : .secondary)
+        } label: {
+            Text(title)
+                .font(.caption.weight(isSelected ? .semibold : .regular))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4.5)
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .background {
+                    if isSelected {
+                        Capsule(style: .continuous)
+                            .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.white)
+                            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.25 : 0.08), radius: 3, y: 1)
+                            .matchedGeometryEffect(id: "activeCategoryPill", in: categoryNamespace)
+                    }
+                }
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - Grouped List Body
+    // MARK: - 3. 统一磨砂分组容器列表（告别满屏散乱方框）
 
     @ViewBuilder
     private var listContent: some View {
-        if viewModel.isScanning && viewModel.report == nil {
-            VStack(spacing: 12) {
-                ProgressView()
-                    .controlSize(.large)
-                Text("正在以只读模式扫描本机 AI 客户端目录…")
-                    .font(.headline)
-                Text("支持 31 款国内外常见 AI 客户端，扫描过程绝不修改任何文件")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.displayedSections.isEmpty {
+        if viewModel.displayedSections.isEmpty {
             if viewModel.hasActiveFilters {
                 ContentUnavailableView {
                     Label("未找到匹配的条目", systemImage: "magnifyingglass")
                 } description: {
-                    Text("请调整搜索关键词、清理建议卡片、时间范围或分类筛选条件。")
+                    Text("可调整搜索词、建议档位或分类筛选条件。")
                 } actions: {
-                    Button("清除筛选条件") {
-                        viewModel.clearAllFilters()
+                    Button("重置筛选") {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                            viewModel.clearAllFilters()
+                        }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView {
-                    Label("当前目录很干净", systemImage: "checkmark.circle")
+                    Label("当前目录很干净", systemImage: "checkmark.seal.fill")
                 } description: {
-                    Text("该分组下暂无可清理条目。你也可以点击「添加目录」扫描其他自定义路径。")
+                    Text("该分组下暂无可清理条目。")
                 } actions: {
                     Button("重新扫描") {
                         viewModel.rescan()
@@ -335,168 +446,157 @@ struct ItemListView: View {
         } else {
             let maxBytes = max(1, viewModel.maxDisplayedItemBytes)
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(viewModel.displayedSections) { section in
-                        let isCollapsed = viewModel.collapsedSections.contains(section.recommendation)
-                        RecommendationSectionHeader(
-                            section: section,
-                            isCollapsed: isCollapsed,
-                            onToggleCollapse: {
-                                viewModel.toggleSectionCollapsed(section.recommendation)
-                            },
-                            onSelectSection: {
-                                viewModel.selectSection(section.recommendation)
-                            }
-                        )
+                        let isCollapsed = viewModel.isSectionCollapsed(section.recommendation)
 
-                        if !isCollapsed {
-                            ForEach(section.items) { item in
-                                ItemRowView(
-                                    item: item,
-                                    showClientBadge: viewModel.sidebarSelection == .allClients,
-                                    relativeSizeFraction: Double(item.sizeBytes) / Double(maxBytes),
-                                    isSelected: viewModel.isSelected(item),
-                                    onToggle: { viewModel.toggleSelection(for: item) },
-                                    onRevealInFinder: { viewModel.revealInFinder(item) },
-                                    onCopyPath: { viewModel.copyPath(item) }
+                        VStack(alignment: .leading, spacing: 6) {
+                            CleanSectionHeader(
+                                section: section,
+                                isCollapsed: isCollapsed,
+                                onToggleCollapse: {
+                                    withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
+                                        viewModel.toggleSectionCollapsed(section.recommendation)
+                                    }
+                                },
+                                onSelectSection: {
+                                    withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.80)) {
+                                        viewModel.selectSection(section.recommendation)
+                                    }
+                                }
+                            )
+
+                            if !isCollapsed {
+                                // 同一分组所有行收敛在一张通透圆角玻璃卡片内，用极淡发丝线分隔
+                                LazyVStack(spacing: 0) {
+                                    ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
+                                        ItemRowView(
+                                            item: item,
+                                            showClientBadge: viewModel.sidebarSelection == .allClients,
+                                            relativeSizeFraction: Double(item.sizeBytes) / Double(maxBytes),
+                                            isSelected: viewModel.isSelected(item),
+                                            onToggle: { viewModel.toggleSelection(for: item) },
+                                            onRevealInFinder: { viewModel.revealInFinder(item) },
+                                            onCopyPath: { viewModel.copyPath(item) }
+                                        )
+
+                                        if index < section.items.count - 1 {
+                                            Rectangle()
+                                                .fill(AppTheme.hairlineDivider(for: colorScheme))
+                                                .frame(height: 0.5)
+                                                .padding(.leading, 56)
+                                                .padding(.trailing, 14)
+                                        }
+                                    }
+                                }
+                                .background(
+                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                        .fill(AppTheme.glassCardFill(for: colorScheme))
                                 )
-                                Divider()
-                                    .padding(.leading, 54)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                        .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.75)
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                             }
                         }
                     }
                 }
-                .padding(.bottom, 12)
+                .padding(.horizontal, 20)
+                .padding(.top, 2)
+                .padding(.bottom, 88)
             }
         }
     }
 }
 
-// MARK: - Visual Dashboard Subcomponents
+// MARK: - Hairline Proportional Bar (零溢出 + 悬停联动)
 
-private struct RecommendationSummaryCard: View {
-    let recommendation: CleanupRecommendation
-    let sizeBytes: Int64
-    let itemCount: Int
-    let subtitle: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        let tint = AppTheme.color(for: recommendation)
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: recommendation.symbolName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(tint)
-                    Text(recommendation.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Text("\(itemCount) 项")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(CleanerFormatting.formatBytes(sizeBytes))
-                    .font(.title2.monospacedDigit().weight(.bold))
-                    .foregroundStyle(sizeBytes > 0 ? tint : .secondary)
-
-                Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? tint.opacity(0.14) : Color(nsColor: .controlBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(
-                        isSelected ? tint.opacity(0.85) : tint.opacity(0.22),
-                        lineWidth: isSelected ? 1.5 : 0.8
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct StorageDistributionBar: View {
+private struct HairlineStorageBar: View {
     let recommendedBytes: Int64
     let reviewBytes: Int64
     let protectedBytes: Int64
+    let highlightedTier: CleanupRecommendation?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private struct BarMetrics: Equatable {
+        let recommended: Int64
+        let review: Int64
+        let protected: Int64
+    }
 
     var body: some View {
-        let total = max(1, recommendedBytes + reviewBytes + protectedBytes)
-        VStack(alignment: .leading, spacing: 4) {
-            GeometryReader { proxy in
-                let width = proxy.size.width
-                let recW = width * CGFloat(recommendedBytes) / CGFloat(total)
-                let revW = width * CGFloat(reviewBytes) / CGFloat(total)
-                let proW = width * CGFloat(protectedBytes) / CGFloat(total)
+        let metrics = BarMetrics(recommended: recommendedBytes, review: reviewBytes, protected: protectedBytes)
+        let segments: [(CleanupRecommendation, Int64)] = [
+            (.recommended, recommendedBytes),
+            (.reviewSuggested, reviewBytes),
+            (.notRecommended, protectedBytes)
+        ].filter { $0.1 > 0 }
 
-                HStack(spacing: 1.5) {
-                    if recommendedBytes > 0 {
-                        Rectangle()
-                            .fill(AppTheme.color(for: .recommended))
-                            .frame(width: max(3, recW))
-                    }
-                    if reviewBytes > 0 {
-                        Rectangle()
-                            .fill(AppTheme.color(for: .reviewSuggested))
-                            .frame(width: max(3, revW))
-                    }
-                    if protectedBytes > 0 {
-                        Rectangle()
-                            .fill(AppTheme.color(for: .notRecommended).opacity(0.55))
-                            .frame(width: max(3, proW))
-                    }
-                }
-                .clipShape(Capsule())
-                .background(
+        GeometryReader { proxy in
+            let spacing: CGFloat = 3
+            let gapTotal = CGFloat(max(0, segments.count - 1)) * spacing
+            let usableWidth = max(0, proxy.size.width - gapTotal)
+            let widths = proportionalWidths(for: segments.map(\.1), usableWidth: usableWidth)
+
+            HStack(spacing: spacing) {
+                ForEach(Array(segments.enumerated()), id: \.element.0) { idx, segment in
+                    let tier = segment.0
+                    let isHighlighted = highlightedTier == tier
+                    let opacity = highlightedTier == nil ? 0.90 : (isHighlighted ? 1.0 : 0.25)
+
                     Capsule()
-                        .fill(Color.secondary.opacity(0.12))
-                )
+                        .fill(segmentFill(for: tier))
+                        .frame(width: widths[idx])
+                        .shadow(
+                            color: isHighlighted ? AppTheme.color(for: tier).opacity(0.65) : .clear,
+                            radius: isHighlighted ? 5 : 0
+                        )
+                        .opacity(opacity)
+                }
             }
-            .frame(height: 8)
-
-            HStack(spacing: 14) {
-                legendDot(color: AppTheme.color(for: .recommended), text: "建议清理 \(percentage(recommendedBytes, of: total))")
-                legendDot(color: AppTheme.color(for: .reviewSuggested), text: "按需清理 \(percentage(reviewBytes, of: total))")
-                legendDot(color: AppTheme.color(for: .notRecommended).opacity(0.75), text: "不建议清理（已保护） \(percentage(protectedBytes, of: total))")
-                Spacer()
-            }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.84), value: metrics)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: highlightedTier)
+            .background(
+                Capsule()
+                    .fill(Color.primary.opacity(0.06))
+            )
         }
+        .frame(height: 3.5)
     }
 
-    private func legendDot(color: Color, text: String) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(color)
-                .frame(width: 7, height: 7)
-            Text(text)
+    private func proportionalWidths(for values: [Int64], usableWidth: CGFloat) -> [CGFloat] {
+        guard !values.isEmpty, usableWidth > 0 else { return [] }
+        let total = Double(values.reduce(0, +))
+        guard total > 0 else { return Array(repeating: 0, count: values.count) }
+
+        let minSegWidth: CGFloat = min(5, usableWidth / CGFloat(values.count))
+        var raw = values.map { max(minSegWidth, usableWidth * CGFloat(Double($0) / total)) }
+        let sum = raw.reduce(0, +)
+        if sum > usableWidth {
+            let scale = usableWidth / sum
+            raw = raw.map { $0 * scale }
         }
+        return raw
     }
 
-    private func percentage(_ value: Int64, of total: Int64) -> String {
-        guard total > 0, value > 0 else { return "0%" }
-        let pct = Double(value) * 100.0 / Double(total)
-        if pct < 1 {
-            return "<1%"
+    private func segmentFill(for tier: CleanupRecommendation) -> AnyShapeStyle {
+        switch tier {
+        case .recommended:
+            return AnyShapeStyle(AppTheme.gradient(for: .recommended))
+        case .reviewSuggested:
+            return AnyShapeStyle(AppTheme.gradient(for: .reviewSuggested))
+        case .notRecommended:
+            return AnyShapeStyle(AppTheme.color(for: .notRecommended).opacity(0.55))
         }
-        return "\(Int(pct.rounded()))%"
     }
 }
 
-private struct RecommendationSectionHeader: View {
+// MARK: - 无框极简分组标题
+
+private struct CleanSectionHeader: View {
     let section: CleanerViewModel.RecommendationSection
     let isCollapsed: Bool
     let onToggleCollapse: () -> Void
@@ -504,56 +604,55 @@ private struct RecommendationSectionHeader: View {
 
     var body: some View {
         let tint = AppTheme.color(for: section.recommendation)
+
         HStack(spacing: 8) {
             Button(action: onToggleCollapse) {
                 HStack(spacing: 7) {
-                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 12)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(isCollapsed ? -90 : 0))
+                        .frame(width: 11)
 
-                    Image(systemName: section.recommendation.symbolName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(tint)
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 7, height: 7)
 
                     Text(section.recommendation.displayName)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
 
-                    Text("· \(section.recommendation.shortGuidance)")
-                        .font(.caption)
+                    Text("\(section.items.count) 项 · \(CleanerFormatting.formatBytes(section.totalBytes))")
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Spacer(minLength: 8)
 
-            Text("\(section.items.count) 项 · \(CleanerFormatting.formatBytes(section.totalBytes))")
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(tint)
-
             if section.recommendation.isCleanable {
                 Button("勾选本组") {
                     onSelectSection()
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(tint.opacity(0.11)))
             } else {
-                Text("已锁定保护")
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(tint.opacity(0.12)))
-                    .foregroundStyle(tint)
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                    Text("已锁定保护")
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .background(tint.opacity(0.06))
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
     }
 }

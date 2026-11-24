@@ -4,6 +4,8 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 同步默认深色极光外观到 AppKit 窗口与 macOS Liquid Glass 工具栏/侧边栏，避免明暗割裂
+        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         // 确保无论是通过 `swift run` 启动还是作为 `.app` 双击启动，都能作为常规前台应用展示窗口并响应快捷键
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -36,11 +38,13 @@ struct AICleanerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("AI Cleaner — AI 客户端空间清理") {
+        WindowGroup("AI Cleaner") {
             ContentView(viewModel: viewModel)
-                .frame(minWidth: 960, minHeight: 620)
+                .frame(minWidth: 1020, minHeight: 660)
+                .preferredColorScheme(viewModel.appearanceMode.colorScheme)
         }
-        .defaultSize(width: 1100, height: 720)
+        .defaultSize(width: 1180, height: 760)
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {}
 

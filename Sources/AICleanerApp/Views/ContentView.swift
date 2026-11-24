@@ -1,48 +1,68 @@
 import AICleanerCore
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: CleanerViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationSplitView {
             SidebarView(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 268, max: 320)
+                .navigationSplitViewColumnWidth(min: 230, ideal: 252, max: 300)
         } detail: {
-            VStack(spacing: 0) {
-                if let errorMessage = viewModel.errorBannerMessage {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text(errorMessage)
-                            .font(.callout)
-                        Spacer()
-                        Button {
-                            viewModel.dismissErrorBanner()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption.weight(.semibold))
+            ZStack(alignment: .bottom) {
+                AmbientAuroraBackdrop(accentColor: viewModel.activeAccentColor)
+                    .animation(
+                        reduceMotion ? nil : .easeInOut(duration: 0.65),
+                        value: viewModel.sidebarSelection
+                    )
+
+                VStack(spacing: 0) {
+                    if let errorMessage = viewModel.errorBannerMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(errorMessage)
+                                .font(.callout)
+                            Spacer()
+                            Button {
+                                viewModel.dismissErrorBanner()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 9)
+                        .background(.ultraThinMaterial)
+                        .overlay(alignment: .bottom) { Divider() }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.orange.opacity(0.12))
-                    Divider()
+
+                    ItemListView(viewModel: viewModel)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                ItemListView(viewModel: viewModel)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                Divider()
-
+                // 智能悬浮操作岛（仅勾选或清理完成时轻盈浮现）
                 BottomActionBar(viewModel: viewModel)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 18)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
+                        viewModel.appearanceMode = viewModel.appearanceMode.next
+                    }
+                } label: {
+                    Label(viewModel.appearanceMode.rawValue, systemImage: viewModel.appearanceMode.symbolName)
+                }
+                .help("切换外观：深色极光 / 浅色磨砂 / 跟随系统（当前：\(viewModel.appearanceMode.rawValue)）")
+
                 Button {
                     viewModel.showingAddCustomSheet = true
                 } label: {
@@ -67,12 +87,28 @@ struct ContentView: View {
         }
         .sheet(isPresented: $viewModel.showingTrashConfirmation) {
             TrashConfirmationSheet(viewModel: viewModel)
+                .preferredColorScheme(viewModel.appearanceMode.colorScheme)
         }
         .sheet(isPresented: $viewModel.showingAddCustomSheet) {
             AddCustomDirectorySheet(viewModel: viewModel)
+                .preferredColorScheme(viewModel.appearanceMode.colorScheme)
+        }
+        .onAppear {
+            applyWindowAppearance(viewModel.appearanceMode)
+        }
+        .onChange(of: viewModel.appearanceMode) { _, newMode in
+            applyWindowAppearance(newMode)
         }
         .task {
             viewModel.initialScanIfNeeded()
+        }
+    }
+
+    private func applyWindowAppearance(_ mode: AppAppearanceMode) {
+        let appearance = mode.nsAppearance
+        NSApplication.shared.appearance = appearance
+        for window in NSApplication.shared.windows {
+            window.appearance = appearance
         }
     }
 }

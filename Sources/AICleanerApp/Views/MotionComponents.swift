@@ -1,0 +1,602 @@
+import AICleanerCore
+import SwiftUI
+
+// MARK: - 1. 克制而流动的顶部极光氛围背景（不干扰下方列表可读性）
+
+struct AmbientAuroraBackdrop: View {
+    let accentColor: Color
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: reduceMotion)) { timeline in
+            let t = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate * 0.16
+            Canvas { context, size in
+                drawAurora(in: &context, size: size, time: t)
+            }
+            .blur(radius: 64)
+        }
+        .background(AppTheme.canvasBackground(for: colorScheme))
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+
+    private func drawAurora(in context: inout GraphicsContext, size: CGSize, time t: Double) {
+        let isDark = colorScheme == .dark
+        let primaryAlpha = isDark ? 0.13 : 0.075
+        let secondaryAlpha = isDark ? 0.09 : 0.055
+        let maxDim = max(size.width, size.height)
+
+        // 顶部柔和主极光（跟随当前选中客户端色相缓慢流转）
+        let p1 = CGPoint(
+            x: size.width * CGFloat(0.24 + 0.07 * cos(t)),
+            y: size.height * CGFloat(0.06 + 0.04 * sin(t * 0.8))
+        )
+        drawOrb(
+            in: &context,
+            center: p1,
+            radius: maxDim * 0.42,
+            color: accentColor.opacity(primaryAlpha)
+        )
+
+        // 右上角静谧青绿光晕
+        let p2 = CGPoint(
+            x: size.width * CGFloat(0.80 + 0.06 * sin(t * 0.68)),
+            y: size.height * CGFloat(0.10 + 0.05 * cos(t * 0.6))
+        )
+        drawOrb(
+            in: &context,
+            center: p2,
+            radius: maxDim * 0.36,
+            color: Color(red: 0.14, green: 0.82, blue: 0.64).opacity(secondaryAlpha)
+        )
+    }
+
+    private func drawOrb(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, color: Color) {
+        let rect = CGRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
+        let shading = GraphicsContext.Shading.radialGradient(
+            Gradient(colors: [color, color.opacity(0.0)]),
+            center: center,
+            startRadius: 6,
+            endRadius: radius
+        )
+        context.fill(Path(ellipseIn: rect), with: shading)
+    }
+}
+
+// MARK: - 2. 轨道雷达扫描核心动效（首次全盘只读扫描 Hero）
+
+struct OrbitalScannerHero: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 24) {
+            TimelineView(.animation(paused: reduceMotion)) { timeline in
+                let elapsed = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate
+                let sweepAngle = Angle.degrees((elapsed * 120).truncatingRemainder(dividingBy: 360))
+                let outerRotation = Angle.degrees((elapsed * 24).truncatingRemainder(dividingBy: 360))
+                let innerRotation = Angle.degrees((-elapsed * 40).truncatingRemainder(dividingBy: 360))
+                let pulse = reduceMotion ? 1.0 : (0.95 + 0.06 * sin(elapsed * 2.8))
+
+                ZStack {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.24),
+                                    Color(red: 0.24, green: 0.56, blue: 1.00).opacity(0.06),
+                                    .clear
+                                ],
+                                center: .center,
+                                startRadius: 14,
+                                endRadius: 94
+                            )
+                        )
+                        .frame(width: 188, height: 188)
+                        .scaleEffect(pulse)
+
+                    Circle()
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.65),
+                                    Color(red: 0.24, green: 0.58, blue: 1.00).opacity(0.30),
+                                    Color.white.opacity(0.06),
+                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.65)
+                                ],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: [9, 8])
+                        )
+                        .frame(width: 152, height: 152)
+                        .rotationEffect(outerRotation)
+
+                    Circle()
+                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.07), lineWidth: 1)
+                        .frame(width: 112, height: 112)
+
+                    if !reduceMotion {
+                        Circle()
+                            .fill(
+                                AngularGradient(
+                                    gradient: Gradient(stops: [
+                                        .init(color: .clear, location: 0.0),
+                                        .init(color: .clear, location: 0.74),
+                                        .init(color: Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.16), location: 0.90),
+                                        .init(color: Color(red: 0.22, green: 0.92, blue: 0.72).opacity(0.46), location: 1.0)
+                                    ]),
+                                    center: .center
+                                )
+                            )
+                            .frame(width: 150, height: 150)
+                            .rotationEffect(sweepAngle)
+                    }
+
+                    Circle()
+                        .stroke(
+                            Color(red: 0.36, green: 0.64, blue: 1.00).opacity(0.42),
+                            style: StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: [2, 10])
+                        )
+                        .frame(width: 78, height: 78)
+                        .rotationEffect(innerRotation)
+
+                    ZStack {
+                        Circle()
+                            .fill(AppTheme.brandGradient)
+                            .frame(width: 50, height: 50)
+                            .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.48), radius: 12)
+
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .scaleEffect(pulse)
+                }
+            }
+
+            VStack(spacing: 6) {
+                Text("正在以只读雷达扫描本机 AI 客户端…")
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                Text("并发检索 31 款国内外主流 AI 客户端的会话、缓存与受保护资产，绝不修改任何文件")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - 3. 极简精致多段环形空间仪表盘（StorageRingGauge）
+
+struct StorageRingGauge: View {
+    let recommendedBytes: Int64
+    let reviewBytes: Int64
+    let protectedBytes: Int64
+    let highlightedTier: CleanupRecommendation?
+    var isScanning: Bool = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared: Bool = false
+
+    private struct RingMetrics: Equatable {
+        let recommended: Int64
+        let review: Int64
+        let protected: Int64
+    }
+
+    private var metrics: RingMetrics {
+        RingMetrics(recommended: recommendedBytes, review: reviewBytes, protected: protectedBytes)
+    }
+
+    private var totalBytes: Int64 {
+        recommendedBytes + reviewBytes + protectedBytes
+    }
+
+    private var cleanableBytes: Int64 {
+        recommendedBytes + reviewBytes
+    }
+
+    var body: some View {
+        let total = max(1.0, Double(totalBytes))
+        let recFrac = appeared ? Double(recommendedBytes) / total : 0
+        let revFrac = appeared ? Double(reviewBytes) / total : 0
+        let proFrac = appeared ? Double(protectedBytes) / total : 0
+
+        let gap: Double = totalBytes > 0 ? 0.016 : 0
+        let recEnd = max(0, recFrac - (recFrac > gap * 2 ? gap : 0))
+        let revStart = recFrac
+        let revEnd = max(revStart, recFrac + revFrac - (revFrac > gap * 2 ? gap : 0))
+        let proStart = recFrac + revFrac
+        let proEnd = max(proStart, min(1.0, proStart + proFrac - (proFrac > gap * 2 ? gap : 0)))
+
+        ZStack {
+            // 柔和环境光晕
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            centerColor.opacity(colorScheme == .dark ? 0.18 : 0.11),
+                            centerColor.opacity(0.0)
+                        ],
+                        center: .center,
+                        startRadius: 8,
+                        endRadius: 52
+                    )
+                )
+                .frame(width: 102, height: 102)
+
+            // 轨道底环
+            Circle()
+                .stroke(
+                    Color.primary.opacity(colorScheme == .dark ? 0.09 : 0.07),
+                    lineWidth: 8.5
+                )
+                .frame(width: 90, height: 90)
+
+            if totalBytes > 0 {
+                if recommendedBytes > 0 {
+                    Circle()
+                        .trim(from: 0, to: recEnd)
+                        .stroke(
+                            AppTheme.gradient(for: .recommended),
+                            style: StrokeStyle(lineWidth: ringWidth(for: .recommended), lineCap: .round)
+                        )
+                        .frame(width: 90, height: 90)
+                        .rotationEffect(.degrees(-90))
+                        .shadow(
+                            color: AppTheme.color(for: .recommended).opacity(highlightedTier == .recommended ? 0.65 : 0.30),
+                            radius: highlightedTier == .recommended ? 8 : 3
+                        )
+                        .opacity(dimOpacity(for: .recommended))
+                }
+
+                if reviewBytes > 0 {
+                    Circle()
+                        .trim(from: revStart, to: revEnd)
+                        .stroke(
+                            AppTheme.gradient(for: .reviewSuggested),
+                            style: StrokeStyle(lineWidth: ringWidth(for: .reviewSuggested), lineCap: .round)
+                        )
+                        .frame(width: 90, height: 90)
+                        .rotationEffect(.degrees(-90))
+                        .shadow(
+                            color: AppTheme.color(for: .reviewSuggested).opacity(highlightedTier == .reviewSuggested ? 0.65 : 0.25),
+                            radius: highlightedTier == .reviewSuggested ? 8 : 3
+                        )
+                        .opacity(dimOpacity(for: .reviewSuggested))
+                }
+
+                if protectedBytes > 0 {
+                    Circle()
+                        .trim(from: proStart, to: proEnd)
+                        .stroke(
+                            AppTheme.color(for: .notRecommended).opacity(0.55),
+                            style: StrokeStyle(lineWidth: ringWidth(for: .notRecommended), lineCap: .round)
+                        )
+                        .frame(width: 90, height: 90)
+                        .rotationEffect(.degrees(-90))
+                        .opacity(dimOpacity(for: .notRecommended))
+                }
+            }
+
+            if isScanning && !reduceMotion {
+                TimelineView(.animation) { timeline in
+                    let angle = (timeline.date.timeIntervalSinceReferenceDate * 220).truncatingRemainder(dividingBy: 360)
+                    Circle()
+                        .trim(from: 0, to: 0.22)
+                        .stroke(
+                            LinearGradient(
+                                colors: [.clear, Color(red: 0.20, green: 0.94, blue: 0.72)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
+                        )
+                        .frame(width: 102, height: 102)
+                        .rotationEffect(.degrees(angle))
+                        .shadow(color: Color(red: 0.18, green: 0.90, blue: 0.68).opacity(0.75), radius: 4)
+                }
+            }
+
+            VStack(spacing: 1) {
+                Text(centerLabel)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(CleanerFormatting.formatBytes(centerBytes))
+                    .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(centerColor)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .padding(.horizontal, 10)
+        }
+        .frame(width: 102, height: 102)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.62, dampingFraction: 0.84),
+            value: metrics
+        )
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.52, dampingFraction: 0.80),
+            value: appeared
+        )
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.20),
+            value: highlightedTier
+        )
+        .onAppear {
+            appeared = true
+        }
+    }
+
+    private func ringWidth(for tier: CleanupRecommendation) -> CGFloat {
+        highlightedTier == tier ? 11.0 : 8.5
+    }
+
+    private func dimOpacity(for tier: CleanupRecommendation) -> Double {
+        guard let highlightedTier else { return 1.0 }
+        return highlightedTier == tier ? 1.0 : 0.24
+    }
+
+    private var centerLabel: String {
+        switch highlightedTier {
+        case .recommended: return "建议清理"
+        case .reviewSuggested: return "按需清理"
+        case .notRecommended: return "已保护"
+        case nil: return "可释放"
+        }
+    }
+
+    private var centerBytes: Int64 {
+        switch highlightedTier {
+        case .recommended: return recommendedBytes
+        case .reviewSuggested: return reviewBytes
+        case .notRecommended: return protectedBytes
+        case nil: return cleanableBytes
+        }
+    }
+
+    private var centerColor: Color {
+        if let highlightedTier {
+            return AppTheme.color(for: highlightedTier)
+        }
+        return cleanableBytes > 0 ? AppTheme.color(for: .recommended) : .secondary
+    }
+}
+
+// MARK: - 4. 清理完成微光粒子礼花（仅成功瞬间触发，1.4s 自动休眠）
+
+struct SparkleBurstOverlay: View {
+    let triggerID: UUID
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var startDate: Date = Date()
+    @State private var isBurstActive: Bool = true
+
+    private struct Particle {
+        let angle: Double
+        let speed: Double
+        let size: CGFloat
+        let color: Color
+        let delay: Double
+    }
+
+    private static let palette: [Color] = [
+        Color(red: 0.16, green: 0.88, blue: 0.58),
+        Color(red: 0.26, green: 0.72, blue: 1.00),
+        Color(red: 0.98, green: 0.76, blue: 0.26),
+        Color(red: 0.62, green: 0.52, blue: 1.00)
+    ]
+
+    private let particles: [Particle] = (0..<20).map { idx in
+        let angle = (Double(idx) / 20.0) * .pi * 2.0 + Double(idx % 3) * 0.12
+        let speed = 50.0 + Double((idx * 27) % 68)
+        let size = CGFloat(3.2 + Double(idx % 4) * 1.2)
+        let color = palette[idx % palette.count]
+        let delay = Double(idx % 5) * 0.024
+        return Particle(angle: angle, speed: speed, size: size, color: color, delay: delay)
+    }
+
+    var body: some View {
+        Group {
+            if !reduceMotion && isBurstActive {
+                TimelineView(.animation(paused: !isBurstActive)) { timeline in
+                    let elapsed = timeline.date.timeIntervalSince(startDate)
+                    if elapsed < 1.35 {
+                        Canvas { context, size in
+                            drawParticles(in: &context, size: size, elapsed: elapsed)
+                        }
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .task(id: triggerID) {
+            startDate = Date()
+            isBurstActive = true
+            try? await Task.sleep(for: .milliseconds(1400))
+            isBurstActive = false
+        }
+    }
+
+    private func drawParticles(in context: inout GraphicsContext, size: CGSize, elapsed: Double) {
+        let origin = CGPoint(x: 28, y: size.height * 0.5)
+        for p in particles {
+            let localT = max(0, elapsed - p.delay)
+            guard localT > 0 && localT < 1.15 else { continue }
+            let progress = localT / 1.15
+            let eased = 1.0 - pow(1.0 - progress, 3.0)
+            let dist = p.speed * eased
+            let x = origin.x + CGFloat(cos(p.angle) * dist)
+            let y = origin.y + CGFloat(sin(p.angle) * dist * 0.65 - 10.0 * sin(progress * .pi))
+            let alpha = max(0, 1.0 - pow(progress, 1.8))
+            let radius = p.size * CGFloat(1.0 - 0.4 * progress)
+            let rect = CGRect(x: x - radius / 2, y: y - radius / 2, width: radius, height: radius)
+            context.fill(Path(ellipseIn: rect), with: .color(p.color.opacity(alpha)))
+        }
+    }
+}
+
+// MARK: - 5. 弹性勾选框（AnimatedCheckbox）
+
+struct AnimatedCheckbox: View {
+    let isChecked: Bool
+    let tint: Color
+    let onToggle: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: onToggle) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                    .fill(
+                        isChecked
+                            ? LinearGradient(
+                                colors: [tint, tint.opacity(0.84)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            : LinearGradient(
+                                colors: [
+                                    Color.primary.opacity(colorScheme == .dark ? 0.06 : 0.03),
+                                    Color.primary.opacity(colorScheme == .dark ? 0.04 : 0.02)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                    )
+                    .frame(width: 17, height: 17)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                            .strokeBorder(
+                                isChecked ? Color.white.opacity(0.32) : Color.primary.opacity(colorScheme == .dark ? 0.22 : 0.20),
+                                lineWidth: 1.0
+                            )
+                    )
+                    .shadow(color: isChecked ? tint.opacity(0.38) : .clear, radius: 4, y: 1)
+
+                if isChecked {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(.white)
+                        .transition(.scale(scale: 0.4).combined(with: .opacity))
+                }
+            }
+            .scaleEffect(isChecked ? 1.0 : 0.96)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.66),
+                value: isChecked
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isChecked ? "取消勾选" : "勾选此项")
+    }
+}
+
+// MARK: - 6. 应用发光矢量徽章（Sidebar Brand Emblem）
+
+struct BrandLogoEmblem: View {
+    var isScanning: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if isScanning && !reduceMotion {
+                TimelineView(.animation) { timeline in
+                    let angle = (timeline.date.timeIntervalSinceReferenceDate * 180).truncatingRemainder(dividingBy: 360)
+                    RoundedRectangle(cornerRadius: 9.5, style: .continuous)
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    Color(red: 0.14, green: 0.90, blue: 0.66),
+                                    Color(red: 0.28, green: 0.64, blue: 1.00),
+                                    .clear,
+                                    Color(red: 0.14, green: 0.90, blue: 0.66)
+                                ],
+                                center: .center
+                            ),
+                            lineWidth: 1.8
+                        )
+                        .frame(width: 32, height: 32)
+                        .rotationEffect(.degrees(angle))
+                }
+            }
+
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AppTheme.brandGradient)
+                .frame(width: 27, height: 27)
+                .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.40), radius: 6, y: 1.5)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.50), Color.white.opacity(0.08)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 0.8
+                        )
+                )
+
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+        }
+    }
+}
+
+// MARK: - 7. 顶边极光扫描光束（重新扫描时的实时能量反馈）
+
+struct AuroraScanSweepBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                Rectangle()
+                    .fill(AppTheme.brandGradient)
+                    .frame(height: 2)
+                    .opacity(0.75)
+            } else {
+                TimelineView(.animation) { timeline in
+                    let phase = (timeline.date.timeIntervalSinceReferenceDate * 0.85).truncatingRemainder(dividingBy: 1.0)
+                    GeometryReader { proxy in
+                        let beamWidth = max(120, proxy.size.width * 0.34)
+                        let travel = proxy.size.width + beamWidth
+                        let xPos = CGFloat(phase) * travel - beamWidth
+
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .clear,
+                                        Color(red: 0.14, green: 0.88, blue: 0.64),
+                                        Color(red: 0.30, green: 0.68, blue: 1.00),
+                                        .clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: beamWidth, height: 2.2)
+                            .shadow(color: Color(red: 0.16, green: 0.86, blue: 0.66).opacity(0.85), radius: 5, y: 1)
+                            .offset(x: xPos)
+                    }
+                    .frame(height: 2.5)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}

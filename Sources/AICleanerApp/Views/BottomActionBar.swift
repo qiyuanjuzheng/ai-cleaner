@@ -3,129 +3,187 @@ import SwiftUI
 
 struct BottomActionBar: View {
     @Bindable var viewModel: CleanerViewModel
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 10) {
             if let result = viewModel.lastCleanupResult {
-                cleanupResultBanner(result)
-                Divider()
+                cleanupCelebrationPill(result)
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.94))
+                    )
             }
 
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if viewModel.selectedItems.isEmpty {
-                        Text("勾选「建议清理」或确认无用的「按需清理」条目，所有清理均进入 macOS 废纸篓")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+            if !viewModel.selectedItems.isEmpty {
+                floatingSelectionDock
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.94))
+                    )
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78), value: viewModel.selectedItems.isEmpty)
+        .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78), value: viewModel.lastCleanupResult != nil)
+    }
+
+    // MARK: - 居中悬浮玻璃操作岛（勾选后丝滑升起，未勾选时零视觉干扰）
+
+    private var floatingSelectionDock: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(AppTheme.color(for: .recommended))
+                    .frame(width: 7.5, height: 7.5)
+                    .shadow(color: AppTheme.color(for: .recommended).opacity(0.8), radius: 4)
+
+                Text("已选 \(viewModel.selectedItems.count) 项")
+                    .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
+                    .contentTransition(.numericText())
+
+                Text("·")
+                    .foregroundStyle(.tertiary)
+
+                Text("预计释放 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
+                    .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                    .foregroundStyle(AppTheme.color(for: .recommended))
+                    .contentTransition(.numericText())
+            }
+
+            Divider()
+                .frame(height: 16)
+                .opacity(0.45)
+
+            Button("清空") {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                    viewModel.clearAllSelection()
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+
+            Button {
+                viewModel.requestTrashConfirmation()
+            } label: {
+                HStack(spacing: 6) {
+                    if viewModel.isCleaning {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
                     } else {
-                        HStack(spacing: 8) {
-                            Text("已选 \(viewModel.selectedItems.count) 项")
-                                .font(.headline.monospacedDigit())
-                            Text("·")
-                                .foregroundStyle(.tertiary)
-                            Text("预计释放 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
-                                .font(.headline.monospacedDigit())
-                                .foregroundStyle(Color.accentColor)
+                        Image(systemName: "trash.fill")
+                    }
+                    Text(viewModel.isCleaning ? "移入中…" : "移入废纸篓…")
+                        .lineLimit(1)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(
+                GlowingPillButtonStyle(
+                    gradient: AppTheme.dangerGradient,
+                    glowColor: Color(red: 0.94, green: 0.28, blue: 0.36),
+                    isEnabled: !viewModel.isCleaning && !viewModel.isScanning,
+                    compact: true
+                )
+            )
+            .disabled(viewModel.isCleaning || viewModel.isScanning)
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .fill(AppTheme.glassElevatedFill(for: colorScheme))
+                )
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.95)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.42 : 0.14), radius: 20, y: 8)
+    }
 
-                            Button("清空选择") {
-                                viewModel.clearAllSelection()
-                            }
-                            .buttonStyle(.link)
-                            .font(.caption)
-                        }
+    // MARK: - 清理成功微光粒子庆祝胶囊
 
-                        if viewModel.groupedSelectedItems.count > 1 {
-                            Text("跨 \(viewModel.groupedSelectedItems.count) 个客户端/目录，点击「移入废纸篓」前可查看完整确认清单")
+    private func cleanupCelebrationPill(_ result: CleanupResult) -> some View {
+        let isPureSuccess = !result.hasFailures && result.trashedCount > 0
+        let tint = isPureSuccess ? AppTheme.color(for: .recommended) : AppTheme.color(for: .reviewSuggested)
+
+        return ZStack {
+            HStack(spacing: 10) {
+                Image(systemName: isPureSuccess ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(tint)
+
+                VStack(alignment: .leading, spacing: 1.5) {
+                    if result.trashedCount > 0 {
+                        HStack(spacing: 5) {
+                            Text("已释放")
+                                .font(.callout.weight(.medium))
+                            Text(CleanerFormatting.formatBytes(result.freedBytes))
+                                .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                                .foregroundStyle(tint)
+                            Text("（\(result.trashedCount) 项已移入系统废纸篓）")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                    } else {
+                        Text("本次未移入任何条目")
+                            .font(.callout.weight(.medium))
                     }
-                }
 
-                Spacer()
-
-                if viewModel.selectedItems.isEmpty && !viewModel.scopedRecommendedItems.isEmpty {
-                    Button {
-                        viewModel.selectRecommendedInScope()
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "checkmark.circle")
-                            Text("勾选建议项")
-                        }
+                    if !result.skippedProtectedItems.isEmpty {
+                        Text("安全护栏自动拦截 \(result.skippedProtectedItems.count) 项受保护目标")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else if !result.failedItems.isEmpty {
+                        Text("有 \(result.failedItems.count) 项未能移入废纸篓：\(result.failedItems.first?.reason ?? "")")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
                 }
 
                 Button {
-                    viewModel.requestTrashConfirmation()
-                } label: {
-                    HStack(spacing: 6) {
-                        if viewModel.isCleaning {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "trash")
-                        }
-                        Text(viewModel.isCleaning ? "正在移入废纸篓…" : "移入废纸篓…")
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                        viewModel.dismissCleanupBanner()
                     }
-                    .padding(.horizontal, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .controlSize(.large)
-                .disabled(viewModel.selectedItems.isEmpty || viewModel.isCleaning || viewModel.isScanning)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.bar)
-        }
-    }
-
-    private func cleanupResultBanner(_ result: CleanupResult) -> some View {
-        let isPureSuccess = !result.hasFailures && result.trashedCount > 0
-        let tint: Color = isPureSuccess ? .green : .orange
-
-        return HStack(alignment: .center, spacing: 10) {
-            Image(systemName: isPureSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(tint)
-
-            VStack(alignment: .leading, spacing: 2) {
-                if result.trashedCount > 0 {
-                    Text("已将 \(result.trashedCount) 项安全移入废纸篓，实际释放 \(CleanerFormatting.formatBytes(result.freedBytes))（如需恢复可在系统废纸篓中放回原处）。")
-                        .font(.callout.weight(.medium))
-                } else {
-                    Text("本次未移入任何条目。")
-                        .font(.callout.weight(.medium))
-                }
-
-                if !result.skippedProtectedItems.isEmpty {
-                    Text("安全策略自动拦截 \(result.skippedProtectedItems.count) 项受保护目标：\(result.skippedProtectedItems.first?.reason ?? "")")
-                        .font(.caption)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
+                        .padding(5)
+                        .background(Circle().fill(Color.primary.opacity(0.08)))
                 }
-
-                if !result.failedItems.isEmpty {
-                    Text("有 \(result.failedItems.count) 项未能移入废纸篓：\(result.failedItems.first?.reason ?? "")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                .buttonStyle(.plain)
+                .help("关闭提示")
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .fill(AppTheme.glassElevatedFill(for: colorScheme))
+                    )
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme, accent: tint), lineWidth: 0.95)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.36 : 0.12), radius: 16, y: 6)
 
-            Spacer()
-
-            Button {
-                viewModel.dismissCleanupBanner()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            if isPureSuccess {
+                SparkleBurstOverlay(triggerID: viewModel.cleanupCelebrationID)
+                    .clipShape(Capsule(style: .continuous))
             }
-            .buttonStyle(.plain)
-            .help("关闭提示")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(tint.opacity(0.1))
     }
 }

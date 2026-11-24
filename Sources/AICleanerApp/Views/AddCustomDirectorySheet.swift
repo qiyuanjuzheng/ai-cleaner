@@ -5,6 +5,7 @@ import SwiftUI
 struct AddCustomDirectorySheet: View {
     @Bindable var viewModel: CleanerViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var pathText: String = ""
     @State private var displayName: String = ""
@@ -37,12 +38,27 @@ struct AddCustomDirectorySheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("添加自定义扫描目录")
-                    .font(.title3.weight(.semibold))
-                Text("将自定义 AI 缓存、导出或日志目录加入侧边栏扫描列表。扫描严格只读，且仍会自动排除敏感凭据与数据库文件。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(AppTheme.brandGradient.opacity(0.22))
+                        .frame(width: 42, height: 42)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .strokeBorder(Color(red: 0.16, green: 0.78, blue: 0.64).opacity(0.45), lineWidth: 0.9)
+                        )
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.16, green: 0.80, blue: 0.62))
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("添加自定义扫描目录")
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                    Text("将自定义 AI 缓存、导出或日志目录加入侧边栏。扫描严格只读，且自动排除凭据与数据库。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             VStack(alignment: .leading, spacing: 12) {
@@ -120,13 +136,20 @@ struct AddCustomDirectorySheet: View {
                 Button("添加并扫描") {
                     submit()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(
+                    GlowingPillButtonStyle(
+                        gradient: AppTheme.brandGradient,
+                        glowColor: Color(red: 0.16, green: 0.78, blue: 0.64),
+                        isEnabled: canSubmit
+                    )
+                )
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canSubmit)
             }
         }
-        .padding(20)
-        .frame(width: 500)
+        .padding(22)
+        .frame(width: 520)
+        .background(AppTheme.canvasBackground(for: colorScheme))
     }
 
     @ViewBuilder

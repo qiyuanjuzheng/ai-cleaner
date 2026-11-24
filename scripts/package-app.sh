@@ -42,6 +42,24 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp "${BIN_PATH}" "${MACOS_DIR}/${EXECUTABLE_NAME}"
 chmod +x "${MACOS_DIR}/${EXECUTABLE_NAME}"
 
+# 生成高分辨率 macOS 应用图标 (AppIcon.icns)
+ICON_TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${ICON_TMP_DIR}"' EXIT
+ICON_MASTER_PNG="${ICON_TMP_DIR}/AppIcon-1024.png"
+ICONSET_DIR="${ICON_TMP_DIR}/AppIcon.iconset"
+mkdir -p "${ICONSET_DIR}"
+
+if [[ -f "${ROOT_DIR}/scripts/generate-icon.swift" ]] && command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
+  echo "==> 正在生成专属应用图标 AppIcon.icns..."
+  swift "${ROOT_DIR}/scripts/generate-icon.swift" "${ICON_MASTER_PNG}"
+  for sz in 16 32 128 256 512; do
+    sips -z "${sz}" "${sz}" "${ICON_MASTER_PNG}" --out "${ICONSET_DIR}/icon_${sz}x${sz}.png" >/dev/null
+    sz2=$((sz * 2))
+    sips -z "${sz2}" "${sz2}" "${ICON_MASTER_PNG}" --out "${ICONSET_DIR}/icon_${sz}x${sz}@2x.png" >/dev/null
+  done
+  iconutil -c icns "${ICONSET_DIR}" -o "${RESOURCES_DIR}/AppIcon.icns"
+fi
+
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,6 +71,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <string>${APP_NAME}</string>
     <key>CFBundleExecutable</key>
     <string>${EXECUTABLE_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleInfoDictionaryVersion</key>

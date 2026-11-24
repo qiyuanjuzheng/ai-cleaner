@@ -2,6 +2,7 @@ import AICleanerCore
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 
 enum SidebarSelection: Hashable {
     case allClients
@@ -61,12 +62,16 @@ final class CleanerViewModel {
     var selectedAgeFilter: ItemAgeFilter = .all
     var sortOrder: ItemSortOrder = .sizeDescending
     var selectedItemIDs: Set<String> = []
-    var collapsedSections: Set<CleanupRecommendation> = []
+    var collapsedSections: Set<CleanupRecommendation> = [.notRecommended]
 
     var isScanning: Bool = false
     var isCleaning: Bool = false
     var showingTrashConfirmation: Bool = false
     var showingAddCustomSheet: Bool = false
+
+    var appearanceMode: AppAppearanceMode = .dark
+    var hoveredRecommendation: CleanupRecommendation? = nil
+    var cleanupCelebrationID: UUID = UUID()
 
     var lastCleanupResult: CleanupResult?
     var errorBannerMessage: String?
@@ -98,6 +103,18 @@ final class CleanerViewModel {
     var activeSummary: ClientScanSummary? {
         guard case let .client(clientID) = sidebarSelection else { return nil }
         return report?.clientSummaries.first(where: { $0.id == clientID })
+    }
+
+    /// 驱动背景极光随当前选中 AI 客户端实时平滑变色
+    var activeAccentColor: Color {
+        if let summary = activeSummary {
+            return AppTheme.color(forAccentToken: summary.profile.accentToken)
+        }
+        return Color(red: 0.16, green: 0.78, blue: 0.64)
+    }
+
+    var highlightedRingTier: CleanupRecommendation? {
+        hoveredRecommendation ?? selectedRecommendation
     }
 
     /// 当前侧边栏分组下的所有可清理条目（「建议清理」+「按需清理」）
@@ -350,6 +367,13 @@ final class CleanerViewModel {
         }
     }
 
+    func isSectionCollapsed(_ recommendation: CleanupRecommendation) -> Bool {
+        if displayedSections.count <= 1 || selectedRecommendation == recommendation {
+            return false
+        }
+        return collapsedSections.contains(recommendation)
+    }
+
     func toggleSectionCollapsed(_ recommendation: CleanupRecommendation) {
         if collapsedSections.contains(recommendation) {
             collapsedSections.remove(recommendation)
@@ -480,6 +504,9 @@ final class CleanerViewModel {
             }.value
 
             self.lastCleanupResult = result
+            if result.trashedCount > 0 {
+                self.cleanupCelebrationID = UUID()
+            }
             self.isCleaning = false
             self.showingTrashConfirmation = false
 

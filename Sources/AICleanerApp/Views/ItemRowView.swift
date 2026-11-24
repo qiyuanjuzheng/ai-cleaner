@@ -11,110 +11,106 @@ struct ItemRowView: View {
     let onCopyPath: () -> Void
 
     @State private var isHovered: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        let recColor = AppTheme.color(for: item.recommendation)
+
+        HStack(alignment: .center, spacing: 11) {
             if item.isCleanable {
-                Toggle(
-                    isOn: Binding(
-                        get: { isSelected },
-                        set: { _ in onToggle() }
-                    )
-                ) {
-                    EmptyView()
-                }
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .frame(width: 18)
+                AnimatedCheckbox(
+                    isChecked: isSelected,
+                    tint: recColor,
+                    onToggle: onToggle
+                )
             } else {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AppTheme.color(for: .notRecommended).opacity(0.75))
-                    .frame(width: 18)
-                    .help("该条目被标记为「不建议清理」，已锁定保护不可勾选")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 17, height: 17)
+                    .help("该条目已标记为「不建议清理」并锁定保护")
             }
 
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 11) {
+                // 克制单色柔和图标（去掉刺眼边框）
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(leadingSymbolColor.opacity(0.13))
-                        .frame(width: 30, height: 30)
+                        .fill(leadingSymbolColor.opacity(colorScheme == .dark ? 0.14 : 0.10))
+                        .frame(width: 28, height: 28)
                     Image(systemName: leadingSymbolName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(leadingSymbolColor)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
+                // 清爽 2 行信息区：无重复胶囊堆砌
+                VStack(alignment: .leading, spacing: 2.5) {
+                    HStack(spacing: 7) {
                         Text(item.displayName)
-                            .font(.system(.body, weight: .medium))
+                            .font(.system(.callout, weight: .medium))
                             .foregroundStyle(item.isCleanable ? .primary : .secondary)
                             .lineLimit(1)
 
-                        RecommendationPillView(recommendation: item.recommendation)
-                        CategoryTagView(category: item.category)
-
                         if showClientBadge {
                             Text(item.clientName)
-                                .font(.caption2.weight(.medium))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.secondary.opacity(0.12))
-                                )
-                                .foregroundStyle(.secondary)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
                         }
                     }
 
-                    // 直接展示一目了然的中文原因（为什么建议清理 / 按需清理 / 不建议清理）
                     Text(item.safetyNote)
                         .font(.caption)
-                        .foregroundStyle(item.isCleanable ? .secondary : AppTheme.color(for: .notRecommended).opacity(0.85))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(item.safetyNote)
-
-                    Text(CleanerFormatting.abbreviatePath(item.url))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(item.url.path)
                 }
 
-                Spacer(minLength: 12)
+                Spacer(minLength: 10)
 
-                VStack(alignment: .trailing, spacing: 4) {
+                // 悬停才丝滑显露的 Finder 定位按钮（固定占位，数字列永不抖动）
+                Button(action: onRevealInFinder) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06))
+                        )
+                }
+                .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.92))
+                .opacity(isHovered ? 1.0 : 0.0)
+                .allowsHitTesting(isHovered)
+                .help("在 Finder 中显示：\(CleanerFormatting.abbreviatePath(item.url))")
+
+                // 右侧对齐体积列 + 极细 2.5pt 占比线
+                VStack(alignment: .trailing, spacing: 3) {
                     Text(CleanerFormatting.formatBytes(item.sizeBytes))
-                        .font(.system(.body, weight: .semibold).monospacedDigit())
+                        .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
                         .foregroundStyle(item.isCleanable ? .primary : .secondary)
 
-                    // 直观迷你体积占比条
-                    GeometryReader { proxy in
-                        let clamped = max(0.03, min(1.0, relativeSizeFraction))
-                        ZStack(alignment: .trailing) {
-                            Capsule()
-                                .fill(Color.secondary.opacity(0.12))
-                            Capsule()
-                                .fill(AppTheme.color(for: item.recommendation).opacity(item.isCleanable ? 0.78 : 0.45))
-                                .frame(width: item.sizeBytes > 0 ? proxy.size.width * clamped : 0)
-                        }
-                    }
-                    .frame(width: 92, height: 4)
-
                     HStack(spacing: 6) {
-                        if item.isDirectory && item.fileCount > 0 {
-                            Text("\(item.fileCount) 文件")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
                         Text(CleanerFormatting.formatDate(item.modifiedAt))
-                            .font(.caption2.monospacedDigit())
+                            .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(.tertiary)
+
+                        GeometryReader { proxy in
+                            let clamped = max(0.06, min(1.0, relativeSizeFraction))
+                            ZStack(alignment: .trailing) {
+                                Capsule()
+                                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.07))
+                                if item.sizeBytes > 0 {
+                                    Capsule()
+                                        .fill(recColor.opacity(item.isCleanable ? 0.78 : 0.38))
+                                        .frame(width: proxy.size.width * clamped)
+                                }
+                            }
+                        }
+                        .frame(width: 44, height: 2.5)
                     }
                 }
-                .frame(minWidth: 146, alignment: .trailing)
+                .frame(minWidth: 112, alignment: .trailing)
             }
             .contentShape(Rectangle())
             .onTapGesture {
@@ -122,23 +118,13 @@ struct ItemRowView: View {
                     onToggle()
                 }
             }
-
-            Button {
-                onRevealInFinder()
-            } label: {
-                Label("在 Finder 中显示", systemImage: "folder")
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 13))
-                    .frame(width: 28, height: 26)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("在 Finder 中显示")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9.5)
         .background(rowBackground)
-        .opacity(item.isCleanable ? 1.0 : 0.88)
+        .help("\(item.safetyNote)\n路径：\(CleanerFormatting.abbreviatePath(item.url))")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelected)
         .onHover { hovering in
             isHovered = hovering
         }
@@ -153,15 +139,11 @@ struct ItemRowView: View {
                 Divider()
             }
 
-            Button {
-                onRevealInFinder()
-            } label: {
+            Button(action: onRevealInFinder) {
                 Label("在 Finder 中显示", systemImage: "folder")
             }
 
-            Button {
-                onCopyPath()
-            } label: {
+            Button(action: onCopyPath) {
                 Label("复制完整路径", systemImage: "doc.on.doc")
             }
         }
@@ -169,83 +151,39 @@ struct ItemRowView: View {
 
     private var leadingSymbolName: String {
         if !item.isCleanable {
-            return "lock.shield.fill"
+            return "lock.shield"
         }
         switch item.category {
         case .sessions:
-            return item.isDirectory ? "bubble.left.and.bubble.right.fill" : "text.bubble.fill"
+            return item.isDirectory ? "bubble.left.and.bubble.right" : "text.bubble"
         case .cache:
-            return "internaldrive.fill"
+            return "internaldrive"
         case .temporary:
             return "clock.arrow.circlepath"
         case .logs:
-            return "doc.text.fill"
+            return "doc.text"
         case .custom:
-            return item.isDirectory ? "folder.fill" : "doc.fill"
+            return item.isDirectory ? "folder" : "doc"
         case .protectedData:
-            return "lock.shield.fill"
+            return "lock.shield"
         }
     }
 
     private var leadingSymbolColor: Color {
         if !item.isCleanable {
-            return AppTheme.color(for: .notRecommended)
+            return .secondary
         }
         return AppTheme.color(for: item.category)
     }
 
     private var rowBackground: Color {
-        if !item.isCleanable {
-            return isHovered ? Color.primary.opacity(0.025) : Color.secondary.opacity(0.02)
-        }
+        let recColor = AppTheme.color(for: item.recommendation)
         if isSelected {
-            return Color.accentColor.opacity(0.08)
+            return recColor.opacity(colorScheme == .dark ? 0.10 : 0.08)
         }
         if isHovered {
-            return Color.primary.opacity(0.035)
+            return Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.035)
         }
         return Color.clear
-    }
-}
-
-private struct RecommendationPillView: View {
-    let recommendation: CleanupRecommendation
-
-    var body: some View {
-        let color = AppTheme.color(for: recommendation)
-        HStack(spacing: 3) {
-            Image(systemName: recommendation.symbolName)
-                .font(.system(size: 9, weight: .bold))
-            Text(recommendation.displayName)
-                .font(.caption2.weight(.semibold))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(
-            Capsule()
-                .fill(color.opacity(0.14))
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(color.opacity(0.32), lineWidth: 0.6)
-        )
-        .foregroundStyle(color)
-    }
-}
-
-private struct CategoryTagView: View {
-    let category: ScanCategory
-
-    var body: some View {
-        let color = AppTheme.color(for: category)
-        Text(category.displayName)
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(color.opacity(0.10))
-            )
-            .foregroundStyle(color)
     }
 }

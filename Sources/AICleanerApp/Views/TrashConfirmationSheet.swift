@@ -4,42 +4,56 @@ import SwiftUI
 struct TrashConfirmationSheet: View {
     @Bindable var viewModel: CleanerViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
                 ZStack {
                     Circle()
-                        .fill(Color.red.opacity(0.14))
-                        .frame(width: 44, height: 44)
+                        .fill(AppTheme.dangerGradient.opacity(0.22))
+                        .frame(width: 48, height: 48)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color(red: 0.96, green: 0.34, blue: 0.42).opacity(0.45), lineWidth: 1)
+                        )
                     Image(systemName: "trash.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.red)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.98, green: 0.36, blue: 0.44))
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text("确认移入系统废纸篓")
-                        .font(.title3.weight(.semibold))
-                    Text("即将清理 \(viewModel.selectedItems.count) 个条目，预计释放 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                    HStack(spacing: 5) {
+                        Text("即将清理 \(viewModel.selectedItems.count) 个条目，预计释放")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))
+                            .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                            .foregroundStyle(AppTheme.color(for: .recommended))
+                    }
                 }
             }
 
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(AppTheme.color(for: .recommended))
                     .padding(.top, 1)
                 Text("安全清理保证：本应用仅调用 macOS 系统废纸篓接口，不执行不可逆永久删除。清理后如发现需要还原，可在「废纸篓」中选择「放回原处」。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(10)
+            .padding(11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.green.opacity(0.09))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(AppTheme.color(for: .recommended).opacity(colorScheme == .dark ? 0.13 : 0.09))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(AppTheme.color(for: .recommended).opacity(0.28), lineWidth: 0.7)
             )
 
             ScrollView {
@@ -86,12 +100,12 @@ struct TrashConfirmationSheet: View {
                                 }
                             }
                             .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color(nsColor: .controlBackgroundColor))
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(AppTheme.glassCardFill(for: colorScheme))
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.6)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.75)
                             )
                         }
                     }
@@ -117,17 +131,26 @@ struct TrashConfirmationSheet: View {
                         if viewModel.isCleaning {
                             ProgressView()
                                 .controlSize(.small)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "trash.fill")
                         }
                         Text(viewModel.isCleaning ? "正在移入…" : "确认移入废纸篓")
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .buttonStyle(
+                    GlowingPillButtonStyle(
+                        gradient: AppTheme.dangerGradient,
+                        glowColor: Color(red: 0.94, green: 0.28, blue: 0.36),
+                        isEnabled: !viewModel.isCleaning && !viewModel.selectedItems.isEmpty
+                    )
+                )
                 .keyboardShortcut(.defaultAction)
                 .disabled(viewModel.isCleaning || viewModel.selectedItems.isEmpty)
             }
         }
-        .padding(20)
-        .frame(width: 540)
+        .padding(22)
+        .frame(width: 560)
+        .background(AppTheme.canvasBackground(for: colorScheme))
     }
 }

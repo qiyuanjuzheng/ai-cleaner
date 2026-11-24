@@ -25,10 +25,7 @@ let package = Package(
         .executableTarget(
             name: "AICleanerApp",
             dependencies: ["AICleanerCore"],
-            path: "Sources/AICleanerApp",
-            resources: [
-                .process("Resources")
-            ]
+            path: "Sources/AICleanerApp"
         ),
         .testTarget(
             name: "AICleanerCoreTests",

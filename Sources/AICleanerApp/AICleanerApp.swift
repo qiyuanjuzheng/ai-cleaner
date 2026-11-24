@@ -8,10 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let savedRaw = UserDefaults.standard.string(forKey: "aiCleaner.appearanceMode.v2")
         let initialMode = savedRaw.flatMap(AppAppearanceMode.init(rawValue:)) ?? .light
         NSApplication.shared.appearance = initialMode.nsAppearance
-        // 确保无论是通过 `swift run` 启动还是作为 `.app` 双击启动，都能作为常规前台应用展示窗口并呈现统一品牌图标
-        if let appIcon = AppBrandIcon.appIconImage {
-            NSApplication.shared.applicationIconImage = appIcon
-        }
+        // 确保无论是通过 `swift run` 启动还是作为 `.app` 双击启动，都能作为常规前台应用展示窗口并响应快捷键
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }

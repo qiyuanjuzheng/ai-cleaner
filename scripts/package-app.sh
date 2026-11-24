@@ -42,16 +42,6 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp "${BIN_PATH}" "${MACOS_DIR}/${EXECUTABLE_NAME}"
 chmod +x "${MACOS_DIR}/${EXECUTABLE_NAME}"
 
-# 复制内嵌品牌图标资源，供应用内侧边栏与待扫描首页直接使用（不依赖外部构建路径）
-APP_ICON_SOURCE="${ROOT_DIR}/Sources/AICleanerApp/Resources/AppIcon-1024.png"
-BRAND_ICON_SOURCE="${ROOT_DIR}/Sources/AICleanerApp/Resources/BrandIcon.png"
-if [[ -f "${BRAND_ICON_SOURCE}" ]]; then
-  cp "${BRAND_ICON_SOURCE}" "${RESOURCES_DIR}/BrandIcon.png"
-fi
-if [[ -f "${APP_ICON_SOURCE}" ]]; then
-  cp "${APP_ICON_SOURCE}" "${RESOURCES_DIR}/AppIcon-1024.png"
-fi
-
 # 生成高分辨率 macOS 应用图标 (AppIcon.icns)
 ICON_TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${ICON_TMP_DIR}"' EXIT
@@ -59,23 +49,15 @@ ICON_MASTER_PNG="${ICON_TMP_DIR}/AppIcon-1024.png"
 ICONSET_DIR="${ICON_TMP_DIR}/AppIcon.iconset"
 mkdir -p "${ICONSET_DIR}"
 
-if command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
-  if [[ -f "${APP_ICON_SOURCE}" ]]; then
-    echo "==> 正在使用专属品牌图标生成 AppIcon.icns..."
-    cp "${APP_ICON_SOURCE}" "${ICON_MASTER_PNG}"
-  elif [[ -f "${ROOT_DIR}/scripts/generate-icon.swift" ]]; then
-    echo "==> 正在生成专属应用图标 AppIcon.icns..."
-    swift "${ROOT_DIR}/scripts/generate-icon.swift" "${ICON_MASTER_PNG}"
-  fi
-
-  if [[ -f "${ICON_MASTER_PNG}" ]]; then
-    for sz in 16 32 128 256 512; do
-      sips -z "${sz}" "${sz}" "${ICON_MASTER_PNG}" --out "${ICONSET_DIR}/icon_${sz}x${sz}.png" >/dev/null
-      sz2=$((sz * 2))
-      sips -z "${sz2}" "${sz2}" "${ICON_MASTER_PNG}" --out "${ICONSET_DIR}/icon_${sz}x${sz}@2x.png" >/dev/null
-    done
-    iconutil -c icns "${ICONSET_DIR}" -o "${RESOURCES_DIR}/AppIcon.icns"
-  fi
+if [[ -f "${ROOT_DIR}/scripts/generate-icon.swift" ]] && command -v iconutil >/dev/null 2>&1 && command -v sips >/dev/null 2>&1; then
+  echo "==> 正在生成专属应用图标 AppIcon.icns..."
+  swift "${ROOT_DIR}/scripts/generate-icon.swift" "${ICON_MASTER_PNG}"
+  for sz in 16 32 128 256 512; do
+    sips -z "${sz}" "${sz}" "${ICON_MASTER_PNG}" --out "${ICONSET_DIR}/icon_${sz}x${sz}.png" >/dev/null
+    sz2=$((sz * 2))
+    sips -z "${sz2}" "${sz2}" "${ICON_MASTER_PNG}" --out "${ICONSET_DIR}/icon_${sz}x${sz}@2x.png" >/dev/null
+  done
+  iconutil -c icns "${ICONSET_DIR}" -o "${RESOURCES_DIR}/AppIcon.icns"
 fi
 
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF

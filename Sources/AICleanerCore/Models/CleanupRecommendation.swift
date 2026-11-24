@@ -31,7 +31,7 @@ public enum CleanupRecommendation: String, CaseIterable, Codable, Hashable, Send
         case .reviewSuggested:
             return "确认是一次性会话或无用产物后再勾选"
         case .notRecommended:
-            return "核心配置、记忆、插件或主库，已锁定保护不可删除"
+            return "核心配置、记忆、插件或主库，默认不选；如需删除可手动勾选并二次确认"
         }
     }
 

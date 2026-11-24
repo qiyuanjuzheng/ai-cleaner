@@ -101,6 +101,35 @@ public struct SafetyGuard: Sendable {
         return .allowed
     }
 
+    /// 针对用户已显式二次确认覆盖的「不建议清理」条目（如插件、技能库、本地模型、数据库等）执行底线路径校验：
+    /// 放行文件名/扩展名保护规则，但依然严格禁止系统目录、用户主目录、隐私敏感子树、客户端顶层根目录及越界符号链接。
+    public func validateUserOverrideTarget(_ url: URL, fileManager: FileManager = .default) -> SafetyDecision {
+        let pathCheck = validateBasePath(url, allowHomeSubdirectoryRoots: false)
+        if !pathCheck.isAllowed {
+            return pathCheck
+        }
+
+        let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
+        if isSymlink {
+            let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+            let resolvedPathCheck = validateBasePath(resolved, allowHomeSubdirectoryRoots: false)
+            if !resolvedPathCheck.isAllowed {
+                return .blocked(reason: "符号链接指向系统或敏感路径，不允许操作：\(resolved.path)")
+            }
+            let parentPath = Self.normalizePath(url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path)
+            let resolvedPath = Self.normalizePath(resolved.path)
+            if !resolvedPath.hasPrefix(parentPath + "/") && resolvedPath != parentPath {
+                return .blocked(reason: "跳过指向扫描目录外部的符号链接")
+            }
+        }
+
+        if fileManager.fileExists(atPath: url.path) == false && !isSymlink {
+            return .allowed
+        }
+
+        return .allowed
+    }
+
     /// 校验单个文件或子目录的名称与扩展名是否属于受保护资产
     public func validateEntry(url: URL, isDirectory: Bool) -> SafetyDecision {
         let fileName = url.lastPathComponent

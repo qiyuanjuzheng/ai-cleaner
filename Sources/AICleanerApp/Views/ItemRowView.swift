@@ -25,11 +25,46 @@ struct ItemRowView: View {
                     onToggle: onToggle
                 )
             } else {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 17, height: 17)
-                    .help("该条目已标记为「不建议清理」并锁定保护")
+                // 「不建议清理」项：未勾选时展示克制风险锁框，点击可弹出风险提醒强制勾选；已勾选则高亮警示勾选态
+                Button(action: onToggle) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                            .fill(
+                                isSelected
+                                    ? LinearGradient(
+                                        colors: [recColor, recColor.opacity(0.84)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                    : LinearGradient(
+                                        colors: [recColor.opacity(isHovered ? 0.16 : 0.08), recColor.opacity(0.04)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                            )
+                            .frame(width: 17, height: 17)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                                    .strokeBorder(
+                                        isSelected ? Color.white.opacity(0.32) : recColor.opacity(isHovered ? 0.65 : 0.35),
+                                        lineWidth: 1.0
+                                    )
+                            )
+                            .shadow(color: isSelected ? recColor.opacity(0.45) : .clear, radius: 4, y: 1)
+
+                        Image(systemName: isSelected ? "checkmark" : "lock.fill")
+                            .font(.system(size: isSelected ? 9.5 : 8.5, weight: .bold))
+                            .foregroundStyle(isSelected ? Color.white : recColor.opacity(isHovered ? 0.95 : 0.72))
+                    }
+                    .scaleEffect(isSelected ? 1.0 : 0.96)
+                    .animation(reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.66), value: isSelected)
+                }
+                .buttonStyle(.plain)
+                .help(
+                    isSelected
+                        ? "取消勾选此「不建议清理」项"
+                        : "不建议清理：点击可弹出风险提醒并强制勾选"
+                )
             }
 
             HStack(alignment: .center, spacing: 11) {
@@ -48,8 +83,17 @@ struct ItemRowView: View {
                     HStack(spacing: 7) {
                         Text(item.displayName)
                             .font(.system(.callout, weight: .medium))
-                            .foregroundStyle(item.isCleanable ? .primary : .secondary)
+                            .foregroundStyle(item.isCleanable || isSelected ? .primary : .secondary)
                             .lineLimit(1)
+
+                        if !item.isCleanable && isSelected {
+                            Text("高风险已选")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(Capsule().fill(recColor.opacity(0.18)))
+                                .foregroundStyle(recColor)
+                        }
 
                         if showClientBadge {
                             Text(item.clientName)
@@ -114,9 +158,7 @@ struct ItemRowView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                if item.isCleanable {
-                    onToggle()
-                }
+                onToggle()
             }
         }
         .padding(.horizontal, 14)
@@ -129,15 +171,20 @@ struct ItemRowView: View {
             isHovered = hovering
         }
         .contextMenu {
-            if item.isCleanable {
-                Button {
-                    onToggle()
-                } label: {
+            Button {
+                onToggle()
+            } label: {
+                if item.isCleanable {
                     Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
+                } else {
+                    Label(
+                        isSelected ? "取消勾选（不建议清理）" : "强制勾选（需风险确认）…",
+                        systemImage: isSelected ? "checkmark.square" : "exclamationmark.shield"
+                    )
                 }
-
-                Divider()
             }
+
+            Divider()
 
             Button(action: onRevealInFinder) {
                 Label("在 Finder 中显示", systemImage: "folder")

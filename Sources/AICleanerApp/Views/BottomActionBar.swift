@@ -33,23 +33,35 @@ struct BottomActionBar: View {
     // MARK: - 居中悬浮玻璃操作岛（勾选后丝滑升起，未勾选时零视觉干扰）
 
     private var floatingSelectionDock: some View {
-        HStack(spacing: 14) {
+        let hasRisk = viewModel.hasSelectedNotRecommendedItems
+        let dotColor = hasRisk ? AppTheme.color(for: .notRecommended) : AppTheme.color(for: .recommended)
+
+        return HStack(spacing: 14) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(AppTheme.color(for: .recommended))
+                    .fill(dotColor)
                     .frame(width: 7.5, height: 7.5)
-                    .shadow(color: AppTheme.color(for: .recommended).opacity(0.8), radius: 4)
+                    .shadow(color: dotColor.opacity(0.85), radius: 4)
 
                 Text("已选 \(viewModel.selectedItems.count) 项")
                     .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
                     .contentTransition(.numericText())
+
+                if hasRisk {
+                    Text("含 \(viewModel.selectedNotRecommendedItems.count) 项高风险")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6.5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(AppTheme.color(for: .notRecommended).opacity(0.18)))
+                        .foregroundStyle(AppTheme.color(for: .notRecommended))
+                }
 
                 Text("·")
                     .foregroundStyle(.tertiary)
 
                 Text("预计释放 \(CleanerFormatting.formatBytes(viewModel.selectedTotalBytes))")
                     .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
-                    .foregroundStyle(AppTheme.color(for: .recommended))
+                    .foregroundStyle(hasRisk ? AppTheme.color(for: .reviewSuggested) : AppTheme.color(for: .recommended))
                     .contentTransition(.numericText())
             }
 

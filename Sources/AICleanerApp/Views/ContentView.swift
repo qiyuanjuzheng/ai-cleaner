@@ -102,6 +102,29 @@ struct ContentView: View {
             AddCustomDirectorySheet(viewModel: viewModel)
                 .preferredColorScheme(viewModel.appearanceMode.colorScheme)
         }
+        .alert(
+            "确认强制勾选「不建议清理」项？",
+            isPresented: Binding(
+                get: { viewModel.pendingRiskItemToSelect != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.cancelRiskItemSelection()
+                    }
+                }
+            ),
+            presenting: viewModel.pendingRiskItemToSelect
+        ) { item in
+            Button("取消", role: .cancel) {
+                viewModel.cancelRiskItemSelection()
+            }
+            Button("了解风险，仍然勾选", role: .destructive) {
+                viewModel.confirmRiskItemSelection(item)
+            }
+        } message: { item in
+            Text(
+                "\(item.clientName) · \(item.displayName)（\(CleanerFormatting.formatBytes(item.sizeBytes))）\n\n风险提示：\(item.safetyNote)\n\n勾选后将在移入废纸篓前再次要求确认；清理仅移入系统废纸篓，随时可放回原处。"
+            )
+        }
         .onAppear {
             applyWindowAppearance(viewModel.appearanceMode)
         }

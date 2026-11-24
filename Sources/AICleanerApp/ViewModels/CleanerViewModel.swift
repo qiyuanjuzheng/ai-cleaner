@@ -73,6 +73,8 @@ final class CleanerViewModel {
     var isCleaning: Bool = false
     var showingTrashConfirmation: Bool = false
     var showingAddCustomSheet: Bool = false
+    /// 当用户尝试手动勾选一条「不建议清理」项时，先暂存到此触发风险确认弹窗
+    var pendingRiskItemToSelect: CleanableItem? = nil
 
     var appearanceMode: AppAppearanceMode = .dark
     var hoveredRecommendation: CleanupRecommendation? = nil
@@ -284,20 +286,37 @@ final class CleanerViewModel {
         }
     }
 
-    var allCleanableItemsByID: [String: CleanableItem] {
-        Dictionary((report?.allItems ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    var allDisplayedItemsByID: [String: CleanableItem] {
+        Dictionary((report?.allDisplayedItems ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     var selectedItems: [CleanableItem] {
-        let lookup = allCleanableItemsByID
+        let lookup = allDisplayedItemsByID
         return selectedItemIDs.compactMap { lookup[$0] }
-            .filter(\.isCleanable)
             .sorted { lhs, rhs in
+                if lhs.recommendation == .notRecommended && rhs.recommendation != .notRecommended {
+                    return true
+                }
+                if lhs.recommendation != .notRecommended && rhs.recommendation == .notRecommended {
+                    return false
+                }
                 if lhs.clientName != rhs.clientName {
                     return lhs.clientName.localizedCaseInsensitiveCompare(rhs.clientName) == .orderedAscending
                 }
                 return lhs.sizeBytes > rhs.sizeBytes
             }
+    }
+
+    var selectedNotRecommendedItems: [CleanableItem] {
+        selectedItems.filter { $0.recommendation == .notRecommended }
+    }
+
+    var hasSelectedNotRecommendedItems: Bool {
+        !selectedNotRecommendedItems.isEmpty
+    }
+
+    var selectedNotRecommendedTotalBytes: Int64 {
+        selectedNotRecommendedItems.reduce(0) { $0 + $1.sizeBytes }
     }
 
     var selectedTotalBytes: Int64 {
@@ -333,7 +352,7 @@ final class CleanerViewModel {
     }
 
     var visibleSelectedCount: Int {
-        filteredCleanableItems.filter { selectedItemIDs.contains($0.id) }.count
+        filteredItems.filter { selectedItemIDs.contains($0.id) }.count
     }
 
     var hasActiveFilters: Bool {
@@ -365,8 +384,8 @@ final class CleanerViewModel {
             self.report = newReport
             self.isScanning = false
 
-            // 仅保留本次扫描后仍存在且可清理的勾选状态
-            let validIDs = Set(newReport.allItems.map(\.id))
+            // 保留本次扫描后仍存在的勾选状态（含已确认勾选的不建议清理项）
+            let validIDs = Set(newReport.allDisplayedItems.map(\.id))
             self.selectedItemIDs.formIntersection(validIDs)
 
             // 如果当前选中的客户端已无数据或已移除，则回退至「全部客户端」
@@ -409,16 +428,29 @@ final class CleanerViewModel {
     }
 
     func toggleSelection(for item: CleanableItem) {
-        guard item.isCleanable else { return }
         if selectedItemIDs.contains(item.id) {
             selectedItemIDs.remove(item.id)
-        } else {
+            return
+        }
+        if item.isCleanable {
             selectedItemIDs.insert(item.id)
+        } else {
+            // 「不建议清理」项绝不静默勾选，弹出单条风险提醒确认后再允许加入清单
+            pendingRiskItemToSelect = item
         }
     }
 
+    func confirmRiskItemSelection(_ item: CleanableItem) {
+        selectedItemIDs.insert(item.id)
+        pendingRiskItemToSelect = nil
+    }
+
+    func cancelRiskItemSelection() {
+        pendingRiskItemToSelect = nil
+    }
+
     func isSelected(_ item: CleanableItem) -> Bool {
-        item.isCleanable && selectedItemIDs.contains(item.id)
+        selectedItemIDs.contains(item.id)
     }
 
     /// 一键勾选当前视图下的全部「建议清理」项
@@ -452,7 +484,7 @@ final class CleanerViewModel {
     }
 
     func clearVisibleSelection() {
-        for item in filteredCleanableItems {
+        for item in filteredItems {
             selectedItemIDs.remove(item.id)
         }
     }
@@ -509,17 +541,21 @@ final class CleanerViewModel {
         showingTrashConfirmation = true
     }
 
-    func confirmAndTrashSelectedItems() {
+    func confirmAndTrashSelectedItems(acknowledgedNotRecommendedRisk: Bool = false) {
         let targets = selectedItems
         guard !targets.isEmpty, !isCleaning else { return }
+        if hasSelectedNotRecommendedItems && !acknowledgedNotRecommendedRisk {
+            return
+        }
 
         isCleaning = true
         errorBannerMessage = nil
         let cleaner = trashCleaner
+        let allowOverride = acknowledgedNotRecommendedRisk && hasSelectedNotRecommendedItems
 
         Task {
             let result = await Task.detached(priority: .userInitiated) {
-                cleaner.trash(items: targets)
+                cleaner.trash(items: targets, allowNotRecommendedOverride: allowOverride)
             }.value
 
             self.lastCleanupResult = result

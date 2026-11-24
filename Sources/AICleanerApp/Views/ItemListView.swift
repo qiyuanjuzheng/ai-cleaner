@@ -643,10 +643,10 @@ private struct CleanSectionHeader: View {
                 .padding(.vertical, 3)
                 .background(Capsule().fill(tint.opacity(0.11)))
             } else {
-                HStack(spacing: 3) {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 9))
-                    Text("已锁定保护")
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 9.5))
+                    Text("默认不选 · 手动勾选需二次确认")
                 }
                 .font(.caption2)
                 .foregroundStyle(.tertiary)

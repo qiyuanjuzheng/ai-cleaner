@@ -20,7 +20,7 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
     public let isDirectory: Bool
     public let isCustom: Bool
 
-    /// 是否允许被用户勾选并移入废纸篓（`notRecommended` 始终锁定为 false）
+    /// 是否属于常规/批量可清理条目（`notRecommended` 不参与一键全选或批量选择，仅支持用户显式风险确认后手动移入废纸篓）
     public var isCleanable: Bool {
         recommendation.isCleanable
     }

@@ -107,7 +107,119 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         let result = cleaner.trash(items: [lockedItem])
         XCTAssertEqual(result.trashedCount, 0)
         XCTAssertEqual(result.skippedProtectedItems.count, 1)
-        XCTAssertTrue(spy.calledPaths.isEmpty, "不建议清理项绝不应触发 trashItem")
+        XCTAssertTrue(spy.calledPaths.isEmpty, "未显式确认风险覆盖时，不建议清理项绝不应触发 trashItem")
         XCTAssertTrue(FileManager.default.fileExists(atPath: binFile.path))
+    }
+
+    func testTrashCleanerAllowsExplicitNotRecommendedOverrideWhileStillBlockingSystemAndRootPaths() throws {
+        // 1. 具体受保护子项（含 skills/binaries/auth.json/db 等）在用户显式覆盖时允许移入废纸篓
+        let skillsDir = try sandbox.createFile(relativeToHome: ".workbuddy/skills/demo/SKILL.md", byteCount: 600)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let authFile = try sandbox.createFile(relativeToHome: ".codex/auth.json", byteCount: 128)
+        let dbFile = try sandbox.createFile(relativeToHome: ".local/share/opencode/opencode.db", byteCount: 4_096)
+
+        // 2. 即便开启覆盖，客户端根目录（~/.claude）与敏感隐私目录（~/.ssh）依然必须死守拦住
+        let clientRoot = try sandbox.createFile(relativeToHome: ".claude/settings.json", byteCount: 64)
+            .deletingLastPathComponent()
+        let sshKey = try sandbox.createFile(relativeToHome: ".ssh/id_ed25519", byteCount: 256)
+
+        let items: [CleanableItem] = [
+            CleanableItem(
+                clientID: "workbuddy",
+                clientName: "WorkBuddy",
+                ruleID: "workbuddy-protected-skills",
+                displayName: "技能库 (skills)",
+                fileName: "skills",
+                url: skillsDir,
+                category: .protectedData,
+                recommendation: .notRecommended,
+                safetyNote: "保存自定义技能库，不建议清理",
+                sizeBytes: 600,
+                fileCount: 1,
+                modifiedAt: Date(),
+                isDirectory: true,
+                isCustom: false
+            ),
+            CleanableItem(
+                clientID: "codex",
+                clientName: "Codex",
+                ruleID: "codex-protected-auth",
+                displayName: "登录凭据 (auth.json)",
+                fileName: "auth.json",
+                url: authFile,
+                category: .protectedData,
+                recommendation: .notRecommended,
+                safetyNote: "删除后需重新登录",
+                sizeBytes: 128,
+                fileCount: 1,
+                modifiedAt: Date(),
+                isDirectory: false,
+                isCustom: false
+            ),
+            CleanableItem(
+                clientID: "opencode",
+                clientName: "OpenCode",
+                ruleID: "opencode-protected-db",
+                displayName: "主数据库 (opencode.db)",
+                fileName: "opencode.db",
+                url: dbFile,
+                category: .protectedData,
+                recommendation: .notRecommended,
+                safetyNote: "删除后丢失会话索引",
+                sizeBytes: 4_096,
+                fileCount: 1,
+                modifiedAt: Date(),
+                isDirectory: false,
+                isCustom: false
+            ),
+            CleanableItem(
+                clientID: "claude-code",
+                clientName: "Claude Code",
+                ruleID: "forged-root",
+                displayName: "客户端根目录",
+                fileName: ".claude",
+                url: clientRoot,
+                category: .protectedData,
+                recommendation: .notRecommended,
+                safetyNote: "底线禁止",
+                sizeBytes: 1_000,
+                fileCount: 1,
+                modifiedAt: Date(),
+                isDirectory: true,
+                isCustom: false
+            ),
+            CleanableItem(
+                clientID: "system",
+                clientName: "System",
+                ruleID: "forged-ssh",
+                displayName: "SSH 密钥",
+                fileName: "id_ed25519",
+                url: sshKey,
+                category: .protectedData,
+                recommendation: .notRecommended,
+                safetyNote: "底线禁止",
+                sizeBytes: 256,
+                fileCount: 1,
+                modifiedAt: Date(),
+                isDirectory: false,
+                isCustom: false
+            )
+        ]
+
+        let spy = GuardedPerformerSpy()
+        let cleaner = TrashCleaner(
+            safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL),
+            performer: spy
+        )
+
+        let result = cleaner.trash(items: items, allowNotRecommendedOverride: true)
+        XCTAssertEqual(result.trashedCount, 3)
+        XCTAssertEqual(result.skippedProtectedItems.count, 2)
+        XCTAssertTrue(spy.calledPaths.contains(skillsDir.standardizedFileURL.path))
+        XCTAssertTrue(spy.calledPaths.contains(authFile.standardizedFileURL.path))
+        XCTAssertTrue(spy.calledPaths.contains(dbFile.standardizedFileURL.path))
+        XCTAssertFalse(spy.calledPaths.contains(clientRoot.standardizedFileURL.path))
+        XCTAssertFalse(spy.calledPaths.contains(sshKey.standardizedFileURL.path))
     }
 }

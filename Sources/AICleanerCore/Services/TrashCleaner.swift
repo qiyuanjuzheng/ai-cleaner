@@ -36,8 +36,13 @@ public struct TrashCleaner: Sendable {
         self.sizer = sizer
     }
 
-    /// 将选中的条目批量安全移入系统废纸篓
-    public func trash(items: [CleanableItem]) -> CleanupResult {
+    /// 将选中的条目批量安全移入系统废纸篓。
+    /// - Parameter allowNotRecommendedOverride: 默认 `false`（严格拦截任何「不建议清理」项）；
+    ///   仅在用户通过双重风险提醒并显式确认覆盖后才应传入 `true`，此时仍会强制执行操作系统与敏感根目录底线校验。
+    public func trash(
+        items: [CleanableItem],
+        allowNotRecommendedOverride: Bool = false
+    ) -> CleanupResult {
         let fileManager = FileManager.default
         var trashed: [TrashedItemRecord] = []
         var skippedProtected: [CleanupFailure] = []
@@ -48,21 +53,30 @@ public struct TrashCleaner: Sendable {
         let deduplicated = deduplicateNestedItems(items)
 
         for item in deduplicated {
-            // 0. 强制拒绝任何标记为「不建议清理」的锁定条目
-            guard item.isCleanable else {
-                skippedProtected.append(
-                    CleanupFailure(item: item, reason: "该条目已标记为「不建议清理」并锁定保护，不可移入废纸篓")
-                )
-                continue
-            }
-
             let url = item.url.standardizedFileURL
 
-            // 1. 清理前实时二次安全校验（含子目录内容检查）
-            let safetyDecision = safetyGuard.validateTargetRecursively(url, fileManager: fileManager)
-            if let blockReason = safetyDecision.blockReason {
-                skippedProtected.append(CleanupFailure(item: item, reason: blockReason))
-                continue
+            // 0. 检查「不建议清理」条目的风险覆盖授权
+            if !item.isCleanable {
+                guard allowNotRecommendedOverride else {
+                    skippedProtected.append(
+                        CleanupFailure(item: item, reason: "该条目已标记为「不建议清理」，未确认风险覆盖前不可移入废纸篓")
+                    )
+                    continue
+                }
+
+                // 即使显式覆盖，仍强制死守系统目录、隐私敏感子树、客户端顶层根目录与越界符号链接底线
+                let overrideDecision = safetyGuard.validateUserOverrideTarget(url, fileManager: fileManager)
+                if let blockReason = overrideDecision.blockReason {
+                    skippedProtected.append(CleanupFailure(item: item, reason: blockReason))
+                    continue
+                }
+            } else {
+                // 1. 普通条目执行完整二次安全校验（含子目录内容检查）
+                let safetyDecision = safetyGuard.validateTargetRecursively(url, fileManager: fileManager)
+                if let blockReason = safetyDecision.blockReason {
+                    skippedProtected.append(CleanupFailure(item: item, reason: blockReason))
+                    continue
+                }
             }
 
             // 2. 检查文件当前是否仍存在

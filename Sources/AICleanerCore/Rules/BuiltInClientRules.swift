@@ -5,12 +5,14 @@ import Foundation
 public enum BuiltInClientRules {
     public static let allProfiles: [AIClientProfile] = [
         claudeCode,
-        cursor,
         codex,
+        cursor,
         windsurf,
         claudeDesktop,
         chatGPTDesktop,
-        openCode
+        openCode,
+        piAgent,
+        geminiAntigravity
     ]
 
     public static let claudeCode = AIClientProfile(
@@ -18,9 +20,25 @@ public enum BuiltInClientRules {
         name: "Claude Code",
         symbolName: "terminal",
         accentToken: "claude",
-        description: "Anthropic 命令行编程助手的调试日志、快照与运行缓存",
-        protectedSummary: "已排除 ~/.claude.json、settings.json、CLAUDE.md、projects、skills、hooks、plugins 与 history.jsonl",
+        description: "Anthropic 命令行编程助手的聊天会话记录、转录文件、调试日志与运行缓存",
+        protectedSummary: "已排除 ~/.claude.json、settings.json、CLAUDE.md、各项目 memory/、sessions-index.json、skills、hooks、plugins、活跃 sessions/*.key 与 history.jsonl",
         rules: [
+            ScanRule(
+                id: "claude-code-project-sessions",
+                displayName: "项目聊天会话",
+                path: ".claude/projects",
+                category: .sessions,
+                mode: .projectSessions,
+                explanation: "按单条对话展开各项目下的聊天会话（.jsonl 及伴随子代理/产物目录），已自动保护每个项目的 memory/ 与 sessions-index.json，适合清理一次性对话。"
+            ),
+            ScanRule(
+                id: "claude-code-transcripts",
+                displayName: "历史会话转录目录 (transcripts)",
+                path: ".claude/transcripts",
+                category: .sessions,
+                mode: .directory,
+                explanation: "历史会话自动留存的对话转录副本，随使用时间持续增长，移入废纸篓不影响当前配置与项目记忆。"
+            ),
             ScanRule(
                 id: "claude-code-cli-cache",
                 displayName: "CLI 与 MCP 运行缓存",
@@ -93,9 +111,25 @@ public enum BuiltInClientRules {
         name: "Cursor",
         symbolName: "cursorarrow.rays",
         accentToken: "cursor",
-        description: "Cursor AI 编辑器缓存、渲染着色器、更新包与运行日志",
+        description: "Cursor AI 编辑器聊天会话、渲染缓存、更新包与运行日志",
         protectedSummary: "已排除 User/settings.json、globalStorage、workspaceStorage、Cookies、Local Storage 与 ~/.cursor/mcp.json",
         rules: [
+            ScanRule(
+                id: "cursor-chats",
+                displayName: "CLI 聊天会话",
+                path: ".cursor/chats",
+                category: .sessions,
+                mode: .children,
+                explanation: "Cursor CLI 保存的单条本地聊天会话目录，可按需将一次性会话移入废纸篓。"
+            ),
+            ScanRule(
+                id: "cursor-projects",
+                displayName: "项目会话与 MCP 缓存",
+                path: ".cursor/projects",
+                category: .sessions,
+                mode: .children,
+                explanation: "按项目存放的 Cursor 本地会话记录与 MCP 缓存目录，移入废纸篓不影响项目源码与编辑器配置。"
+            ),
             ScanRule(
                 id: "cursor-cache",
                 displayName: "应用网络缓存",
@@ -208,9 +242,34 @@ public enum BuiltInClientRules {
         name: "Codex",
         symbolName: "cpu",
         accentToken: "codex",
-        description: "OpenAI Codex CLI 与桌面端缓存、着色器、崩溃转储与日志",
-        protectedSummary: "已排除 auth.json、config.toml、AGENTS.md、memories/goals 等 SQLite 主数据库及桌面端登录态",
+        description: "OpenAI Codex CLI 与桌面端的聊天会话、临时产物、渲染缓存与日志",
+        protectedSummary: "已排除 auth.json、config.toml、AGENTS.md、memories、worktrees、SQLite 主数据库及桌面端登录态",
         rules: [
+            ScanRule(
+                id: "codex-sessions",
+                displayName: "聊天会话记录",
+                path: ".codex/sessions",
+                category: .sessions,
+                mode: .recursiveFiles,
+                explanation: "按单条对话展示 Codex 保存的本地聊天会话（.jsonl 与压缩归档 .jsonl.zst），可按需清理一次性对话，不影响配置与记忆库。",
+                allowedFileSuffixes: [".jsonl", ".jsonl.zst"]
+            ),
+            ScanRule(
+                id: "codex-archived-sessions",
+                displayName: "已归档聊天会话",
+                path: ".codex/archived_sessions",
+                category: .sessions,
+                mode: .children,
+                explanation: "Codex 归档的历史会话压缩记录，可逐条勾选移入废纸篓。"
+            ),
+            ScanRule(
+                id: "codex-multica-sessions",
+                displayName: "工作区代理会话",
+                path: ".codex/multica-sessions",
+                category: .sessions,
+                mode: .children,
+                explanation: "自动化代理任务产生的独立会话目录，任务结束后可安全清理。"
+            ),
             ScanRule(
                 id: "codex-cli-cache",
                 displayName: "Codex CLI 缓存",
@@ -234,6 +293,30 @@ public enum BuiltInClientRules {
                 category: .temporary,
                 mode: .directory,
                 explanation: "会话执行期间产生的临时目录。"
+            ),
+            ScanRule(
+                id: "codex-cli-hidden-tmp",
+                displayName: "Codex 隐藏临时目录 (.tmp)",
+                path: ".codex/.tmp",
+                category: .temporary,
+                mode: .children,
+                explanation: "Codex CLI 产生的临时工作子项，扫描时已自动跳过敏感文件。"
+            ),
+            ScanRule(
+                id: "codex-shell-snapshots",
+                displayName: "Shell 环境快照",
+                path: ".codex/shell_snapshots",
+                category: .temporary,
+                mode: .directory,
+                explanation: "一次性终端环境快照，下次启动自动重新采集。"
+            ),
+            ScanRule(
+                id: "codex-generated-images",
+                displayName: "一次性生成图片产物",
+                path: ".codex/generated_images",
+                category: .temporary,
+                mode: .children,
+                explanation: "对话期间生成的本地图片缓存产物，可逐张勾选清理。"
             ),
             ScanRule(
                 id: "codex-app-cache",
@@ -339,9 +422,17 @@ public enum BuiltInClientRules {
         name: "Windsurf",
         symbolName: "wind",
         accentToken: "windsurf",
-        description: "Windsurf / Codeium 编辑器缓存、扩展缓存与运行日志",
+        description: "Windsurf / Codeium 聊天会话、编辑器缓存、扩展缓存与运行日志",
         protectedSummary: "已排除 ~/.codeium/database、memories、User/settings.json、Cookies 与 Local Storage",
         rules: [
+            ScanRule(
+                id: "windsurf-cascade-sessions",
+                displayName: "Cascade 聊天会话",
+                path: ".codeium/windsurf/cascade",
+                category: .sessions,
+                mode: .children,
+                explanation: "Windsurf Cascade 单条对话记录文件，可按需将一次性会话移入废纸篓。"
+            ),
             ScanRule(
                 id: "windsurf-cache",
                 displayName: "应用网络缓存",
@@ -446,9 +537,25 @@ public enum BuiltInClientRules {
         name: "Claude Desktop",
         symbolName: "bubble.left.and.text.bubble.right",
         accentToken: "claudeDesktop",
-        description: "Claude macOS 桌面应用缓存、更新包与崩溃日志",
+        description: "Claude macOS 桌面应用本地会话、缓存、更新包与崩溃日志",
         protectedSummary: "已排除 claude_desktop_config.json、config.json、Cookies、Local Storage 与 Session Storage",
         rules: [
+            ScanRule(
+                id: "claude-desktop-local-agent-sessions",
+                displayName: "本地 Agent 会话",
+                path: "Library/Application Support/Claude/local-agent-mode-sessions",
+                category: .sessions,
+                mode: .children,
+                explanation: "Claude Desktop 本地代理模式保存的单次会话目录，可按需清理。"
+            ),
+            ScanRule(
+                id: "claude-desktop-code-sessions",
+                displayName: "桌面端 Code 会话",
+                path: "Library/Application Support/Claude/claude-code-sessions",
+                category: .sessions,
+                mode: .children,
+                explanation: "Claude Desktop 内置代码助手会话目录，移入废纸篓不影响应用配置。"
+            ),
             ScanRule(
                 id: "claude-desktop-cache",
                 displayName: "应用网络缓存",
@@ -596,9 +703,17 @@ public enum BuiltInClientRules {
         name: "OpenCode",
         symbolName: "chevron.left.forwardslash.chevron.right",
         accentToken: "opencode",
-        description: "OpenCode CLI 的运行日志与临时缓存目录",
+        description: "OpenCode CLI 的会话文件、运行日志与临时缓存目录",
         protectedSummary: "已排除 ~/.local/share/opencode/opencode.db 主数据库、~/.config/opencode 与认证凭据",
         rules: [
+            ScanRule(
+                id: "opencode-file-sessions",
+                displayName: "文件型聊天会话",
+                path: ".local/share/opencode/storage/session",
+                category: .sessions,
+                mode: .children,
+                explanation: "OpenCode 文件存储模式下的单条会话记录，清理不影响 opencode.db 主库与配置。"
+            ),
             ScanRule(
                 id: "opencode-logs",
                 displayName: "OpenCode 运行日志",
@@ -630,6 +745,68 @@ public enum BuiltInClientRules {
                 category: .temporary,
                 mode: .directory,
                 explanation: "OpenCode 运行产生的临时文件。"
+            )
+        ]
+    )
+
+    public static let piAgent = AIClientProfile(
+        id: "pi",
+        name: "Pi",
+        symbolName: "terminal.fill",
+        accentToken: "pi",
+        description: "Pi Coding Agent 各工作区的本地聊天会话记录",
+        protectedSummary: "已排除 ~/.pi/agent/auth.json、settings.json、models.json、mcp.json、skills 与 extensions",
+        rules: [
+            ScanRule(
+                id: "pi-agent-sessions",
+                displayName: "工作区聊天会话",
+                path: ".pi/agent/sessions",
+                category: .sessions,
+                mode: .projectSessions,
+                explanation: "按项目工作区展开单条 Pi 聊天会话（.jsonl），自动提取项目名与首条提问摘要，方便清理一次性对话。"
+            )
+        ]
+    )
+
+    public static let geminiAntigravity = AIClientProfile(
+        id: "gemini-antigravity",
+        name: "Gemini / Antigravity",
+        symbolName: "sparkle",
+        accentToken: "gemini",
+        description: "Gemini CLI 与 Antigravity 会话工作区、缓存及临时目录",
+        protectedSummary: "已排除 oauth_creds.json、google_accounts.json、settings.json、skills 与 conversation_summaries.db 主数据库",
+        rules: [
+            ScanRule(
+                id: "gemini-antigravity-brain",
+                displayName: "Antigravity 会话工作区",
+                path: ".gemini/antigravity/brain",
+                category: .sessions,
+                mode: .children,
+                explanation: "单次对话产生的本地产物与草稿目录，可逐条将一次性会话移入废纸篓。"
+            ),
+            ScanRule(
+                id: "gemini-antigravity-cli-brain",
+                displayName: "Antigravity CLI 会话工作区",
+                path: ".gemini/antigravity-cli/brain",
+                category: .sessions,
+                mode: .children,
+                explanation: "命令行会话产生的独立临时工作区目录，任务完成后可按需清理。"
+            ),
+            ScanRule(
+                id: "gemini-antigravity-cache",
+                displayName: "Antigravity 运行缓存",
+                path: ".gemini/antigravity/cache",
+                category: .cache,
+                mode: .directory,
+                explanation: "Antigravity 运行缓存目录，清理后按需自动重建。"
+            ),
+            ScanRule(
+                id: "gemini-cli-tmp",
+                displayName: "Gemini CLI 临时会话目录",
+                path: ".gemini/tmp",
+                category: .temporary,
+                mode: .children,
+                explanation: "Gemini CLI 会话运行期间产生的临时目录与中间文件。"
             )
         ]
     )

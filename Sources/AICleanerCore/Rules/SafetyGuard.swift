@@ -36,6 +36,13 @@ public struct SafetyGuard: Sendable {
         self.cachesPathPrefixes = Array(self.homePathVariants).map { "\($0)/Library/Caches/" }
     }
 
+    /// 校验内置规则在展开子会话或子项时的容器目录本身是否安全（严禁进入系统核心目录或隐私敏感子树，
+    /// 同时允许内置规则深入 `~/.claude/projects`、`~/.codex/sessions` 等会话根容器去逐条扫描，
+    /// 而这些根容器本身依然被禁止整体删除或添加为整体清理项）。
+    public func validateBuiltInContainer(_ url: URL) -> SafetyDecision {
+        validateBasePath(url, allowHomeSubdirectoryRoots: true)
+    }
+
     /// 校验用户尝试添加的「自定义扫描目录」根路径是否安全
     public func validateCustomDirectoryRoot(_ url: URL) -> SafetyDecision {
         let pathCheck = validateBasePath(url, allowHomeSubdirectoryRoots: false)
@@ -304,7 +311,7 @@ public struct SafetyGuard: Sendable {
         "Library/Application Support/AddressBook"
     ]
 
-    /// 这些顶层目录或 AI 客户端根目录本身不能被整体勾选/清理
+    /// 这些顶层目录、AI 客户端根目录及会话总目录本身不能被整体勾选/清理
     private static let blockedExactUserRoots: [String] = [
         "Desktop",
         "Documents",
@@ -323,11 +330,33 @@ public struct SafetyGuard: Sendable {
         ".local/share",
         ".cache",
         ".claude",
+        ".claude/projects",
+        ".claude/sessions",
         ".codex",
+        ".codex/sessions",
+        ".codex/archived_sessions",
+        ".codex/multica-sessions",
         ".cursor",
+        ".cursor/chats",
+        ".cursor/projects",
         ".codeium",
+        ".codeium/windsurf",
+        ".codeium/windsurf/cascade",
         ".opencode",
+        ".local/share/opencode",
+        ".local/share/opencode/storage",
+        ".local/share/opencode/storage/session",
+        ".pi",
+        ".pi/agent",
+        ".pi/agent/sessions",
+        ".gemini",
+        ".gemini/antigravity",
+        ".gemini/antigravity-cli",
+        ".gemini/antigravity/brain",
+        ".gemini/antigravity-cli/brain",
         "Library/Application Support/Claude",
+        "Library/Application Support/Claude/local-agent-mode-sessions",
+        "Library/Application Support/Claude/claude-code-sessions",
         "Library/Application Support/Cursor",
         "Library/Application Support/Codex",
         "Library/Application Support/Windsurf",
@@ -352,10 +381,11 @@ public struct SafetyGuard: Sendable {
     ]
 
     /// 用户知识库、配置与扩展数据目录名（在 ~/Library/Caches/ 系统缓存目录之外严格受保护，
-    /// 避免误伤用户配置，同时允许清理 ~/Library/Caches 下 Sparkle 等自动更新器遗留的临时安装包缓存）
+    /// 避免误伤用户配置与项目记忆，同时允许清理 ~/Library/Caches 下 Sparkle 等自动更新器遗留的临时安装包缓存）
     private static let userDataProtectedDirectoryNames: Set<String> = [
         "databases",
         "database",
+        "memory",
         "memories",
         "memories_v2",
         "projects",
@@ -372,6 +402,8 @@ public struct SafetyGuard: Sendable {
         "auth.lock",
         "credentials.json",
         "credentials",
+        "oauth_creds.json",
+        "google_accounts.json",
         ".env",
         ".netrc",
         ".npmrc",
@@ -395,15 +427,19 @@ public struct SafetyGuard: Sendable {
         "config.toml",
         "config.yaml",
         "config.yml",
+        "models.json",
+        "models-store.json",
         "claude_desktop_config.json",
         "mcp.json",
         "argv.json",
         "keybindings.json",
         "claude.md",
         "agents.md",
+        "memory.md",
         ".claude.json",
         ".claude.json.backup",
         "history.jsonl",
+        "sessions-index.json",
         "installation_id",
         "state.vscdb",
         "state.vscdb.backup",

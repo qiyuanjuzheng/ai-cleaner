@@ -2,6 +2,7 @@ import Foundation
 
 /// 清理条目分类，附带面向用户的安全说明，降低误删风险。
 public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Identifiable {
+    case sessions
     case cache
     case temporary
     case logs
@@ -12,6 +13,8 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
     /// 界面展示的简体中文标签
     public var displayName: String {
         switch self {
+        case .sessions:
+            return "聊天会话"
         case .cache:
             return "缓存"
         case .temporary:
@@ -26,6 +29,8 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
     /// 对应 SF Symbols 图标名
     public var symbolName: String {
         switch self {
+        case .sessions:
+            return "bubble.left.and.bubble.right.fill"
         case .cache:
             return "internaldrive"
         case .temporary:
@@ -40,6 +45,8 @@ public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Ide
     /// 面向用户的默认安全说明
     public var safetyDescription: String {
         switch self {
+        case .sessions:
+            return "AI 客户端保存的本地聊天会话记录（含一次性对话与任务会话）。移入废纸篓仅移除所选会话记录，不影响账号登录、配置与项目记忆（memory），随时可在废纸篓放回原处。"
         case .cache:
             return "应用运行或渲染缓存，移入废纸篓后下次启动会自动重建，不影响登录与配置。"
         case .temporary:

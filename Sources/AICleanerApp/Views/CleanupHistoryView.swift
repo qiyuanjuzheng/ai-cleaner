@@ -248,13 +248,17 @@ struct CleanupHistoryView: View {
                 } else {
                     let topList = Array(summary.topClients.prefix(8))
                     ForEach(Array(topList.enumerated()), id: \.element.id) { index, client in
-                        let visual = viewModel.clientVisualMeta(for: client.clientID)
+                        let tint = viewModel.clientTint(for: client.clientID)
                         VStack(spacing: 6) {
                             HStack(spacing: 8) {
-                                Image(systemName: visual.symbolName)
-                                    .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(visual.tint)
-                                    .frame(width: 18)
+                                if client.clientID.hasPrefix("custom-") {
+                                    Image(systemName: "folder.fill")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(tint)
+                                        .frame(width: 20, height: 20)
+                                } else {
+                                    ClientLogo(clientID: client.clientID)
+                                }
 
                                 Text(client.clientName)
                                     .font(.callout.weight(.medium))
@@ -286,7 +290,7 @@ struct CleanupHistoryView: View {
                                     context.fill(
                                         Path(roundedRect: fillRect, cornerRadius: radius),
                                         with: .linearGradient(
-                                            Gradient(colors: [visual.tint, visual.tint.opacity(0.65)]),
+                                            Gradient(colors: [tint, tint.opacity(0.65)]),
                                             startPoint: CGPoint(x: 0, y: size.height / 2),
                                             endPoint: CGPoint(x: fillRect.maxX, y: size.height / 2)
                                         )

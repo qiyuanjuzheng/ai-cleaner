@@ -104,7 +104,8 @@ ai-cleaner/
 │   │       └── TrashCleaner.swift                # 系统废纸篓移入与清理前复核
 │   └── AICleanerApp/
 │       ├── AICleanerApp.swift                    # 应用入口与菜单快捷键
+│       ├── Resources/ClientLogos/                # 随包分发的官方客户端标识及来源记录（SOURCES.md）
 │       ├── ViewModels/CleanerViewModel.swift     # 空间总览、分组筛选、勾选与历史状态管理
-│       └── Views/                                # 侧边栏、空间总览、分组列表、确认弹窗与趋势图
+│       └── Views/                                # 侧边栏、客户端 Logo 解析、空间总览、确认弹窗与趋势图
 └── Tests/                                        # 核心逻辑及界面模型的隔离测试
 ```

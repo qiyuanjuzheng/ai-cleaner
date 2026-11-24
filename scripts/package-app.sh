@@ -42,6 +42,9 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp "${BIN_PATH}" "${MACOS_DIR}/${EXECUTABLE_NAME}"
 chmod +x "${MACOS_DIR}/${EXECUTABLE_NAME}"
 
+# 复制随应用分发的客户端品牌标识资源包
+ditto "${BIN_DIR}/AICleaner_AICleanerApp.bundle" "${RESOURCES_DIR}/AICleaner_AICleanerApp.bundle"
+
 # 生成高分辨率 macOS 应用图标 (AppIcon.icns)
 ICON_TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${ICON_TMP_DIR}"' EXIT

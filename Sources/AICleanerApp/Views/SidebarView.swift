@@ -34,7 +34,7 @@ struct SidebarView: View {
                         title: "空间总览",
                         cleanableBytesText: viewModel.reportTotalBytesText,
                         hasProtectedOnly: (viewModel.report?.totalSizeBytes ?? 0) == 0 && (viewModel.report?.protectedSizeBytes ?? 0) > 0,
-                        symbolName: "sparkles.rectangle.stack.fill",
+                        icon: .symbol("sparkles.rectangle.stack.fill"),
                         tint: Color(red: 0.16, green: 0.80, blue: 0.60),
                         isSelected: viewModel.sidebarSelection == .allClients,
                         namespace: sidebarNamespace
@@ -46,7 +46,7 @@ struct SidebarView: View {
                         title: "移入废纸篓趋势",
                         cleanableBytesText: viewModel.totalHistoricalFreedBytesText,
                         hasProtectedOnly: false,
-                        symbolName: "chart.line.uptrend.xyaxis",
+                        icon: .symbol("chart.line.uptrend.xyaxis"),
                         tint: Color(red: 0.24, green: 0.72, blue: 0.98),
                         isSelected: viewModel.sidebarSelection == .history,
                         namespace: sidebarNamespace,
@@ -78,7 +78,7 @@ struct SidebarView: View {
                                 title: entry.title,
                                 cleanableBytesText: entry.cleanableBytesText,
                                 hasProtectedOnly: entry.cleanableBytes == 0 && entry.protectedBytes > 0,
-                                symbolName: entry.symbolName,
+                                icon: .client(entry.id),
                                 tint: AppTheme.color(forAccentToken: entry.accentToken),
                                 isSelected: viewModel.sidebarSelection == .client(entry.id),
                                 namespace: sidebarNamespace
@@ -170,7 +170,7 @@ struct SidebarView: View {
                                     title: entry.title,
                                     cleanableBytesText: entry.cleanableBytesText,
                                     hasProtectedOnly: false,
-                                    symbolName: entry.symbolName,
+                                    icon: .symbol("folder.badge.plus"),
                                     tint: .teal,
                                     isSelected: viewModel.sidebarSelection == .client(entry.id),
                                     namespace: sidebarNamespace
@@ -238,11 +238,16 @@ struct SidebarView: View {
     }
 }
 
+private enum SidebarTileIcon {
+    case symbol(String)
+    case client(String)
+}
+
 private struct SidebarClientTile: View {
     let title: String
     let cleanableBytesText: String
     let hasProtectedOnly: Bool
-    let symbolName: String
+    let icon: SidebarTileIcon
     let tint: Color
     let isSelected: Bool
     let namespace: Namespace.ID
@@ -255,10 +260,15 @@ private struct SidebarClientTile: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                Image(systemName: symbolName)
-                    .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(isSelected ? tint : tint.opacity(0.82))
-                    .frame(width: 20, alignment: .center)
+                switch icon {
+                case let .symbol(name):
+                    Image(systemName: name)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(isSelected ? tint : tint.opacity(0.82))
+                        .frame(width: 20, height: 20, alignment: .center)
+                case let .client(id):
+                    ClientLogo(clientID: id)
+                }
 
                 Text(title)
                     .font(.system(.callout, weight: isSelected ? .semibold : .regular))

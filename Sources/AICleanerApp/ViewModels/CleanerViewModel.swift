@@ -85,7 +85,6 @@ struct SidebarClientEntry: Identifiable, Equatable, Sendable {
     let cleanableBytes: Int64
     let cleanableBytesText: String
     let protectedBytes: Int64
-    let symbolName: String
     let accentToken: String
     let customDirectoryID: UUID?
 }
@@ -350,10 +349,10 @@ final class CleanerViewModel {
     @ObservationIgnored private var suppressCacheRebuild: Bool = false
     @ObservationIgnored nonisolated private static let defaultCollapsedSections: Set<CleanupRecommendation> = [.notRecommended]
     @ObservationIgnored private static let appearanceStorageKey = "aiCleaner.appearanceMode.v2"
-    @ObservationIgnored private static let builtInVisualLookup: [String: (symbolName: String, tint: Color)] = {
+    @ObservationIgnored private static let builtInClientTints: [String: Color] = {
         Dictionary(
             uniqueKeysWithValues: BuiltInClientRules.allProfiles.map { profile in
-                (profile.id, (profile.symbolName, AppTheme.color(forAccentToken: profile.accentToken)))
+                (profile.id, AppTheme.color(forAccentToken: profile.accentToken))
             }
         )
     }()
@@ -444,7 +443,6 @@ final class CleanerViewModel {
                 cleanableBytes: summary.totalSizeBytes,
                 cleanableBytesText: summary.totalSizeBytes > 0 ? CleanerFormatting.formatBytes(summary.totalSizeBytes) : "",
                 protectedBytes: summary.protectedSizeBytes,
-                symbolName: summary.profile.symbolName,
                 accentToken: summary.profile.accentToken,
                 customDirectoryID: summary.profile.customDirectoryID
             )
@@ -1310,8 +1308,8 @@ final class CleanerViewModel {
         }
     }
 
-    func clientVisualMeta(for clientID: String) -> (symbolName: String, tint: Color) {
-        Self.builtInVisualLookup[clientID] ?? ("folder.fill", Color(red: 0.18, green: 0.78, blue: 0.74))
+    func clientTint(for clientID: String) -> Color {
+        Self.builtInClientTints[clientID] ?? Color(red: 0.18, green: 0.78, blue: 0.74)
     }
 
     func dismissCleanupBanner() {

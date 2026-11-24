@@ -1,6 +1,8 @@
 @testable import AICleanerApp
 import AICleanerCore
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 
 private struct FixtureTrashPerformer: TrashPerforming {
@@ -130,6 +132,107 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertEqual(model.lastCleanupResult?.trashedItems.map(\.id), [plugin.id])
         XCTAssertFalse(FileManager.default.fileExists(atPath: plugin.url.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: locked.url.path))
+    }
+
+    @MainActor
+    func testScanReadyReturnToIdleAndHistoryStartScanLifecycle() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try write("cache fixture", at: ".workbuddy/cache/data.bin", in: home)
+
+        let model = makeViewModel(home: home)
+        XCTAssertFalse(model.hasScanResults)
+        XCTAssertFalse(model.isScanning)
+        XCTAssertNil(model.report)
+
+        model.startScan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertFalse(model.filteredItems.isEmpty)
+
+        model.selectRecommendedInScope()
+        XCTAssertFalse(model.selectedItemIDs.isEmpty)
+
+        model.returnToIdleState()
+        XCTAssertNil(model.report)
+        XCTAssertFalse(model.hasScanResults)
+        XCTAssertFalse(model.isScanning)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+        XCTAssertEqual(model.sidebarSelection, .allClients)
+
+        // Starting a scan from history view switches back to space overview and scans cleanly
+        model.sidebarSelection = .history
+        model.startScan()
+        XCTAssertEqual(model.sidebarSelection, .allClients)
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+
+        model.returnToIdleState()
+        model.startScan()
+        model.cancelScan()
+        XCTAssertFalse(model.isScanning)
+        XCTAssertNil(model.report)
+    }
+
+    func testScanReadyHeroMotionRespectsReduceMotionAndBounds() {
+        let reduced = ScanReadyHeroMotion.evaluate(elapsed: 12.34, isAnimating: false)
+        XCTAssertEqual(reduced, .staticRest)
+        XCTAssertEqual(reduced.glowScale, 1.0)
+        XCTAssertEqual(reduced.coreBreathScale, 1.0)
+        XCTAssertEqual(reduced.outerRingDegrees, 0.0)
+        XCTAssertEqual(reduced.primaryRippleOpacity, 0.0)
+        XCTAssertEqual(reduced.secondaryRippleOpacity, 0.0)
+
+        var maxPrimaryOpacity = 0.0
+        var maxPrimaryScale: CGFloat = 0
+        for step in 0..<100 {
+            let t = Double(step) * 0.05
+            let sample = ScanReadyHeroMotion.evaluate(elapsed: t, isAnimating: true)
+            XCTAssertGreaterThanOrEqual(sample.coreBreathScale, 0.98)
+            XCTAssertLessThanOrEqual(sample.coreBreathScale, 1.02)
+            XCTAssertGreaterThanOrEqual(sample.glowScale, 0.95)
+            XCTAssertLessThanOrEqual(sample.glowScale, 1.05)
+            XCTAssertGreaterThanOrEqual(sample.outerRingDegrees, 0.0)
+            XCTAssertLessThan(sample.outerRingDegrees, 360.0)
+            XCTAssertGreaterThanOrEqual(sample.primaryRippleOpacity, 0.0)
+            XCTAssertLessThanOrEqual(sample.primaryRippleOpacity, 1.0)
+            XCTAssertGreaterThanOrEqual(sample.secondaryRippleOpacity, 0.0)
+            XCTAssertLessThanOrEqual(sample.secondaryRippleOpacity, 1.0)
+            maxPrimaryOpacity = max(maxPrimaryOpacity, sample.primaryRippleOpacity)
+            maxPrimaryScale = max(maxPrimaryScale, sample.primaryRippleScale)
+        }
+        XCTAssertGreaterThan(maxPrimaryOpacity, 0.5)
+        XCTAssertGreaterThan(maxPrimaryScale, 1.8)
+
+        // Quiet breathing tail at end of cycle (phase >= 0.82)
+        let tail = ScanReadyHeroMotion.evaluate(elapsed: 3.6 * 0.90, isAnimating: true)
+        XCTAssertEqual(tail.primaryRippleOpacity, 0.0)
+    }
+
+    @MainActor
+    func testScanReadyAndOrbitalHeroViewsLayoutInLightAndDarkModes() {
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+            let readyHost = NSHostingView(
+                rootView: ScanReadyHeroView(
+                    historicalFreedBytes: 8_703_180,
+                    isVisible: true,
+                    onStartScan: {},
+                    onOpenHistory: {}
+                )
+            )
+            readyHost.appearance = NSAppearance(named: appearanceName)
+            readyHost.frame = NSRect(x: 0, y: 0, width: 880, height: 660)
+            readyHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(readyHost.fittingSize.width, 0)
+            XCTAssertGreaterThan(readyHost.fittingSize.height, 0)
+
+            let scanningHost = NSHostingView(
+                rootView: OrbitalScannerHero(isVisible: true, onCancel: {})
+            )
+            scanningHost.appearance = NSAppearance(named: appearanceName)
+            scanningHost.frame = NSRect(x: 0, y: 0, width: 880, height: 660)
+            scanningHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(scanningHost.fittingSize.width, 0)
+            XCTAssertGreaterThan(scanningHost.fittingSize.height, 0)
+        }
     }
 
     @MainActor

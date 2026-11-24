@@ -8,6 +8,29 @@ enum SidebarSelection: Hashable {
     case client(String)
 }
 
+enum ItemAgeFilter: String, CaseIterable, Identifiable {
+    case all = "全部时间"
+    case olderThan7Days = "7 天前"
+    case olderThan30Days = "30 天前"
+    case olderThan90Days = "90 天前"
+
+    var id: String { rawValue }
+
+    func cutoffDate(relativeTo now: Date = Date()) -> Date? {
+        let calendar = Calendar.current
+        switch self {
+        case .all:
+            return nil
+        case .olderThan7Days:
+            return calendar.date(byAdding: .day, value: -7, to: now)
+        case .olderThan30Days:
+            return calendar.date(byAdding: .day, value: -30, to: now)
+        case .olderThan90Days:
+            return calendar.date(byAdding: .day, value: -90, to: now)
+        }
+    }
+}
+
 enum ItemSortOrder: String, CaseIterable, Identifiable {
     case sizeDescending = "按体积从大到小"
     case sizeAscending = "按体积从小到大"
@@ -34,6 +57,7 @@ final class CleanerViewModel {
 
     var searchText: String = ""
     var selectedCategory: ScanCategory? = nil
+    var selectedAgeFilter: ItemAgeFilter = .all
     var sortOrder: ItemSortOrder = .sizeDescending
     var selectedItemIDs: Set<String> = []
 
@@ -83,10 +107,30 @@ final class CleanerViewModel {
         }
     }
 
+    var categoryCounts: [ScanCategory: Int] {
+        var counts: [ScanCategory: Int] = [:]
+        for item in scopedItems {
+            counts[item.category, default: 0] += 1
+        }
+        return counts
+    }
+
+    func sessionCount(for summary: ClientScanSummary) -> Int {
+        summary.items.reduce(0) { $0 + ($1.category == .sessions ? 1 : 0) }
+    }
+
+    var totalSessionCount: Int {
+        (report?.allItems ?? []).reduce(0) { $0 + ($1.category == .sessions ? 1 : 0) }
+    }
+
     var filteredItems: [CleanableItem] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ageCutoff = selectedAgeFilter.cutoffDate()
         let filtered = scopedItems.filter { item in
             if let selectedCategory, item.category != selectedCategory {
+                return false
+            }
+            if let ageCutoff, item.modifiedAt >= ageCutoff {
                 return false
             }
             if trimmedQuery.isEmpty {

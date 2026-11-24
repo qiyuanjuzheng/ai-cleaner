@@ -10,7 +10,7 @@ struct SidebarView: View {
                 Section("总览") {
                     SidebarSummaryRow(
                         title: "全部可清理项",
-                        subtitle: "\(viewModel.report?.totalItemCount ?? 0) 项",
+                        subtitle: allOverviewSubtitle,
                         sizeBytes: viewModel.report?.totalSizeBytes ?? 0,
                         symbolName: "tray.full.fill",
                         tint: .accentColor
@@ -20,7 +20,7 @@ struct SidebarView: View {
 
                 Section {
                     if viewModel.builtInSummaries.isEmpty && !viewModel.isScanning {
-                        Text("本机暂未检测到可清理的 AI 客户端缓存")
+                        Text("本机暂未检测到可清理的 AI 客户端数据")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 4)
@@ -28,7 +28,7 @@ struct SidebarView: View {
                         ForEach(viewModel.builtInSummaries) { summary in
                             SidebarSummaryRow(
                                 title: summary.profile.name,
-                                subtitle: "\(summary.itemCount) 项",
+                                subtitle: subtitleText(for: summary),
                                 sizeBytes: summary.totalSizeBytes,
                                 symbolName: summary.profile.symbolName,
                                 tint: AppTheme.color(forAccentToken: summary.profile.accentToken)
@@ -141,6 +141,26 @@ struct SidebarView: View {
             .padding(12)
             .background(.ultraThinMaterial)
         }
+    }
+
+    private var allOverviewSubtitle: String {
+        let total = viewModel.report?.totalItemCount ?? 0
+        let sessions = viewModel.totalSessionCount
+        if sessions > 0 {
+            return "\(total) 项 · \(sessions) 条会话"
+        }
+        return "\(total) 项"
+    }
+
+    private func subtitleText(for summary: ClientScanSummary) -> String {
+        let sessions = viewModel.sessionCount(for: summary)
+        if sessions == 0 {
+            return "\(summary.itemCount) 项"
+        }
+        if sessions == summary.itemCount {
+            return "\(sessions) 条会话"
+        }
+        return "\(summary.itemCount) 项 · \(sessions) 条会话"
     }
 }
 

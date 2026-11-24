@@ -26,9 +26,9 @@ struct ItemRowView: View {
             .labelsHidden()
 
             HStack(alignment: .center, spacing: 12) {
-                Image(systemName: item.isDirectory ? "folder.fill" : "doc.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(item.isDirectory ? Color.accentColor.opacity(0.85) : Color.secondary)
+                Image(systemName: leadingSymbolName)
+                    .font(.system(size: 17))
+                    .foregroundStyle(leadingSymbolColor)
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -157,6 +157,20 @@ struct ItemRowView: View {
                 Label("复制完整路径", systemImage: "doc.on.doc")
             }
         }
+    }
+
+    private var leadingSymbolName: String {
+        if item.category == .sessions {
+            return item.isDirectory ? "bubble.left.and.bubble.right.fill" : "text.bubble.fill"
+        }
+        return item.isDirectory ? "folder.fill" : "doc.fill"
+    }
+
+    private var leadingSymbolColor: Color {
+        if item.category == .sessions {
+            return AppTheme.color(for: .sessions).opacity(0.88)
+        }
+        return item.isDirectory ? Color.accentColor.opacity(0.85) : Color.secondary
     }
 
     private var rowBackground: Color {

@@ -4,6 +4,8 @@ import SwiftUI
 enum AppTheme {
     static func color(for category: ScanCategory) -> Color {
         switch category {
+        case .sessions:
+            return .indigo
         case .cache:
             return .blue
         case .temporary:
@@ -27,6 +29,10 @@ enum AppTheme {
             return .cyan
         case "opencode":
             return .indigo
+        case "pi":
+            return Color(red: 0.78, green: 0.34, blue: 0.56)
+        case "gemini":
+            return Color(red: 0.28, green: 0.52, blue: 0.96)
         case "custom":
             return .teal
         default:

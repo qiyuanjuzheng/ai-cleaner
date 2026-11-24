@@ -98,7 +98,7 @@ struct ItemListView: View {
                         Image(systemName: "shield.lefthalf.filled")
                             .font(.caption)
                             .foregroundStyle(.green)
-                        Text("默认仅扫描缓存、日志与临时目录，自动排除登录态、API Key、核心配置与主数据库文件。")
+                        Text("覆盖各客户端聊天会话（支持按单条清理一次性对话）、缓存、日志与临时目录，自动排除登录态、API Key、核心配置、memory 与主数据库。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -125,7 +125,7 @@ struct ItemListView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("搜索名称、路径、客户端或类别…", text: $viewModel.searchText)
+                    TextField("搜索会话摘要、项目名、路径、客户端或类别…", text: $viewModel.searchText)
                         .textFieldStyle(.plain)
                     if !viewModel.searchText.isEmpty {
                         Button {
@@ -147,16 +147,17 @@ struct ItemListView: View {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.8)
                 )
-                .frame(minWidth: 200, maxWidth: 320)
+                .frame(minWidth: 240, maxWidth: .infinity)
 
-                HStack(spacing: 4) {
-                    categoryFilterButton(title: "全部", category: nil)
-                    ForEach(ScanCategory.allCases) { category in
-                        categoryFilterButton(title: category.displayName, category: category)
+                Picker("时间范围", selection: $viewModel.selectedAgeFilter) {
+                    ForEach(ItemAgeFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
                     }
                 }
-
-                Spacer(minLength: 8)
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 108)
+                .help("按最后修改时间筛选较早的一次性会话或临时文件")
 
                 Picker("排序", selection: $viewModel.sortOrder) {
                     ForEach(ItemSortOrder.allCases) { order in
@@ -165,15 +166,30 @@ struct ItemListView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(width: 150)
+                .frame(width: 152)
             }
 
-            HStack(spacing: 10) {
-                Text("当前显示 \(viewModel.filteredItems.count) 项（已勾选 \(viewModel.visibleSelectedCount) 项）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    categoryFilterButton(
+                        title: "全部",
+                        count: viewModel.scopedItems.count,
+                        category: nil
+                    )
+                    ForEach(ScanCategory.allCases) { category in
+                        categoryFilterButton(
+                            title: category.displayName,
+                            count: viewModel.categoryCounts[category] ?? 0,
+                            category: category
+                        )
+                    }
+                }
 
-                Spacer()
+                Spacer(minLength: 8)
+
+                Text("显示 \(viewModel.filteredItems.count) 项（已选 \(viewModel.visibleSelectedCount)）")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
 
                 Button("全选") {
                     viewModel.selectAllVisible()
@@ -189,7 +205,7 @@ struct ItemListView: View {
                 .controlSize(.small)
                 .disabled(viewModel.filteredItems.isEmpty)
 
-                Button("清空本页选择") {
+                Button("清空本页") {
                     viewModel.clearVisibleSelection()
                 }
                 .buttonStyle(.bordered)
@@ -199,27 +215,35 @@ struct ItemListView: View {
         }
     }
 
-    private func categoryFilterButton(title: String, category: ScanCategory?) -> some View {
+    private func categoryFilterButton(title: String, count: Int, category: ScanCategory?) -> some View {
         let isSelected = viewModel.selectedCategory == category
+        let pillColor: Color = category.map { AppTheme.color(for: $0) } ?? .accentColor
         return Button {
             viewModel.selectedCategory = category
         } label: {
-            Text(title)
-                .font(.caption.weight(isSelected ? .semibold : .regular))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-                )
-                .overlay(
-                    Capsule()
-                        .strokeBorder(
-                            isSelected ? Color.accentColor.opacity(0.55) : Color(nsColor: .separatorColor),
-                            lineWidth: 0.8
-                        )
-                )
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            HStack(spacing: 4) {
+                Text(title)
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.monospacedDigit())
+                        .opacity(isSelected ? 0.9 : 0.7)
+                }
+            }
+            .font(.caption.weight(isSelected ? .semibold : .regular))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(isSelected ? pillColor.opacity(0.16) : Color.clear)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(
+                        isSelected ? pillColor.opacity(0.55) : Color(nsColor: .separatorColor),
+                        lineWidth: 0.8
+                    )
+            )
+            .foregroundStyle(isSelected ? pillColor : .secondary)
         }
         .buttonStyle(.plain)
     }
@@ -240,15 +264,16 @@ struct ItemListView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if viewModel.filteredItems.isEmpty {
-            if !viewModel.searchText.isEmpty || viewModel.selectedCategory != nil {
+            if !viewModel.searchText.isEmpty || viewModel.selectedCategory != nil || viewModel.selectedAgeFilter != .all {
                 ContentUnavailableView {
                     Label("未找到匹配的条目", systemImage: "magnifyingglass")
                 } description: {
-                    Text("请调整搜索关键词或切换分类筛选条件。")
+                    Text("请调整搜索关键词、时间范围或分类筛选条件。")
                 } actions: {
                     Button("清除筛选条件") {
                         viewModel.searchText = ""
                         viewModel.selectedCategory = nil
+                        viewModel.selectedAgeFilter = .all
                     }
                     .buttonStyle(.bordered)
                 }

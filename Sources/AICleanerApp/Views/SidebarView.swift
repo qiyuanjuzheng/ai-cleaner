@@ -9,7 +9,7 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 极简品牌顶栏（固定高度，扫描态切换绝不引起侧边栏上下跳动）
+            // 极简品牌顶栏（固定 48pt 高度，扫描态切换绝不引起侧边栏上下跳动）
             HStack(spacing: 9) {
                 BrandLogoEmblem(isScanning: viewModel.isScanning)
 
@@ -32,8 +32,8 @@ struct SidebarView: View {
 
                     SidebarClientTile(
                         title: "全部 AI 客户端",
-                        cleanableBytes: viewModel.report?.totalSizeBytes ?? 0,
-                        protectedBytes: viewModel.report?.protectedSizeBytes ?? 0,
+                        cleanableBytesText: viewModel.reportTotalBytesText,
+                        hasProtectedOnly: (viewModel.report?.totalSizeBytes ?? 0) == 0 && (viewModel.report?.protectedSizeBytes ?? 0) > 0,
                         symbolName: "sparkles.rectangle.stack.fill",
                         tint: Color(red: 0.16, green: 0.80, blue: 0.60),
                         isSelected: viewModel.sidebarSelection == .allClients,
@@ -44,8 +44,8 @@ struct SidebarView: View {
 
                     SidebarClientTile(
                         title: "历史清理趋势",
-                        cleanableBytes: viewModel.totalHistoricalFreedBytes,
-                        protectedBytes: 0,
+                        cleanableBytesText: viewModel.totalHistoricalFreedBytesText,
+                        hasProtectedOnly: false,
                         symbolName: "chart.line.uptrend.xyaxis",
                         tint: Color(red: 0.24, green: 0.72, blue: 0.98),
                         isSelected: viewModel.sidebarSelection == .history,
@@ -69,30 +69,30 @@ struct SidebarView: View {
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                    } else if viewModel.isScanning && viewModel.builtInSummaries.isEmpty {
+                    } else if viewModel.isScanning && viewModel.builtInSidebarEntries.isEmpty {
                         Text("正在检索本机 AI 客户端…")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                    } else if viewModel.builtInSummaries.isEmpty {
+                    } else if viewModel.builtInSidebarEntries.isEmpty {
                         Text("暂未检测到已安装的 AI 客户端")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                     } else {
-                        ForEach(viewModel.builtInSummaries) { summary in
+                        ForEach(viewModel.builtInSidebarEntries) { entry in
                             SidebarClientTile(
-                                title: summary.profile.name,
-                                cleanableBytes: summary.totalSizeBytes,
-                                protectedBytes: summary.protectedSizeBytes,
-                                symbolName: summary.profile.symbolName,
-                                tint: AppTheme.color(forAccentToken: summary.profile.accentToken),
-                                isSelected: viewModel.sidebarSelection == .client(summary.id),
+                                title: entry.title,
+                                cleanableBytesText: entry.cleanableBytesText,
+                                hasProtectedOnly: entry.cleanableBytes == 0 && entry.protectedBytes > 0,
+                                symbolName: entry.symbolName,
+                                tint: AppTheme.color(forAccentToken: entry.accentToken),
+                                isSelected: viewModel.sidebarSelection == .client(entry.id),
                                 namespace: sidebarNamespace
                             ) {
-                                select(.client(summary.id))
+                                select(.client(entry.id))
                             }
                         }
                     }
@@ -139,7 +139,7 @@ struct SidebarView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                    } else if viewModel.customSummaries.isEmpty {
+                    } else if viewModel.customSidebarEntries.isEmpty {
                         ForEach(viewModel.customDirectories) { dir in
                             HStack(spacing: 2) {
                                 HStack(spacing: 9) {
@@ -173,21 +173,21 @@ struct SidebarView: View {
                             }
                         }
                     } else {
-                        ForEach(viewModel.customSummaries) { summary in
+                        ForEach(viewModel.customSidebarEntries) { entry in
                             HStack(spacing: 2) {
                                 SidebarClientTile(
-                                    title: summary.profile.name,
-                                    cleanableBytes: summary.totalSizeBytes,
-                                    protectedBytes: 0,
-                                    symbolName: summary.profile.symbolName,
+                                    title: entry.title,
+                                    cleanableBytesText: entry.cleanableBytesText,
+                                    hasProtectedOnly: false,
+                                    symbolName: entry.symbolName,
                                     tint: .teal,
-                                    isSelected: viewModel.sidebarSelection == .client(summary.id),
+                                    isSelected: viewModel.sidebarSelection == .client(entry.id),
                                     namespace: sidebarNamespace
                                 ) {
-                                    select(.client(summary.id))
+                                    select(.client(entry.id))
                                 }
 
-                                if let customID = summary.profile.customDirectoryID {
+                                if let customID = entry.customDirectoryID {
                                     Button {
                                         viewModel.removeCustomDirectory(id: customID)
                                     } label: {
@@ -200,28 +200,21 @@ struct SidebarView: View {
                                     .help("从扫描列表中移除（不删除磁盘文件）")
                                 }
                             }
-                            .contextMenu {
-                                if let customID = summary.profile.customDirectoryID {
-                                    Button("从列表移除（不删磁盘文件）", role: .destructive) {
-                                        viewModel.removeCustomDirectory(id: customID)
-                                    }
-                                }
-                            }
                         }
                     }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.84), value: viewModel.sidebarSelection)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: viewModel.sidebarSelection)
             }
 
-            // 极简底部安全状态行（固定高度）
+            // 极简底部安全状态行（固定 34pt 高度）
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.shield.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(AppTheme.color(for: .recommended))
-                if let scannedAt = viewModel.report?.scannedAt {
-                    Text("只读扫描 \(CleanerFormatting.formatTime(scannedAt))")
+                if !viewModel.reportScannedTimeText.isEmpty {
+                    Text("只读扫描 \(viewModel.reportScannedTimeText)")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -244,7 +237,6 @@ struct SidebarView: View {
     }
 
     private func select(_ selection: SidebarSelection) {
-        // 仅由侧边栏局部动画驱动荧光指示条滑行，不对主内容区施加全局弹簧 diff 动画，确保切换瞬时顺滑
         viewModel.sidebarSelection = selection
     }
 
@@ -267,8 +259,8 @@ struct SidebarView: View {
 
 private struct SidebarClientTile: View {
     let title: String
-    let cleanableBytes: Int64
-    let protectedBytes: Int64
+    let cleanableBytesText: String
+    let hasProtectedOnly: Bool
     let symbolName: String
     let tint: Color
     let isSelected: Bool
@@ -278,7 +270,6 @@ private struct SidebarClientTile: View {
 
     @State private var isHovered: Bool = false
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -295,12 +286,11 @@ private struct SidebarClientTile: View {
 
                 Spacer(minLength: 4)
 
-                if cleanableBytes > 0 {
-                    Text(CleanerFormatting.formatBytes(cleanableBytes))
+                if !cleanableBytesText.isEmpty {
+                    Text(cleanableBytesText)
                         .font(.caption.monospacedDigit().weight(isSelected || emphasizeBytesTint != nil ? .semibold : .regular))
                         .foregroundStyle(emphasizeBytesTint ?? (isSelected ? Color.primary : Color.secondary))
-                        .contentTransition(.numericText())
-                } else if protectedBytes > 0 {
+                } else if hasProtectedOnly {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 9.5))
                         .foregroundStyle(.quaternary)
@@ -319,7 +309,6 @@ private struct SidebarClientTile: View {
                         Capsule(style: .continuous)
                             .fill(tint)
                             .frame(width: 3, height: 16)
-                            .shadow(color: tint.opacity(0.75), radius: 4)
                             .padding(.leading, 2.5)
                             .matchedGeometryEffect(id: "sidebarActiveBar", in: namespace)
                     }
@@ -327,11 +316,9 @@ private struct SidebarClientTile: View {
             )
             .contentShape(RoundedRectangle(cornerRadius: 8.5, style: .continuous))
         }
-        .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.985))
+        .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
-                isHovered = hovering
-            }
+            isHovered = hovering
         }
     }
 

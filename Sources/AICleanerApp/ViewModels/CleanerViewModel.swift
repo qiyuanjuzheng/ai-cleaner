@@ -4,13 +4,13 @@ import Foundation
 import Observation
 import SwiftUI
 
-enum SidebarSelection: Hashable {
+enum SidebarSelection: Hashable, Sendable {
     case allClients
     case history
     case client(String)
 }
 
-enum ItemAgeFilter: String, CaseIterable, Identifiable {
+enum ItemAgeFilter: String, CaseIterable, Identifiable, Sendable {
     case all = "全部时间"
     case olderThan7Days = "7 天前"
     case olderThan30Days = "30 天前"
@@ -33,7 +33,7 @@ enum ItemAgeFilter: String, CaseIterable, Identifiable {
     }
 }
 
-enum ItemSortOrder: String, CaseIterable, Identifiable {
+enum ItemSortOrder: String, CaseIterable, Identifiable, Sendable {
     case sizeDescending = "按体积从大到小"
     case sizeAscending = "按体积从小到大"
     case modifiedDescending = "按修改时间最新"
@@ -41,6 +41,91 @@ enum ItemSortOrder: String, CaseIterable, Identifiable {
     case nameAscending = "按名称排序"
 
     var id: String { rawValue }
+}
+
+/// 单条扫描结果的预格式化展示数据（在后台线程一次性生成，杜绝列表渲染期加锁格式化或拼接字符串）
+struct PreparedItemPresentation: Sendable {
+    let sizeText: String
+    let dateText: String
+    let abbreviatedPath: String
+    let rowTooltip: String
+    let searchableLowercased: String
+
+    static func make(for item: CleanableItem, homeDirectory: URL) -> PreparedItemPresentation {
+        let sizeText = CleanerFormatting.formatBytes(item.sizeBytes)
+        let dateText = CleanerFormatting.formatDate(item.modifiedAt)
+        let abbreviatedPath = CleanerFormatting.abbreviatePath(item.url, homeDirectory: homeDirectory)
+        let rowTooltip = "\(item.safetyNote)\n路径：\(abbreviatedPath)"
+        let searchable = [
+            item.displayName,
+            item.fileName,
+            item.url.path,
+            item.clientName,
+            item.category.displayName,
+            item.recommendation.displayName,
+            item.safetyNote
+        ]
+        .joined(separator: "\u{1F}")
+        .lowercased()
+
+        return PreparedItemPresentation(
+            sizeText: sizeText,
+            dateText: dateText,
+            abbreviatedPath: abbreviatedPath,
+            rowTooltip: rowTooltip,
+            searchableLowercased: searchable
+        )
+    }
+}
+
+/// 侧边栏客户端行预计算模型（切换选中态时 O(1) 读取，不重复格式化或遍历条目）
+struct SidebarClientEntry: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let cleanableBytes: Int64
+    let cleanableBytesText: String
+    let protectedBytes: Int64
+    let symbolName: String
+    let accentToken: String
+    let customDirectoryID: UUID?
+}
+
+/// 扁平虚拟化列表中的分组头行模型
+struct SectionHeaderRow: Equatable, Sendable {
+    let recommendation: CleanupRecommendation
+    let itemCount: Int
+    let totalBytes: Int64
+    let totalBytesText: String
+    let isCollapsed: Bool
+    let isFirstSection: Bool
+}
+
+/// 扁平虚拟化列表中的单条文件行模型（纯值类型，供 `ItemRowContent: Equatable` 跳过无变化行重绘）
+struct ItemDisplayRow: Equatable, Sendable {
+    let id: String
+    let item: CleanableItem
+    let sizeText: String
+    let dateText: String
+    let abbreviatedPath: String
+    let rowTooltip: String
+    let showClientBadge: Bool
+    let relativeSizeFraction: Double
+    let position: RowCardPosition
+}
+
+/// 单层扁平 LazyVStack 行元素（彻底消除嵌套 ForEach 导致的跨标签大规模 diff）
+enum FlatListRow: Identifiable, Equatable, Sendable {
+    case sectionHeader(SectionHeaderRow)
+    case item(ItemDisplayRow)
+
+    var id: String {
+        switch self {
+        case let .sectionHeader(header):
+            return "header::\(header.recommendation.rawValue)"
+        case let .item(row):
+            return "item::\(row.id)"
+        }
+    }
 }
 
 @MainActor
@@ -53,9 +138,9 @@ final class CleanerViewModel {
     private let historyStore: CleanupHistoryStore
     private let safetyGuard: SafetyGuard
 
-    // MARK: - Nested Display Types
+    // MARK: - Nested Display & Cache Types
 
-    struct RecommendationSection: Identifiable {
+    struct RecommendationSection: Identifiable, Sendable {
         let recommendation: CleanupRecommendation
         let items: [CleanableItem]
         let totalBytes: Int64
@@ -70,11 +155,54 @@ final class CleanerViewModel {
         let totalBytes: Int64
     }
 
+    private struct CachedScopeData: Sendable {
+        let activeSummary: ClientScanSummary?
+        let headerTitle: String
+        let headerSubtitle: String
+        let scopedCleanableItems: [CleanableItem]
+        let scopedProtectedItems: [CleanableItem]
+        let scopedItems: [CleanableItem]
+        let scopedRecommendedItems: [CleanableItem]
+        let scopedReviewSuggestedItems: [CleanableItem]
+        let scopedRecommendedBytes: Int64
+        let scopedReviewSuggestedBytes: Int64
+        let scopedProtectedBytes: Int64
+        let scopedTotalFootprintBytes: Int64
+        let categoryCounts: [ScanCategory: Int]
+        let defaultSortedItems: [CleanableItem]
+        let defaultCleanableItems: [CleanableItem]
+        let defaultSections: [RecommendationSection]
+        let defaultMaxBytes: Int64
+        let defaultFlatRows: [FlatListRow]
+    }
+
+    private struct PreparedReportBundle: Sendable {
+        let report: ScanReport
+        let builtInSummaries: [ClientScanSummary]
+        let customSummaries: [ClientScanSummary]
+        let builtInSidebarEntries: [SidebarClientEntry]
+        let customSidebarEntries: [SidebarClientEntry]
+        let reportTotalBytesText: String
+        let reportScannedTimeText: String
+        let clientSummaryByID: [String: ClientScanSummary]
+        let allDisplayedItemsByID: [String: CleanableItem]
+        let presentationByID: [String: PreparedItemPresentation]
+        let scopeCache: [SidebarSelection: CachedScopeData]
+    }
+
     // MARK: - Published Source State
     var report: ScanReport? {
         didSet {
             guard !suppressCacheRebuild else { return }
-            rebuildReportCaches()
+            if let report {
+                let bundle = Self.buildPreparedReportBundle(
+                    from: report,
+                    homeDirectory: scanEngine.homeDirectory
+                )
+                applyPreparedReportBundle(bundle)
+            } else {
+                clearReportCaches()
+            }
         }
     }
     var customDirectories: [CustomScanDirectory] = []
@@ -95,40 +223,46 @@ final class CleanerViewModel {
     var sidebarSelection: SidebarSelection = .allClients {
         didSet {
             guard !suppressCacheRebuild, oldValue != sidebarSelection else { return }
-            if sidebarSelection != .history {
-                rebuildScopeCache()
+            if sidebarSelection == .history {
+                return
             }
+            // 从历史趋势页返回刚才浏览的同一个客户端标签时，零重建直接瞬时恢复
+            if sidebarSelection == activeListScopeSelection && hasAppliedCurrentScope {
+                return
+            }
+            activeListScopeSelection = sidebarSelection
+            applyScope(for: sidebarSelection, resetViewport: true)
         }
     }
 
     var searchText: String = "" {
         didSet {
             guard !suppressCacheRebuild, oldValue != searchText else { return }
-            rebuildFilterCache()
+            rebuildFilterCache(resetViewport: true)
         }
     }
     var selectedCategory: ScanCategory? = nil {
         didSet {
             guard !suppressCacheRebuild, oldValue != selectedCategory else { return }
-            rebuildFilterCache()
+            rebuildFilterCache(resetViewport: true)
         }
     }
     var selectedRecommendation: CleanupRecommendation? = nil {
         didSet {
             guard !suppressCacheRebuild, oldValue != selectedRecommendation else { return }
-            rebuildFilterCache()
+            rebuildFilterCache(resetViewport: true)
         }
     }
     var selectedAgeFilter: ItemAgeFilter = .all {
         didSet {
             guard !suppressCacheRebuild, oldValue != selectedAgeFilter else { return }
-            rebuildFilterCache()
+            rebuildFilterCache(resetViewport: true)
         }
     }
     var sortOrder: ItemSortOrder = .sizeDescending {
         didSet {
             guard !suppressCacheRebuild, oldValue != sortOrder else { return }
-            rebuildFilterCache()
+            rebuildFilterCache(resetViewport: true)
         }
     }
     var selectedItemIDs: Set<String> = [] {
@@ -137,7 +271,12 @@ final class CleanerViewModel {
             rebuildSelectionCache()
         }
     }
-    var collapsedSections: Set<CleanupRecommendation> = [.notRecommended]
+    var collapsedSections: Set<CleanupRecommendation> = CleanerViewModel.defaultCollapsedSections {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != collapsedSections else { return }
+            rebuildDisplayedRows(resetViewport: false)
+        }
+    }
 
     var isScanning: Bool = false
     var isCleaning: Bool = false
@@ -160,7 +299,14 @@ final class CleanerViewModel {
 
     private(set) var builtInSummaries: [ClientScanSummary] = []
     private(set) var customSummaries: [ClientScanSummary] = []
+    private(set) var builtInSidebarEntries: [SidebarClientEntry] = []
+    private(set) var customSidebarEntries: [SidebarClientEntry] = []
+    private(set) var reportTotalBytesText: String = "0 B"
+    private(set) var reportScannedTimeText: String = ""
+
     private(set) var activeSummary: ClientScanSummary? = nil
+    private(set) var headerTitleText: String = "全部 AI 客户端"
+    private(set) var headerSubtitleText: String = "只读扫描本机 AI 客户端空间占用"
 
     private(set) var scopedCleanableItems: [CleanableItem] = []
     private(set) var scopedProtectedItems: [CleanableItem] = []
@@ -177,7 +323,10 @@ final class CleanerViewModel {
     private(set) var filteredItems: [CleanableItem] = []
     private(set) var filteredCleanableItems: [CleanableItem] = []
     private(set) var displayedSections: [RecommendationSection] = []
+    private(set) var displayedRows: [FlatListRow] = []
     private(set) var maxDisplayedItemBytes: Int64 = 0
+    /// 仅在切换标签 / 筛选 / 排序时递增，让 ScrollView 瞬时重置顶部并彻底跳过千级条目 Collection Diff
+    private(set) var listViewportID: Int = 0
 
     private(set) var selectedItems: [CleanableItem] = []
     private(set) var selectedTotalBytes: Int64 = 0
@@ -187,10 +336,18 @@ final class CleanerViewModel {
 
     private(set) var historySummary: CleanupHistorySummary = CleanupHistoryAnalytics.summarize(records: [], range: .days30)
     private(set) var totalHistoricalFreedBytes: Int64 = 0
+    private(set) var totalHistoricalFreedBytesText: String = "0 B"
+
+    // MARK: - Internal Non-Observed Indexes
 
     @ObservationIgnored private var allDisplayedItemsByID: [String: CleanableItem] = [:]
     @ObservationIgnored private var clientSummaryByID: [String: ClientScanSummary] = [:]
+    @ObservationIgnored private var presentationByID: [String: PreparedItemPresentation] = [:]
+    @ObservationIgnored private var scopeCache: [SidebarSelection: CachedScopeData] = [:]
+    @ObservationIgnored private var activeListScopeSelection: SidebarSelection = .allClients
+    @ObservationIgnored private var hasAppliedCurrentScope: Bool = false
     @ObservationIgnored private var suppressCacheRebuild: Bool = false
+    @ObservationIgnored nonisolated private static let defaultCollapsedSections: Set<CleanupRecommendation> = [.notRecommended]
     @ObservationIgnored private static let appearanceStorageKey = "aiCleaner.appearanceMode.v2"
     @ObservationIgnored private static let builtInVisualLookup: [String: (symbolName: String, tint: Color)] = {
         Dictionary(
@@ -268,73 +425,111 @@ final class CleanerViewModel {
         !searchText.isEmpty || selectedCategory != nil || selectedRecommendation != nil || selectedAgeFilter != .all
     }
 
-    // MARK: - Cache Builders (Single-Pass, Strictly Scoped)
+    // MARK: - Off-Main-Thread Report & Scope Precomputation
 
-    private func rebuildReportCaches() {
-        guard let report else {
-            builtInSummaries = []
-            customSummaries = []
-            clientSummaryByID = [:]
-            allDisplayedItemsByID = [:]
-            rebuildScopeCache()
-            rebuildSelectionCache()
-            return
-        }
-
+    private nonisolated static func buildPreparedReportBundle(
+        from report: ScanReport,
+        homeDirectory: URL
+    ) -> PreparedReportBundle {
         var builtIn: [ClientScanSummary] = []
         var custom: [ClientScanSummary] = []
+        var builtInEntries: [SidebarClientEntry] = []
+        var customEntries: [SidebarClientEntry] = []
         var summaryMap: [String: ClientScanSummary] = [:]
         summaryMap.reserveCapacity(report.clientSummaries.count)
 
         for summary in report.clientSummaries {
             summaryMap[summary.id] = summary
+            let entry = SidebarClientEntry(
+                id: summary.id,
+                title: summary.profile.name,
+                cleanableBytes: summary.totalSizeBytes,
+                cleanableBytesText: summary.totalSizeBytes > 0 ? CleanerFormatting.formatBytes(summary.totalSizeBytes) : "",
+                protectedBytes: summary.protectedSizeBytes,
+                symbolName: summary.profile.symbolName,
+                accentToken: summary.profile.accentToken,
+                customDirectoryID: summary.profile.customDirectoryID
+            )
             if summary.profile.isCustom {
                 custom.append(summary)
+                customEntries.append(entry)
             } else {
                 builtIn.append(summary)
+                builtInEntries.append(entry)
             }
         }
 
-        builtInSummaries = builtIn
-        customSummaries = custom
-        clientSummaryByID = summaryMap
-
+        let allCleanable = report.allItems
+        let allProtected = report.allProtectedItems
         var itemMap: [String: CleanableItem] = [:]
-        let allDisplayed = report.allDisplayedItems
-        itemMap.reserveCapacity(allDisplayed.count)
-        for item in allDisplayed where itemMap[item.id] == nil {
-            itemMap[item.id] = item
-        }
-        allDisplayedItemsByID = itemMap
+        var presentationMap: [String: PreparedItemPresentation] = [:]
+        let estimatedTotal = allCleanable.count + allProtected.count
+        itemMap.reserveCapacity(estimatedTotal)
+        presentationMap.reserveCapacity(estimatedTotal)
 
-        rebuildScopeCache()
-        rebuildSelectionCache()
+        for item in allCleanable where itemMap[item.id] == nil {
+            itemMap[item.id] = item
+            presentationMap[item.id] = PreparedItemPresentation.make(for: item, homeDirectory: homeDirectory)
+        }
+        for item in allProtected where itemMap[item.id] == nil {
+            itemMap[item.id] = item
+            presentationMap[item.id] = PreparedItemPresentation.make(for: item, homeDirectory: homeDirectory)
+        }
+
+        // 一次性预构建「全部 AI 客户端」与每个客户端的默认作用域快照（含预排序分组与扁平展示行）
+        var scopeCache: [SidebarSelection: CachedScopeData] = [:]
+        scopeCache.reserveCapacity(report.clientSummaries.count + 1)
+
+        scopeCache[.allClients] = buildScopeData(
+            selection: .allClients,
+            report: report,
+            summary: nil,
+            cleanable: allCleanable,
+            protected: allProtected,
+            presentations: presentationMap,
+            homeDirectory: homeDirectory
+        )
+
+        for summary in report.clientSummaries {
+            scopeCache[.client(summary.id)] = buildScopeData(
+                selection: .client(summary.id),
+                report: report,
+                summary: summary,
+                cleanable: summary.items,
+                protected: summary.protectedItems,
+                presentations: presentationMap,
+                homeDirectory: homeDirectory
+            )
+        }
+
+        return PreparedReportBundle(
+            report: report,
+            builtInSummaries: builtIn,
+            customSummaries: custom,
+            builtInSidebarEntries: builtInEntries,
+            customSidebarEntries: customEntries,
+            reportTotalBytesText: report.totalSizeBytes > 0 ? CleanerFormatting.formatBytes(report.totalSizeBytes) : "",
+            reportScannedTimeText: CleanerFormatting.formatTime(report.scannedAt),
+            clientSummaryByID: summaryMap,
+            allDisplayedItemsByID: itemMap,
+            presentationByID: presentationMap,
+            scopeCache: scopeCache
+        )
     }
 
-    private func rebuildScopeCache() {
-        let cleanable: [CleanableItem]
-        let protected: [CleanableItem]
-
-        switch sidebarSelection {
-        case .allClients, .history:
-            activeSummary = nil
-            cleanable = report?.allItems ?? []
-            protected = report?.allProtectedItems ?? []
-        case let .client(clientID):
-            let summary = clientSummaryByID[clientID]
-            activeSummary = summary
-            cleanable = summary?.items ?? []
-            protected = summary?.protectedItems ?? []
-        }
-
-        scopedCleanableItems = cleanable
-        scopedProtectedItems = protected
-
+    private nonisolated static func buildScopeData(
+        selection: SidebarSelection,
+        report: ScanReport,
+        summary: ClientScanSummary?,
+        cleanable: [CleanableItem],
+        protected: [CleanableItem],
+        presentations: [String: PreparedItemPresentation],
+        homeDirectory: URL
+    ) -> CachedScopeData {
         var combined: [CleanableItem] = []
         combined.reserveCapacity(cleanable.count + protected.count)
         combined.append(contentsOf: cleanable)
         combined.append(contentsOf: protected)
-        scopedItems = combined
 
         var recItems: [CleanableItem] = []
         var revItems: [CleanableItem] = []
@@ -358,47 +553,52 @@ final class CleanerViewModel {
             proBytes += item.sizeBytes
         }
 
-        scopedRecommendedItems = recItems
-        scopedReviewSuggestedItems = revItems
-        scopedRecommendedBytes = recBytes
-        scopedReviewSuggestedBytes = revBytes
-        scopedProtectedBytes = proBytes
-        scopedTotalFootprintBytes = recBytes + revBytes + proBytes
-        categoryCounts = counts
+        let sorted = sortItems(combined, by: .sizeDescending)
+        let (defaultCleanable, defaultSections, defaultMaxBytes) = bucketItems(sorted)
+        let showClientBadge = (selection == .allClients)
+        let defaultFlatRows = buildFlatRows(
+            from: defaultSections,
+            maxBytes: defaultMaxBytes,
+            showClientBadge: showClientBadge,
+            selectedRecommendation: nil,
+            collapsedSections: defaultCollapsedSections,
+            presentations: presentations,
+            homeDirectory: homeDirectory
+        )
 
-        rebuildFilterCache()
-    }
-
-    private func rebuildFilterCache() {
-        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ageCutoff = selectedAgeFilter.cutoffDate()
-
-        let filtered = scopedItems.filter { item in
-            if let selectedRecommendation, item.recommendation != selectedRecommendation {
-                return false
-            }
-            if let selectedCategory, item.category != selectedCategory {
-                return false
-            }
-            if let ageCutoff {
-                if !item.isCleanable || item.modifiedAt >= ageCutoff {
-                    return false
-                }
-            }
-            if trimmedQuery.isEmpty {
-                return true
-            }
-            return item.displayName.localizedCaseInsensitiveContains(trimmedQuery)
-                || item.fileName.localizedCaseInsensitiveContains(trimmedQuery)
-                || item.url.path.localizedCaseInsensitiveContains(trimmedQuery)
-                || item.clientName.localizedCaseInsensitiveContains(trimmedQuery)
-                || item.category.displayName.localizedCaseInsensitiveContains(trimmedQuery)
-                || item.recommendation.displayName.localizedCaseInsensitiveContains(trimmedQuery)
-                || item.safetyNote.localizedCaseInsensitiveContains(trimmedQuery)
+        let headerTitle = summary?.profile.name ?? "全部 AI 客户端"
+        let headerSubtitle: String
+        if let summary {
+            headerSubtitle = "\(summary.profile.description) · 总占用 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
+        } else {
+            headerSubtitle = "已识别 \(report.detectedBuiltInClientsCount) 款 AI 客户端 · 总占用 \(CleanerFormatting.formatBytes(report.totalDiskFootprintBytes))"
         }
 
-        let sorted = filtered.sorted { lhs, rhs in
-            switch sortOrder {
+        return CachedScopeData(
+            activeSummary: summary,
+            headerTitle: headerTitle,
+            headerSubtitle: headerSubtitle,
+            scopedCleanableItems: cleanable,
+            scopedProtectedItems: protected,
+            scopedItems: combined,
+            scopedRecommendedItems: recItems,
+            scopedReviewSuggestedItems: revItems,
+            scopedRecommendedBytes: recBytes,
+            scopedReviewSuggestedBytes: revBytes,
+            scopedProtectedBytes: proBytes,
+            scopedTotalFootprintBytes: recBytes + revBytes + proBytes,
+            categoryCounts: counts,
+            defaultSortedItems: sorted,
+            defaultCleanableItems: defaultCleanable,
+            defaultSections: defaultSections,
+            defaultMaxBytes: defaultMaxBytes,
+            defaultFlatRows: defaultFlatRows
+        )
+    }
+
+    private nonisolated static func sortItems(_ items: [CleanableItem], by order: ItemSortOrder) -> [CleanableItem] {
+        items.sorted { lhs, rhs in
+            switch order {
             case .sizeDescending:
                 if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes > rhs.sizeBytes }
                 return lhs.modifiedAt > rhs.modifiedAt
@@ -415,10 +615,13 @@ final class CleanerViewModel {
                 return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
             }
         }
+    }
 
-        filteredItems = sorted
-
+    private nonisolated static func bucketItems(
+        _ sorted: [CleanableItem]
+    ) -> (cleanable: [CleanableItem], sections: [RecommendationSection], maxBytes: Int64) {
         var cleanable: [CleanableItem] = []
+        cleanable.reserveCapacity(sorted.count)
         var maxBytes: Int64 = 0
         var recBucket: [CleanableItem] = []
         var revBucket: [CleanableItem] = []
@@ -447,10 +650,8 @@ final class CleanerViewModel {
             }
         }
 
-        filteredCleanableItems = cleanable
-        maxDisplayedItemBytes = maxBytes
-
         var sections: [RecommendationSection] = []
+        sections.reserveCapacity(3)
         if !recBucket.isEmpty {
             sections.append(RecommendationSection(recommendation: .recommended, items: recBucket, totalBytes: recTotal))
         }
@@ -460,7 +661,285 @@ final class CleanerViewModel {
         if !proBucket.isEmpty {
             sections.append(RecommendationSection(recommendation: .notRecommended, items: proBucket, totalBytes: proTotal))
         }
+        return (cleanable, sections, maxBytes)
+    }
+
+    private nonisolated static func buildFlatRows(
+        from sections: [RecommendationSection],
+        maxBytes: Int64,
+        showClientBadge: Bool,
+        selectedRecommendation: CleanupRecommendation?,
+        collapsedSections: Set<CleanupRecommendation>,
+        presentations: [String: PreparedItemPresentation],
+        homeDirectory: URL
+    ) -> [FlatListRow] {
+        guard !sections.isEmpty else { return [] }
+        let safeMaxBytes = Double(max(1, maxBytes))
+        let totalVisibleEstimate = sections.reduce(sections.count) { partial, section in
+            let collapsed = (sections.count > 1 && selectedRecommendation != section.recommendation)
+                && collapsedSections.contains(section.recommendation)
+            return partial + (collapsed ? 0 : section.items.count)
+        }
+
+        var rows: [FlatListRow] = []
+        rows.reserveCapacity(totalVisibleEstimate)
+
+        for (sectionIndex, section) in sections.enumerated() {
+            let isCollapsed = (sections.count > 1 && selectedRecommendation != section.recommendation)
+                && collapsedSections.contains(section.recommendation)
+
+            rows.append(
+                .sectionHeader(
+                    SectionHeaderRow(
+                        recommendation: section.recommendation,
+                        itemCount: section.items.count,
+                        totalBytes: section.totalBytes,
+                        totalBytesText: CleanerFormatting.formatBytes(section.totalBytes),
+                        isCollapsed: isCollapsed,
+                        isFirstSection: sectionIndex == 0
+                    )
+                )
+            )
+
+            guard !isCollapsed else { continue }
+
+            let count = section.items.count
+            for (index, item) in section.items.enumerated() {
+                let position: RowCardPosition
+                if count == 1 {
+                    position = .single
+                } else if index == 0 {
+                    position = .first
+                } else if index == count - 1 {
+                    position = .last
+                } else {
+                    position = .middle
+                }
+
+                let presentation = presentations[item.id]
+                    ?? PreparedItemPresentation.make(for: item, homeDirectory: homeDirectory)
+
+                rows.append(
+                    .item(
+                        ItemDisplayRow(
+                            id: item.id,
+                            item: item,
+                            sizeText: presentation.sizeText,
+                            dateText: presentation.dateText,
+                            abbreviatedPath: presentation.abbreviatedPath,
+                            rowTooltip: presentation.rowTooltip,
+                            showClientBadge: showClientBadge,
+                            relativeSizeFraction: Double(item.sizeBytes) / safeMaxBytes,
+                            position: position
+                        )
+                    )
+                )
+            }
+        }
+        return rows
+    }
+
+    // MARK: - Main-Thread Cache Application (O(1) Scope Switch)
+
+    private func applyPreparedReportBundle(_ bundle: PreparedReportBundle) {
+        builtInSummaries = bundle.builtInSummaries
+        customSummaries = bundle.customSummaries
+        builtInSidebarEntries = bundle.builtInSidebarEntries
+        customSidebarEntries = bundle.customSidebarEntries
+        reportTotalBytesText = bundle.reportTotalBytesText
+        reportScannedTimeText = bundle.reportScannedTimeText
+        clientSummaryByID = bundle.clientSummaryByID
+        allDisplayedItemsByID = bundle.allDisplayedItemsByID
+        presentationByID = bundle.presentationByID
+        scopeCache = bundle.scopeCache
+
+        let targetScope: SidebarSelection = (sidebarSelection == .history) ? activeListScopeSelection : sidebarSelection
+        activeListScopeSelection = targetScope
+        applyScope(for: targetScope, resetViewport: true)
+        rebuildSelectionCache()
+    }
+
+    private func clearReportCaches() {
+        builtInSummaries = []
+        customSummaries = []
+        builtInSidebarEntries = []
+        customSidebarEntries = []
+        reportTotalBytesText = "0 B"
+        reportScannedTimeText = ""
+        clientSummaryByID = [:]
+        allDisplayedItemsByID = [:]
+        presentationByID = [:]
+        scopeCache = [:]
+        activeListScopeSelection = .allClients
+        hasAppliedCurrentScope = false
+
+        activeSummary = nil
+        headerTitleText = "全部 AI 客户端"
+        headerSubtitleText = "只读扫描本机 AI 客户端空间占用"
+        scopedCleanableItems = []
+        scopedProtectedItems = []
+        scopedItems = []
+        scopedRecommendedItems = []
+        scopedReviewSuggestedItems = []
+        scopedRecommendedBytes = 0
+        scopedReviewSuggestedBytes = 0
+        scopedProtectedBytes = 0
+        scopedTotalFootprintBytes = 0
+        categoryCounts = [:]
+        filteredItems = []
+        filteredCleanableItems = []
+        displayedSections = []
+        displayedRows = []
+        maxDisplayedItemBytes = 0
+        listViewportID &+= 1
+        rebuildSelectionCache()
+    }
+
+    private func applyScope(for selection: SidebarSelection, resetViewport: Bool) {
+        guard let cached = scopeCache[selection] ?? scopeCache[.allClients] else {
+            hasAppliedCurrentScope = false
+            activeSummary = nil
+            headerTitleText = "全部 AI 客户端"
+            headerSubtitleText = "只读扫描本机 AI 客户端空间占用"
+            scopedCleanableItems = []
+            scopedProtectedItems = []
+            scopedItems = []
+            scopedRecommendedItems = []
+            scopedReviewSuggestedItems = []
+            scopedRecommendedBytes = 0
+            scopedReviewSuggestedBytes = 0
+            scopedProtectedBytes = 0
+            scopedTotalFootprintBytes = 0
+            categoryCounts = [:]
+            filteredItems = []
+            filteredCleanableItems = []
+            displayedSections = []
+            displayedRows = []
+            maxDisplayedItemBytes = 0
+            if resetViewport { listViewportID &+= 1 }
+            return
+        }
+
+        hasAppliedCurrentScope = true
+        activeSummary = cached.activeSummary
+        headerTitleText = cached.headerTitle
+        headerSubtitleText = cached.headerSubtitle
+        scopedCleanableItems = cached.scopedCleanableItems
+        scopedProtectedItems = cached.scopedProtectedItems
+        scopedItems = cached.scopedItems
+        scopedRecommendedItems = cached.scopedRecommendedItems
+        scopedReviewSuggestedItems = cached.scopedReviewSuggestedItems
+        scopedRecommendedBytes = cached.scopedRecommendedBytes
+        scopedReviewSuggestedBytes = cached.scopedReviewSuggestedBytes
+        scopedProtectedBytes = cached.scopedProtectedBytes
+        scopedTotalFootprintBytes = cached.scopedTotalFootprintBytes
+        categoryCounts = cached.categoryCounts
+
+        // O(1) 零排序快速通道：默认筛选与默认排序下直接复用预构建快照
+        if !hasActiveFilters && sortOrder == .sizeDescending {
+            filteredItems = cached.defaultSortedItems
+            filteredCleanableItems = cached.defaultCleanableItems
+            displayedSections = cached.defaultSections
+            maxDisplayedItemBytes = cached.defaultMaxBytes
+
+            if collapsedSections == Self.defaultCollapsedSections {
+                displayedRows = cached.defaultFlatRows
+                if resetViewport { listViewportID &+= 1 }
+            } else {
+                rebuildDisplayedRows(resetViewport: resetViewport)
+            }
+            return
+        }
+
+        rebuildFilterCache(resetViewport: resetViewport)
+    }
+
+    private func rebuildFilterCache(resetViewport: Bool) {
+        let currentScope = scopeCache[activeListScopeSelection] ?? scopeCache[.allClients]
+
+        // 若筛选已清空且为默认排序，直接走 O(1) 缓存命中
+        if !hasActiveFilters && sortOrder == .sizeDescending, let currentScope {
+            filteredItems = currentScope.defaultSortedItems
+            filteredCleanableItems = currentScope.defaultCleanableItems
+            displayedSections = currentScope.defaultSections
+            maxDisplayedItemBytes = currentScope.defaultMaxBytes
+            if collapsedSections == Self.defaultCollapsedSections {
+                displayedRows = currentScope.defaultFlatRows
+                if resetViewport { listViewportID &+= 1 }
+            } else {
+                rebuildDisplayedRows(resetViewport: resetViewport)
+            }
+            return
+        }
+
+        let lowerQuery = searchText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let ageCutoff = selectedAgeFilter.cutoffDate()
+
+        // 当排序为默认「体积降序」时，直接遍历已排好序的 `defaultSortedItems`，过滤即有序，彻底跳过 O(N log N) 排序
+        let sourceItems = (sortOrder == .sizeDescending)
+            ? (currentScope?.defaultSortedItems ?? scopedItems)
+            : scopedItems
+
+        let filtered: [CleanableItem]
+        if lowerQuery.isEmpty && selectedRecommendation == nil && selectedCategory == nil && ageCutoff == nil {
+            filtered = sourceItems
+        } else {
+            filtered = sourceItems.filter { item in
+                if let selectedRecommendation, item.recommendation != selectedRecommendation {
+                    return false
+                }
+                if let selectedCategory, item.category != selectedCategory {
+                    return false
+                }
+                if let ageCutoff {
+                    if !item.isCleanable || item.modifiedAt >= ageCutoff {
+                        return false
+                    }
+                }
+                if lowerQuery.isEmpty {
+                    return true
+                }
+                if let presentation = presentationByID[item.id] {
+                    return presentation.searchableLowercased.contains(lowerQuery)
+                }
+                return item.displayName.localizedCaseInsensitiveContains(lowerQuery)
+                    || item.fileName.localizedCaseInsensitiveContains(lowerQuery)
+                    || item.url.path.localizedCaseInsensitiveContains(lowerQuery)
+            }
+        }
+
+        let sorted: [CleanableItem]
+        if sortOrder == .sizeDescending && currentScope != nil {
+            sorted = filtered
+        } else {
+            sorted = Self.sortItems(filtered, by: sortOrder)
+        }
+
+        let (cleanable, sections, maxBytes) = Self.bucketItems(sorted)
+        filteredItems = sorted
+        filteredCleanableItems = cleanable
         displayedSections = sections
+        maxDisplayedItemBytes = maxBytes
+
+        rebuildDisplayedRows(resetViewport: resetViewport)
+    }
+
+    private func rebuildDisplayedRows(resetViewport: Bool) {
+        let showClientBadge = (activeListScopeSelection == .allClients)
+        displayedRows = Self.buildFlatRows(
+            from: displayedSections,
+            maxBytes: maxDisplayedItemBytes,
+            showClientBadge: showClientBadge,
+            selectedRecommendation: selectedRecommendation,
+            collapsedSections: collapsedSections,
+            presentations: presentationByID,
+            homeDirectory: scanEngine.homeDirectory
+        )
+        if resetViewport {
+            listViewportID &+= 1
+        }
     }
 
     private func rebuildSelectionCache() {
@@ -515,7 +994,9 @@ final class CleanerViewModel {
     }
 
     private func rebuildHistoryCache() {
-        totalHistoricalFreedBytes = historyRecords.reduce(0) { $0 + $1.freedBytes }
+        let total = historyRecords.reduce(0) { $0 + $1.freedBytes }
+        totalHistoricalFreedBytes = total
+        totalHistoricalFreedBytesText = total > 0 ? CleanerFormatting.formatBytes(total) : ""
         historySummary = CleanupHistoryAnalytics.summarize(records: historyRecords, range: historyRange)
     }
 
@@ -552,11 +1033,11 @@ final class CleanerViewModel {
         selectedCategory = nil
         selectedRecommendation = nil
         selectedAgeFilter = .all
-        collapsedSections = [.notRecommended]
+        collapsedSections = Self.defaultCollapsedSections
         sidebarSelection = .allClients
         suppressCacheRebuild = false
 
-        rebuildReportCaches()
+        clearReportCaches()
     }
 
     func rescan() {
@@ -566,37 +1047,46 @@ final class CleanerViewModel {
 
         let engine = scanEngine
         let customDirs = customDirectories
+        let homeDir = scanEngine.homeDirectory
 
         scanTask = Task {
-            let newReport = await Task.detached(priority: .userInitiated) {
-                engine.scan(customDirectories: customDirs)
+            let bundle = await Task.detached(priority: .userInitiated) {
+                let newReport = engine.scan(customDirectories: customDirs)
+                return Self.buildPreparedReportBundle(from: newReport, homeDirectory: homeDir)
             }.value
 
             guard !Task.isCancelled else { return }
 
-            let validIDs = Set(newReport.allDisplayedItems.map(\.id))
+            let validIDs = Set(bundle.allDisplayedItemsByID.keys)
             self.suppressCacheRebuild = true
-            self.report = newReport
+            self.report = bundle.report
             self.isScanning = false
             self.selectedItemIDs.formIntersection(validIDs)
 
             if case let .client(clientID) = self.sidebarSelection,
-               !newReport.clientSummaries.contains(where: { $0.id == clientID }) {
+               bundle.clientSummaryByID[clientID] == nil {
                 self.sidebarSelection = .allClients
+            }
+            if case let .client(clientID) = self.activeListScopeSelection,
+               bundle.clientSummaryByID[clientID] == nil {
+                self.activeListScopeSelection = .allClients
             }
             self.suppressCacheRebuild = false
 
-            self.rebuildReportCaches()
+            self.applyPreparedReportBundle(bundle)
         }
     }
 
     func toggleRecommendationFilter(_ recommendation: CleanupRecommendation) {
+        suppressCacheRebuild = true
         if selectedRecommendation == recommendation {
             selectedRecommendation = nil
         } else {
             selectedRecommendation = recommendation
             collapsedSections.remove(recommendation)
         }
+        suppressCacheRebuild = false
+        rebuildFilterCache(resetViewport: true)
     }
 
     func isSectionCollapsed(_ recommendation: CleanupRecommendation) -> Bool {
@@ -621,7 +1111,7 @@ final class CleanerViewModel {
         selectedRecommendation = nil
         selectedAgeFilter = .all
         suppressCacheRebuild = false
-        rebuildFilterCache()
+        rebuildFilterCache(resetViewport: true)
     }
 
     func toggleSelection(for item: CleanableItem) {
@@ -648,6 +1138,10 @@ final class CleanerViewModel {
 
     func isSelected(_ item: CleanableItem) -> Bool {
         selectedItemIDs.contains(item.id)
+    }
+
+    func isSelected(itemID: String) -> Bool {
+        selectedItemIDs.contains(itemID)
     }
 
     /// 一键勾选当前视图下的全部「建议清理」项

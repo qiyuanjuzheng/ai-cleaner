@@ -5,9 +5,7 @@ import SwiftUI
 struct CleanupHistoryView: View {
     @Bindable var viewModel: CleanerViewModel
     @Namespace private var rangeNamespace
-    @Namespace private var modeNamespace
 
-    @State private var hoveredDate: Date? = nil
     @State private var chartRevealed: Bool = false
     @State private var showingClearAlert: Bool = false
 
@@ -18,19 +16,16 @@ struct CleanupHistoryView: View {
         viewModel.historySummary
     }
 
-    private var hoveredPoint: CleanupTrendPoint? {
-        guard let hoveredDate else { return nil }
-        return summary.points.min { lhs, rhs in
-            abs(lhs.date.timeIntervalSince(hoveredDate)) < abs(rhs.date.timeIntervalSince(hoveredDate))
-        }
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 headerRow
                 kpiStripCard
-                trendChartCard
+                HistoryTrendChartCard(
+                    viewModel: viewModel,
+                    summary: summary,
+                    chartRevealed: chartRevealed
+                )
 
                 if !summary.isEmpty {
                     bottomDetailGrid
@@ -41,14 +36,16 @@ struct CleanupHistoryView: View {
             .padding(.bottom, 24)
         }
         .onAppear {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.65, dampingFraction: 0.84)) {
-                chartRevealed = true
+            if !chartRevealed {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.36)) {
+                    chartRevealed = true
+                }
             }
         }
         .alert("清空全部历史清理统计？", isPresented: $showingClearAlert) {
             Button("取消", role: .cancel) {}
             Button("清空统计记录", role: .destructive) {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.20)) {
                     viewModel.clearAllHistoryRecords()
                 }
             }
@@ -71,15 +68,12 @@ struct CleanupHistoryView: View {
 
             Spacer(minLength: 8)
 
-            // 时间窗口滑动胶囊
+            // 时间窗口滑动胶囊（局部微动画，避免整页重排动画叠加）
             HStack(spacing: 2) {
                 ForEach(CleanupTrendRange.allCases) { range in
                     let isSelected = viewModel.historyRange == range
                     Button {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.80)) {
-                            viewModel.historyRange = range
-                            hoveredDate = nil
-                        }
+                        viewModel.historyRange = range
                     } label: {
                         Text(range.rawValue)
                             .font(.caption.weight(isSelected ? .semibold : .regular))
@@ -90,7 +84,7 @@ struct CleanupHistoryView: View {
                                 if isSelected {
                                     Capsule(style: .continuous)
                                         .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.white)
-                                        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.24 : 0.08), radius: 3, y: 1)
+                                        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.07), radius: 2, y: 1)
                                         .matchedGeometryEffect(id: "historyRangePill", in: rangeNamespace)
                                 }
                             }
@@ -109,6 +103,7 @@ struct CleanupHistoryView: View {
                     .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.65)
             )
             .fixedSize(horizontal: true, vertical: false)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.historyRange)
 
             if !summary.isEmpty {
                 Menu {
@@ -139,7 +134,7 @@ struct CleanupHistoryView: View {
         .frame(height: 44)
     }
 
-    // MARK: - 2. 统一三列玻璃指标条（克制零割裂）
+    // MARK: - 2. 统一三列玻璃指标条（克制零割裂，取消实时 backdrop 模糊）
 
     private var kpiStripCard: some View {
         HStack(spacing: 0) {
@@ -177,17 +172,13 @@ struct CleanupHistoryView: View {
         .frame(height: 92)
         .background(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
-                        .fill(AppTheme.glassCardFill(for: colorScheme))
-                )
+                .fill(AppTheme.glassHeroCardFill(for: colorScheme))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.85)
         )
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.05), radius: 10, y: 4)
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.045), radius: 10, y: 3)
     }
 
     private func kpiMetricCell(title: String, value: String, subtitle: String, accent: Color) -> some View {
@@ -196,7 +187,6 @@ struct CleanupHistoryView: View {
                 Circle()
                     .fill(accent)
                     .frame(width: 6.5, height: 6.5)
-                    .shadow(color: accent.opacity(0.65), radius: 3)
                 Text(title)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -205,7 +195,6 @@ struct CleanupHistoryView: View {
             Text(value)
                 .font(.system(.title, design: .rounded).weight(.bold).monospacedDigit())
                 .foregroundStyle(summary.isEmpty ? Color.secondary : Color.primary)
-                .contentTransition(.numericText())
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
@@ -226,314 +215,6 @@ struct CleanupHistoryView: View {
         Rectangle()
             .fill(AppTheme.hairlineDivider(for: colorScheme))
             .frame(width: 1, height: 48)
-    }
-
-    // MARK: - 3. 主趋势图玻璃卡片（Swift Charts 累计面积曲线 / 单日渐变柱状图）
-
-    private var trendChartCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let point = hoveredPoint, !summary.isEmpty {
-                        HStack(spacing: 8) {
-                            Text(CleanerFormatting.formatDay(point.date))
-                                .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
-                                .foregroundStyle(.primary)
-                            Text("当日 +\(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(AppTheme.color(for: .recommended))
-                                .contentTransition(.numericText())
-                        }
-
-                        Text("累计 \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : " · 当日无清理")")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text(viewModel.historyMetricMode == .cumulative ? "累计释放空间趋势" : "单日释放空间分布")
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        Text(summary.isEmpty ? "完成首次安全清理后将自动绘制空间趋势曲线" : "鼠标悬停图表可实时查看每日释放与累计体积")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(height: 36, alignment: .leading)
-
-                Spacer(minLength: 8)
-
-                // 曲线模式切换（累计释放 / 单日释放）
-                HStack(spacing: 2) {
-                    ForEach(CleanupTrendMetricMode.allCases) { mode in
-                        let isSelected = viewModel.historyMetricMode == mode
-                        Button {
-                            withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.80)) {
-                                viewModel.historyMetricMode = mode
-                            }
-                        } label: {
-                            Text(mode.rawValue)
-                                .font(.caption.weight(isSelected ? .semibold : .regular))
-                                .padding(.horizontal, 9)
-                                .frame(height: 24)
-                                .foregroundStyle(isSelected ? .primary : .secondary)
-                                .background {
-                                    if isSelected {
-                                        Capsule(style: .continuous)
-                                            .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.white)
-                                            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), radius: 2.5, y: 1)
-                                            .matchedGeometryEffect(id: "historyModePill", in: modeNamespace)
-                                    }
-                                }
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(2.5)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.045))
-                )
-                .fixedSize(horizontal: true, vertical: false)
-            }
-            .frame(height: 36)
-
-            if summary.isEmpty {
-                emptyChartPlaceholder
-            } else {
-                interactiveTrendChart
-                    .frame(height: 224)
-            }
-        }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 15, style: .continuous)
-                        .fill(AppTheme.glassCardFill(for: colorScheme))
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.85)
-        )
-        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.05), radius: 12, y: 4)
-    }
-
-    private var interactiveTrendChart: some View {
-        let points = summary.points
-        let isCumulative = viewModel.historyMetricMode == .cumulative
-        let emerald = AppTheme.color(for: .recommended)
-        let cyan = Color(red: 0.20, green: 0.74, blue: 0.96)
-        let maxRaw = points.map { isCumulative ? $0.cumulativeFreedBytes : $0.dailyFreedBytes }.max() ?? 0
-        let yUpper = max(Int64(1024), Int64(Double(maxRaw) * 1.15))
-
-        return Chart {
-            if isCumulative {
-                ForEach(points) { point in
-                    let yVal = chartRevealed ? point.cumulativeFreedBytes : 0
-                    AreaMark(
-                        x: .value("日期", point.date),
-                        y: .value("累计释放", yVal)
-                    )
-                    .interpolationMethod(.monotone)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [
-                                emerald.opacity(colorScheme == .dark ? 0.30 : 0.22),
-                                cyan.opacity(colorScheme == .dark ? 0.08 : 0.06),
-                                .clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-
-                    LineMark(
-                        x: .value("日期", point.date),
-                        y: .value("累计释放", yVal)
-                    )
-                    .interpolationMethod(.monotone)
-                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [emerald, cyan],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-
-                    if point.dailyFreedBytes > 0 {
-                        PointMark(
-                            x: .value("日期", point.date),
-                            y: .value("累计释放", yVal)
-                        )
-                        .symbolSize(34)
-                        .foregroundStyle(emerald)
-                    }
-                }
-            } else {
-                ForEach(points) { point in
-                    let yVal = chartRevealed ? point.dailyFreedBytes : 0
-                    BarMark(
-                        x: .value("日期", point.date, unit: .day),
-                        y: .value("当日释放", yVal)
-                    )
-                    .cornerRadius(4)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [emerald, cyan.opacity(0.85)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .opacity(hoveredPoint == nil || hoveredPoint?.id == point.id ? 0.92 : 0.38)
-                }
-            }
-
-            if let active = hoveredPoint {
-                let activeY = isCumulative ? active.cumulativeFreedBytes : active.dailyFreedBytes
-                RuleMark(x: .value("日期", active.date))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                    .foregroundStyle(Color.primary.opacity(colorScheme == .dark ? 0.30 : 0.22))
-
-                PointMark(
-                    x: .value("日期", active.date),
-                    y: .value("数值", activeY)
-                )
-                .symbolSize(90)
-                .foregroundStyle(emerald.opacity(0.28))
-
-                PointMark(
-                    x: .value("日期", active.date),
-                    y: .value("数值", activeY)
-                )
-                .symbolSize(38)
-                .foregroundStyle(colorScheme == .dark ? Color.white : emerald)
-            }
-        }
-        .chartYScale(domain: 0...yUpper)
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6))
-                    .foregroundStyle(AppTheme.hairlineDivider(for: colorScheme))
-                AxisValueLabel {
-                    if let bytes = value.as(Int64.self) {
-                        Text(bytes == 0 ? "0" : CleanerFormatting.formatBytes(bytes))
-                            .font(.system(size: 10.5).monospacedDigit())
-                            .foregroundStyle(Color.secondary.opacity(0.85))
-                    }
-                }
-            }
-        }
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6)) { value in
-                AxisValueLabel {
-                    if let date = value.as(Date.self) {
-                        Text(CleanerFormatting.formatShortMonthDay(date))
-                            .font(.system(size: 10.5).monospacedDigit())
-                            .foregroundStyle(Color.secondary.opacity(0.85))
-                    }
-                }
-            }
-        }
-        .chartOverlay { proxy in
-            GeometryReader { geometry in
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case let .active(location):
-                            guard let plotFrame = proxy.plotFrame else { return }
-                            let plotOriginX = geometry[plotFrame].origin.x
-                            let xPos = location.x - plotOriginX
-                            if xPos >= 0 && xPos <= proxy.plotSize.width,
-                               let date: Date = proxy.value(atX: xPos) {
-                                hoveredDate = date
-                            }
-                        case .ended:
-                            hoveredDate = nil
-                        }
-                    }
-            }
-        }
-        .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.84), value: viewModel.historyRange)
-        .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.84), value: viewModel.historyMetricMode)
-    }
-
-    private var emptyChartPlaceholder: some View {
-        ZStack {
-            // 极淡背景趋势参考虚线，让空态也具备精致视觉平衡
-            Canvas { context, size in
-                var path = Path()
-                let pts: [CGPoint] = [
-                    CGPoint(x: 0, y: size.height * 0.82),
-                    CGPoint(x: size.width * 0.22, y: size.height * 0.76),
-                    CGPoint(x: size.width * 0.45, y: size.height * 0.58),
-                    CGPoint(x: size.width * 0.70, y: size.height * 0.42),
-                    CGPoint(x: size.width, y: size.height * 0.24)
-                ]
-                path.move(to: pts[0])
-                for i in 1..<pts.count {
-                    let prev = pts[i - 1]
-                    let curr = pts[i]
-                    let midX = (prev.x + curr.x) * 0.5
-                    path.addCurve(
-                        to: curr,
-                        control1: CGPoint(x: midX, y: prev.y),
-                        control2: CGPoint(x: midX, y: curr.y)
-                    )
-                }
-                context.stroke(
-                    path,
-                    with: .color(AppTheme.color(for: .recommended).opacity(colorScheme == .dark ? 0.16 : 0.14)),
-                    style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 6])
-                )
-            }
-
-            VStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(AppTheme.color(for: .recommended).opacity(0.14))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(AppTheme.color(for: .recommended))
-                }
-
-                Text("暂无历史清理统计")
-                    .font(.headline)
-
-                Text("执行一次移入废纸篓操作后，这里将自动记录每次释放的磁盘体积与客户端分布。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
-
-                Button {
-                    withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.80)) {
-                        viewModel.sidebarSelection = .allClients
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "sparkles")
-                        Text("前往查看可清理项")
-                    }
-                }
-                .buttonStyle(
-                    GlowingPillButtonStyle(
-                        gradient: AppTheme.gradient(for: .recommended),
-                        glowColor: AppTheme.color(for: .recommended),
-                        compact: true
-                    )
-                )
-                .padding(.top, 4)
-            }
-        }
-        .frame(height: 224)
     }
 
     // MARK: - 4. 底部双栏：客户端累计释放排行 + 最近清理记录
@@ -594,19 +275,25 @@ struct CleanupHistoryView: View {
                                     .frame(width: 30, alignment: .trailing)
                             }
 
-                            GeometryReader { proxy in
-                                ZStack(alignment: .leading) {
-                                    Capsule()
-                                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.07 : 0.06))
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [visual.tint, visual.tint.opacity(0.65)],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
-                                            )
+                            // 纯 Canvas 零 GeometryReader 占比进度条
+                            Canvas { context, size in
+                                let radius = size.height / 2
+                                let trackColor = colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.06)
+                                context.fill(
+                                    Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius),
+                                    with: .color(trackColor)
+                                )
+                                let fillW = chartRevealed ? max(5, size.width * CGFloat(client.share)) : 0
+                                if fillW > 0 {
+                                    let fillRect = CGRect(x: 0, y: 0, width: min(size.width, fillW), height: size.height)
+                                    context.fill(
+                                        Path(roundedRect: fillRect, cornerRadius: radius),
+                                        with: .linearGradient(
+                                            Gradient(colors: [visual.tint, visual.tint.opacity(0.65)]),
+                                            startPoint: CGPoint(x: 0, y: size.height / 2),
+                                            endPoint: CGPoint(x: fillRect.maxX, y: size.height / 2)
                                         )
-                                        .frame(width: max(5, proxy.size.width * CGFloat(chartRevealed ? client.share : 0)))
+                                    )
                                 }
                             }
                             .frame(height: 3.5)
@@ -676,6 +363,331 @@ struct CleanupHistoryView: View {
     }
 }
 
+// MARK: - 3. 隔离的趋势图玻璃卡片（悬停光标仅局部重绘图表区，且吸附同日不重复触发状态变更）
+
+private struct HistoryTrendChartCard: View {
+    @Bindable var viewModel: CleanerViewModel
+    let summary: CleanupHistorySummary
+    let chartRevealed: Bool
+
+    @Namespace private var modeNamespace
+    @State private var hoveredPointDate: Date? = nil
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var hoveredPoint: CleanupTrendPoint? {
+        guard let hoveredPointDate else { return nil }
+        return summary.points.first { $0.date == hoveredPointDate }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let point = hoveredPoint, !summary.isEmpty {
+                        HStack(spacing: 8) {
+                            Text(CleanerFormatting.formatDay(point.date))
+                                .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.primary)
+                            Text("当日 +\(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(AppTheme.color(for: .recommended))
+                        }
+
+                        Text("累计 \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : " · 当日无清理")")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(viewModel.historyMetricMode == .cumulative ? "累计释放空间趋势" : "单日释放空间分布")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text(summary.isEmpty ? "完成首次安全清理后将自动绘制空间趋势曲线" : "鼠标悬停图表可实时查看每日释放与累计体积")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(height: 36, alignment: .leading)
+
+                Spacer(minLength: 8)
+
+                // 曲线模式切换（累计释放 / 单日释放）
+                HStack(spacing: 2) {
+                    ForEach(CleanupTrendMetricMode.allCases) { mode in
+                        let isSelected = viewModel.historyMetricMode == mode
+                        Button {
+                            viewModel.historyMetricMode = mode
+                        } label: {
+                            Text(mode.rawValue)
+                                .font(.caption.weight(isSelected ? .semibold : .regular))
+                                .padding(.horizontal, 9)
+                                .frame(height: 24)
+                                .foregroundStyle(isSelected ? .primary : .secondary)
+                                .background {
+                                    if isSelected {
+                                        Capsule(style: .continuous)
+                                            .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.white)
+                                            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.07), radius: 2, y: 1)
+                                            .matchedGeometryEffect(id: "historyModePill", in: modeNamespace)
+                                    }
+                                }
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(2.5)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.055 : 0.045))
+                )
+                .fixedSize(horizontal: true, vertical: false)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.historyMetricMode)
+            }
+            .frame(height: 36)
+
+            if summary.isEmpty {
+                emptyChartPlaceholder
+            } else {
+                interactiveTrendChart
+                    .frame(height: 224)
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(AppTheme.glassHeroCardFill(for: colorScheme))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.85)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.045), radius: 10, y: 3)
+        .onChange(of: viewModel.historyRange) { _, _ in
+            hoveredPointDate = nil
+        }
+    }
+
+    private var interactiveTrendChart: some View {
+        let points = summary.points
+        let isCumulative = viewModel.historyMetricMode == .cumulative
+        let emerald = AppTheme.color(for: .recommended)
+        let cyan = Color(red: 0.20, green: 0.74, blue: 0.96)
+        let maxRaw = points.map { isCumulative ? $0.cumulativeFreedBytes : $0.dailyFreedBytes }.max() ?? 0
+        let yUpper = max(Int64(1024), Int64(Double(maxRaw) * 1.15))
+
+        return Chart {
+            if isCumulative {
+                ForEach(points) { point in
+                    let yVal = chartRevealed ? point.cumulativeFreedBytes : 0
+                    AreaMark(
+                        x: .value("日期", point.date),
+                        y: .value("累计释放", yVal)
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                emerald.opacity(colorScheme == .dark ? 0.30 : 0.22),
+                                cyan.opacity(colorScheme == .dark ? 0.08 : 0.06),
+                                .clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+
+                    LineMark(
+                        x: .value("日期", point.date),
+                        y: .value("累计释放", yVal)
+                    )
+                    .interpolationMethod(.monotone)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [emerald, cyan],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+
+                    if point.dailyFreedBytes > 0 {
+                        PointMark(
+                            x: .value("日期", point.date),
+                            y: .value("累计释放", yVal)
+                        )
+                        .symbolSize(34)
+                        .foregroundStyle(emerald)
+                    }
+                }
+            } else {
+                ForEach(points) { point in
+                    let yVal = chartRevealed ? point.dailyFreedBytes : 0
+                    BarMark(
+                        x: .value("日期", point.date, unit: .day),
+                        y: .value("当日释放", yVal)
+                    )
+                    .cornerRadius(4)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [emerald, cyan.opacity(0.85)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .opacity(hoveredPointDate == nil || hoveredPointDate == point.date ? 0.92 : 0.38)
+                }
+            }
+
+            if let active = hoveredPoint {
+                let activeY = isCumulative ? active.cumulativeFreedBytes : active.dailyFreedBytes
+                RuleMark(x: .value("日期", active.date))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .foregroundStyle(Color.primary.opacity(colorScheme == .dark ? 0.30 : 0.22))
+
+                PointMark(
+                    x: .value("日期", active.date),
+                    y: .value("数值", activeY)
+                )
+                .symbolSize(90)
+                .foregroundStyle(emerald.opacity(0.28))
+
+                PointMark(
+                    x: .value("日期", active.date),
+                    y: .value("数值", activeY)
+                )
+                .symbolSize(38)
+                .foregroundStyle(colorScheme == .dark ? Color.white : emerald)
+            }
+        }
+        .chartYScale(domain: 0...yUpper)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6))
+                    .foregroundStyle(AppTheme.hairlineDivider(for: colorScheme))
+                AxisValueLabel {
+                    if let bytes = value.as(Int64.self) {
+                        Text(bytes == 0 ? "0" : CleanerFormatting.formatBytes(bytes))
+                            .font(.system(size: 10.5).monospacedDigit())
+                            .foregroundStyle(Color.secondary.opacity(0.85))
+                    }
+                }
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { value in
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(CleanerFormatting.formatShortMonthDay(date))
+                            .font(.system(size: 10.5).monospacedDigit())
+                            .foregroundStyle(Color.secondary.opacity(0.85))
+                    }
+                }
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case let .active(location):
+                            guard let plotFrame = proxy.plotFrame else { return }
+                            let plotOriginX = geometry[plotFrame].origin.x
+                            let xPos = location.x - plotOriginX
+                            if xPos >= 0 && xPos <= proxy.plotSize.width,
+                               let rawDate: Date = proxy.value(atX: xPos),
+                               let nearest = points.min(by: {
+                                   abs($0.date.timeIntervalSince(rawDate)) < abs($1.date.timeIntervalSince(rawDate))
+                               }) {
+                                if hoveredPointDate != nearest.date {
+                                    hoveredPointDate = nearest.date
+                                }
+                            }
+                        case .ended:
+                            if hoveredPointDate != nil {
+                                hoveredPointDate = nil
+                            }
+                        }
+                    }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: viewModel.historyRange)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: viewModel.historyMetricMode)
+    }
+
+    private var emptyChartPlaceholder: some View {
+        ZStack {
+            Canvas { context, size in
+                var path = Path()
+                let pts: [CGPoint] = [
+                    CGPoint(x: 0, y: size.height * 0.82),
+                    CGPoint(x: size.width * 0.22, y: size.height * 0.76),
+                    CGPoint(x: size.width * 0.45, y: size.height * 0.58),
+                    CGPoint(x: size.width * 0.70, y: size.height * 0.42),
+                    CGPoint(x: size.width, y: size.height * 0.24)
+                ]
+                path.move(to: pts[0])
+                for i in 1..<pts.count {
+                    let prev = pts[i - 1]
+                    let curr = pts[i]
+                    let midX = (prev.x + curr.x) * 0.5
+                    path.addCurve(
+                        to: curr,
+                        control1: CGPoint(x: midX, y: prev.y),
+                        control2: CGPoint(x: midX, y: curr.y)
+                    )
+                }
+                context.stroke(
+                    path,
+                    with: .color(AppTheme.color(for: .recommended).opacity(colorScheme == .dark ? 0.16 : 0.14)),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 6])
+                )
+            }
+
+            VStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(AppTheme.color(for: .recommended).opacity(0.14))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(AppTheme.color(for: .recommended))
+                }
+
+                Text("暂无历史清理统计")
+                    .font(.headline)
+
+                Text("执行一次移入废纸篓操作后，这里将自动记录每次释放的磁盘体积与客户端分布。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+
+                Button {
+                    viewModel.sidebarSelection = .allClients
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles")
+                        Text("前往查看可清理项")
+                    }
+                }
+                .buttonStyle(
+                    GlowingPillButtonStyle(
+                        gradient: AppTheme.gradient(for: .recommended),
+                        glowColor: AppTheme.color(for: .recommended),
+                        compact: true
+                    )
+                )
+                .padding(.top, 4)
+            }
+        }
+        .frame(height: 224)
+    }
+}
+
 // MARK: - 单条历史清理明细行（悬停显露删除单条记录图标）
 
 private struct HistoryLogRow: View {
@@ -684,7 +696,6 @@ private struct HistoryLogRow: View {
 
     @State private var isHovered: Bool = false
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -708,17 +719,22 @@ private struct HistoryLogRow: View {
 
             Spacer(minLength: 8)
 
-            Button(action: onDelete) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06)))
+            Group {
+                if isHovered {
+                    Button(action: onDelete) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("移除此条统计记录（不影响废纸篓文件）")
+                } else {
+                    Color.clear
+                }
             }
-            .buttonStyle(.plain)
-            .opacity(isHovered ? 1.0 : 0.0)
-            .allowsHitTesting(isHovered)
-            .help("移除此条统计记录（不影响废纸篓文件）")
+            .frame(width: 22, height: 22)
 
             VStack(alignment: .trailing, spacing: 2) {
                 Text("+\(CleanerFormatting.formatBytes(record.freedBytes))")
@@ -734,7 +750,6 @@ private struct HistoryLogRow: View {
         .padding(.horizontal, 14)
         .frame(height: 54)
         .background(isHovered ? Color.primary.opacity(colorScheme == .dark ? 0.04 : 0.03) : Color.clear)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
         .onHover { hovering in
             isHovered = hovering
         }

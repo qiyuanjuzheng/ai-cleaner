@@ -95,4 +95,35 @@ final class ScanEngineTests: XCTestCase {
         let emptySummary = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.name == "空草稿目录" }))
         XCTAssertTrue(emptySummary.items.isEmpty)
     }
+
+    func testPrecomputedSummaryAndReportTotalsMatchItemBreakdown() throws {
+        // 混合建议清理（缓存）、按需清理（近期会话）与受保护数据（skills），验证 O(1) 预计算汇总与明细完全一致
+        try sandbox.createFile(relativeToHome: ".claude/paste-cache/c1.txt", byteCount: 1_500)
+        try sandbox.createFile(relativeToHome: ".claude/projects/demo/session-recent.jsonl", byteCount: 2_300)
+        try sandbox.createFile(relativeToHome: ".claude/skills/my-skill/SKILL.md", byteCount: 4_100)
+        try sandbox.createFile(relativeToHome: "Library/Application Support/Cursor/GPUCache/data_0", byteCount: 6_200)
+
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let report = engine.scan()
+
+        for summary in report.clientSummaries {
+            XCTAssertEqual(summary.totalSizeBytes, summary.items.reduce(0) { $0 + $1.sizeBytes })
+            XCTAssertEqual(summary.recommendedSizeBytes, summary.recommendedItems.reduce(0) { $0 + $1.sizeBytes })
+            XCTAssertEqual(summary.reviewSuggestedSizeBytes, summary.reviewSuggestedItems.reduce(0) { $0 + $1.sizeBytes })
+            XCTAssertEqual(summary.protectedSizeBytes, summary.protectedItems.reduce(0) { $0 + $1.sizeBytes })
+            XCTAssertEqual(summary.totalDiskFootprintBytes, summary.totalSizeBytes + summary.protectedSizeBytes)
+            XCTAssertEqual(summary.recommendedItemCount, summary.recommendedItems.count)
+            XCTAssertEqual(summary.reviewSuggestedItemCount, summary.reviewSuggestedItems.count)
+        }
+
+        XCTAssertEqual(report.totalSizeBytes, 1_500 + 2_300 + 6_200)
+        XCTAssertEqual(report.recommendedSizeBytes, 1_500 + 6_200)
+        XCTAssertEqual(report.reviewSuggestedSizeBytes, 2_300)
+        XCTAssertEqual(report.protectedSizeBytes, 4_100)
+        XCTAssertEqual(report.totalDiskFootprintBytes, 1_500 + 2_300 + 6_200 + 4_100)
+        XCTAssertEqual(report.totalItemCount, 3)
+        XCTAssertEqual(report.totalRecommendedCount, 2)
+        XCTAssertEqual(report.totalReviewSuggestedCount, 1)
+        XCTAssertEqual(report.totalProtectedItemCount, 1)
+    }
 }

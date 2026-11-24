@@ -109,11 +109,7 @@ struct BottomActionBar: View {
         .frame(height: 48)
         .background(
             Capsule(style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    Capsule(style: .continuous)
-                        .fill(AppTheme.glassElevatedFill(for: colorScheme))
-                )
+                .fill(AppTheme.glassElevatedFill(for: colorScheme))
         )
         .overlay(
             Capsule(style: .continuous)
@@ -146,10 +142,8 @@ struct BottomActionBar: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button("查看趋势 →") {
-                                withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.80)) {
-                                    viewModel.dismissCleanupBanner()
-                                    viewModel.sidebarSelection = .history
-                                }
+                                viewModel.dismissCleanupBanner()
+                                viewModel.sidebarSelection = .history
                             }
                             .buttonStyle(.link)
                             .font(.caption.weight(.semibold))
@@ -188,11 +182,7 @@ struct BottomActionBar: View {
             .padding(.vertical, 10)
             .background(
                 Capsule(style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .fill(AppTheme.glassElevatedFill(for: colorScheme))
-                    )
+                    .fill(AppTheme.glassElevatedFill(for: colorScheme))
             )
             .overlay(
                 Capsule(style: .continuous)

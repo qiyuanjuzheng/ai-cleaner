@@ -29,6 +29,7 @@ struct AmbientAuroraBackdrop: View {
                 endRadius: 460
             )
         }
+        .drawingGroup(opaque: true)
         .ignoresSafeArea()
         .allowsHitTesting(false)
     }
@@ -39,17 +40,23 @@ struct AmbientAuroraBackdrop: View {
 struct ScanReadyHeroView: View {
     let totalBuiltInProfilesCount: Int
     let historicalFreedBytes: Int64
+    var isVisible: Bool = true
     let onStartScan: () -> Void
     let onOpenHistory: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    private var shouldAnimate: Bool {
+        isVisible && !reduceMotion && controlActiveState != .inactive
+    }
 
     var body: some View {
         VStack(spacing: 22) {
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { timeline in
-                let elapsed = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate
-                let breathe = reduceMotion ? 1.0 : (0.97 + 0.03 * sin(elapsed * 1.6))
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !shouldAnimate)) { timeline in
+                let elapsed = shouldAnimate ? timeline.date.timeIntervalSinceReferenceDate : 0.0
+                let breathe = shouldAnimate ? (0.97 + 0.03 * sin(elapsed * 1.6)) : 1.0
                 let slowRotation = Angle.degrees((elapsed * 9).truncatingRemainder(dividingBy: 360))
 
                 ZStack {
@@ -184,18 +191,24 @@ struct ScanReadyHeroView: View {
 // MARK: - 2B. 轨道雷达扫描核心动效（全盘只读扫描中 Hero）
 
 struct OrbitalScannerHero: View {
+    var isVisible: Bool = true
     var onCancel: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    private var shouldAnimate: Bool {
+        isVisible && !reduceMotion && controlActiveState != .inactive
+    }
 
     var body: some View {
         VStack(spacing: 22) {
-            TimelineView(.animation(paused: reduceMotion)) { timeline in
-                let elapsed = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate
+            TimelineView(.animation(paused: !shouldAnimate)) { timeline in
+                let elapsed = shouldAnimate ? timeline.date.timeIntervalSinceReferenceDate : 0.0
                 let sweepAngle = Angle.degrees((elapsed * 120).truncatingRemainder(dividingBy: 360))
                 let outerRotation = Angle.degrees((elapsed * 24).truncatingRemainder(dividingBy: 360))
                 let innerRotation = Angle.degrees((-elapsed * 40).truncatingRemainder(dividingBy: 360))
-                let pulse = reduceMotion ? 1.0 : (0.95 + 0.06 * sin(elapsed * 2.8))
+                let pulse = shouldAnimate ? (0.95 + 0.06 * sin(elapsed * 2.8)) : 1.0
 
                 ZStack {
                     Circle()
@@ -312,6 +325,7 @@ struct StorageRingGauge: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
     @State private var appeared: Bool = false
 
     private struct RingMetrics: Equatable {
@@ -379,10 +393,6 @@ struct StorageRingGauge: View {
                         )
                         .frame(width: 90, height: 90)
                         .rotationEffect(.degrees(-90))
-                        .shadow(
-                            color: AppTheme.color(for: .recommended).opacity(highlightedTier == .recommended ? 0.65 : 0.30),
-                            radius: highlightedTier == .recommended ? 8 : 3
-                        )
                         .opacity(dimOpacity(for: .recommended))
                 }
 
@@ -395,10 +405,6 @@ struct StorageRingGauge: View {
                         )
                         .frame(width: 90, height: 90)
                         .rotationEffect(.degrees(-90))
-                        .shadow(
-                            color: AppTheme.color(for: .reviewSuggested).opacity(highlightedTier == .reviewSuggested ? 0.65 : 0.25),
-                            radius: highlightedTier == .reviewSuggested ? 8 : 3
-                        )
                         .opacity(dimOpacity(for: .reviewSuggested))
                 }
 
@@ -415,7 +421,7 @@ struct StorageRingGauge: View {
                 }
             }
 
-            if isScanning && !reduceMotion {
+            if isScanning && !reduceMotion && controlActiveState != .inactive {
                 TimelineView(.animation) { timeline in
                     let angle = (timeline.date.timeIntervalSinceReferenceDate * 220).truncatingRemainder(dividingBy: 360)
                     Circle()
@@ -430,7 +436,6 @@ struct StorageRingGauge: View {
                         )
                         .frame(width: 102, height: 102)
                         .rotationEffect(.degrees(angle))
-                        .shadow(color: Color(red: 0.18, green: 0.90, blue: 0.68).opacity(0.75), radius: 4)
                 }
             }
 
@@ -441,7 +446,6 @@ struct StorageRingGauge: View {
                 Text(CleanerFormatting.formatBytes(centerBytes))
                     .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(centerColor)
-                    .contentTransition(.numericText())
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
@@ -449,15 +453,15 @@ struct StorageRingGauge: View {
         }
         .frame(width: 102, height: 102)
         .animation(
-            reduceMotion ? nil : .spring(response: 0.62, dampingFraction: 0.84),
+            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.86),
             value: metrics
         )
         .animation(
-            reduceMotion ? nil : .spring(response: 0.52, dampingFraction: 0.80),
+            reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.84),
             value: appeared
         )
         .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.20),
+            reduceMotion ? nil : .easeOut(duration: 0.16),
             value: highlightedTier
         )
         .onAppear {
@@ -635,10 +639,11 @@ struct AnimatedCheckbox: View {
 struct BrandLogoEmblem: View {
     var isScanning: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         ZStack {
-            if isScanning && !reduceMotion {
+            if isScanning && !reduceMotion && controlActiveState != .inactive {
                 TimelineView(.animation) { timeline in
                     let angle = (timeline.date.timeIntervalSinceReferenceDate * 180).truncatingRemainder(dividingBy: 360)
                     RoundedRectangle(cornerRadius: 9.5, style: .continuous)
@@ -687,6 +692,7 @@ struct BrandLogoEmblem: View {
 
 struct AuroraScanSweepBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         Group {
@@ -695,7 +701,7 @@ struct AuroraScanSweepBar: View {
                     .fill(AppTheme.brandGradient)
                     .opacity(0.70)
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: controlActiveState == .inactive)) { timeline in
                     let phase = (timeline.date.timeIntervalSinceReferenceDate * 0.78)
                         .truncatingRemainder(dividingBy: 1.0)
                     Canvas { context, size in

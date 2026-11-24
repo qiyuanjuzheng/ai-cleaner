@@ -76,9 +76,18 @@ public struct ClientScanSummary: Identifiable, Hashable, Sendable {
     public let profile: AIClientProfile
     /// 允许清理的条目（「建议清理」+「按需清理」）
     public let items: [CleanableItem]
-    /// 透明展示但锁定保护的「不建议清理」条目（绝不允许勾选或移入废纸篓）
+    /// 透明展示但锁定保护的「不建议清理」条目（默认不选，仅支持用户显式风险确认后手动移入废纸篓）
     public let protectedItems: [CleanableItem]
     public let skippedProtectedCount: Int
+
+    /// 预计算的可清理空间合计（建议清理 + 按需清理），确保侧边栏与头部渲染 O(1) 读取
+    public let totalSizeBytes: Int64
+    public let recommendedSizeBytes: Int64
+    public let reviewSuggestedSizeBytes: Int64
+    public let protectedSizeBytes: Int64
+    public let totalDiskFootprintBytes: Int64
+    public let recommendedItemCount: Int
+    public let reviewSuggestedItemCount: Int
 
     public var id: String { profile.id }
 
@@ -87,33 +96,12 @@ public struct ClientScanSummary: Identifiable, Hashable, Sendable {
         items + protectedItems
     }
 
-    /// 可清理空间合计（建议清理 + 按需清理）
-    public var totalSizeBytes: Int64 {
-        items.reduce(0) { $0 + $1.sizeBytes }
-    }
-
     public var recommendedItems: [CleanableItem] {
         items.filter { $0.recommendation == .recommended }
     }
 
     public var reviewSuggestedItems: [CleanableItem] {
         items.filter { $0.recommendation == .reviewSuggested }
-    }
-
-    public var recommendedSizeBytes: Int64 {
-        recommendedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    public var reviewSuggestedSizeBytes: Int64 {
-        reviewSuggestedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    public var protectedSizeBytes: Int64 {
-        protectedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    public var totalDiskFootprintBytes: Int64 {
-        totalSizeBytes + protectedSizeBytes
     }
 
     public var itemCount: Int {
@@ -134,6 +122,32 @@ public struct ClientScanSummary: Identifiable, Hashable, Sendable {
         self.items = items
         self.protectedItems = protectedItems
         self.skippedProtectedCount = skippedProtectedCount
+
+        var recBytes: Int64 = 0
+        var revBytes: Int64 = 0
+        var recCount = 0
+        var revCount = 0
+        for item in items {
+            if item.recommendation == .recommended {
+                recBytes += item.sizeBytes
+                recCount += 1
+            } else {
+                revBytes += item.sizeBytes
+                revCount += 1
+            }
+        }
+        var proBytes: Int64 = 0
+        for item in protectedItems {
+            proBytes += item.sizeBytes
+        }
+
+        self.recommendedSizeBytes = recBytes
+        self.reviewSuggestedSizeBytes = revBytes
+        self.totalSizeBytes = recBytes + revBytes
+        self.protectedSizeBytes = proBytes
+        self.totalDiskFootprintBytes = recBytes + revBytes + proBytes
+        self.recommendedItemCount = recCount
+        self.reviewSuggestedItemCount = revCount
     }
 }
 
@@ -144,6 +158,17 @@ public struct ScanReport: Sendable {
     public let totalBuiltInProfilesCount: Int
     public let detectedBuiltInClientsCount: Int
     public let skippedProtectedCount: Int
+
+    /// 预计算全局体积与条目计数（O(1) 读取，避免切换视图时重复遍历数千条目）
+    public let totalSizeBytes: Int64
+    public let recommendedSizeBytes: Int64
+    public let reviewSuggestedSizeBytes: Int64
+    public let protectedSizeBytes: Int64
+    public let totalDiskFootprintBytes: Int64
+    public let totalItemCount: Int
+    public let totalRecommendedCount: Int
+    public let totalReviewSuggestedCount: Int
+    public let totalProtectedItemCount: Int
 
     /// 所有可清理条目（建议清理 + 按需清理）
     public var allItems: [CleanableItem] {
@@ -160,42 +185,6 @@ public struct ScanReport: Sendable {
         clientSummaries.flatMap(\.allDisplayedItems)
     }
 
-    public var totalSizeBytes: Int64 {
-        clientSummaries.reduce(0) { $0 + $1.totalSizeBytes }
-    }
-
-    public var recommendedSizeBytes: Int64 {
-        clientSummaries.reduce(0) { $0 + $1.recommendedSizeBytes }
-    }
-
-    public var reviewSuggestedSizeBytes: Int64 {
-        clientSummaries.reduce(0) { $0 + $1.reviewSuggestedSizeBytes }
-    }
-
-    public var protectedSizeBytes: Int64 {
-        clientSummaries.reduce(0) { $0 + $1.protectedSizeBytes }
-    }
-
-    public var totalDiskFootprintBytes: Int64 {
-        totalSizeBytes + protectedSizeBytes
-    }
-
-    public var totalItemCount: Int {
-        clientSummaries.reduce(0) { $0 + $1.itemCount }
-    }
-
-    public var totalRecommendedCount: Int {
-        clientSummaries.reduce(0) { $0 + $1.recommendedItems.count }
-    }
-
-    public var totalReviewSuggestedCount: Int {
-        clientSummaries.reduce(0) { $0 + $1.reviewSuggestedItems.count }
-    }
-
-    public var totalProtectedItemCount: Int {
-        clientSummaries.reduce(0) { $0 + $1.protectedItemCount }
-    }
-
     public init(
         scannedAt: Date = Date(),
         clientSummaries: [ClientScanSummary],
@@ -208,5 +197,35 @@ public struct ScanReport: Sendable {
         self.totalBuiltInProfilesCount = totalBuiltInProfilesCount
         self.detectedBuiltInClientsCount = detectedBuiltInClientsCount
         self.skippedProtectedCount = skippedProtectedCount
+
+        var totalBytes: Int64 = 0
+        var recBytes: Int64 = 0
+        var revBytes: Int64 = 0
+        var proBytes: Int64 = 0
+        var itemCount = 0
+        var recCount = 0
+        var revCount = 0
+        var proCount = 0
+
+        for summary in clientSummaries {
+            totalBytes += summary.totalSizeBytes
+            recBytes += summary.recommendedSizeBytes
+            revBytes += summary.reviewSuggestedSizeBytes
+            proBytes += summary.protectedSizeBytes
+            itemCount += summary.itemCount
+            recCount += summary.recommendedItemCount
+            revCount += summary.reviewSuggestedItemCount
+            proCount += summary.protectedItemCount
+        }
+
+        self.totalSizeBytes = totalBytes
+        self.recommendedSizeBytes = recBytes
+        self.reviewSuggestedSizeBytes = revBytes
+        self.protectedSizeBytes = proBytes
+        self.totalDiskFootprintBytes = totalBytes + proBytes
+        self.totalItemCount = itemCount
+        self.totalRecommendedCount = recCount
+        self.totalReviewSuggestedCount = revCount
+        self.totalProtectedItemCount = proCount
     }
 }

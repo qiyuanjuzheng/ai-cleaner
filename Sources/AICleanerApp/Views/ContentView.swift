@@ -4,9 +4,13 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: CleanerViewModel
+    @State private var hasVisitedHistory: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let isHistory = viewModel.sidebarSelection == .history
+
         NavigationSplitView {
             SidebarView(viewModel: viewModel)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 252, max: 300)
@@ -14,7 +18,7 @@ struct ContentView: View {
             ZStack(alignment: .bottom) {
                 AmbientAuroraBackdrop(accentColor: viewModel.activeAccentColor)
                     .animation(
-                        reduceMotion ? nil : .easeInOut(duration: 0.35),
+                        reduceMotion ? nil : .easeOut(duration: 0.20),
                         value: viewModel.sidebarSelection
                     )
 
@@ -36,23 +40,30 @@ struct ContentView: View {
                         }
                         .padding(.horizontal, 18)
                         .padding(.vertical, 9)
-                        .background(.ultraThinMaterial)
+                        .background(AppTheme.glassElevatedFill(for: colorScheme))
                         .overlay(alignment: .bottom) { Divider() }
                     }
 
-                    if viewModel.sidebarSelection == .history {
-                        CleanupHistoryView(viewModel: viewModel)
+                    // 列表页与历史趋势页使用 ZStack 保活切换，彻底消除切页时重建 ScrollView 与 Swift Charts 的卡顿
+                    ZStack {
+                        ItemListView(viewModel: viewModel, isVisible: !isHistory)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .transition(.opacity)
-                    } else {
-                        ItemListView(viewModel: viewModel)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .transition(.opacity)
+                            .opacity(isHistory ? 0 : 1)
+                            .allowsHitTesting(!isHistory)
+                            .accessibilityHidden(isHistory)
+
+                        if hasVisitedHistory || isHistory {
+                            CleanupHistoryView(viewModel: viewModel)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .opacity(isHistory ? 1 : 0)
+                                .allowsHitTesting(isHistory)
+                                .accessibilityHidden(!isHistory)
+                        }
                     }
                 }
 
                 // 智能悬浮操作岛（仅在清理列表视图、勾选或清理完成时轻盈浮现）
-                if viewModel.sidebarSelection != .history {
+                if !isHistory {
                     BottomActionBar(viewModel: viewModel)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 18)
@@ -64,9 +75,7 @@ struct ContentView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
-                        viewModel.appearanceMode = viewModel.appearanceMode.next
-                    }
+                    viewModel.appearanceMode = viewModel.appearanceMode.next
                 } label: {
                     Label(viewModel.appearanceMode.rawValue, systemImage: viewModel.appearanceMode.symbolName)
                 }
@@ -128,7 +137,15 @@ struct ContentView: View {
             )
         }
         .onAppear {
+            if viewModel.sidebarSelection == .history {
+                hasVisitedHistory = true
+            }
             applyWindowAppearance(viewModel.appearanceMode)
+        }
+        .onChange(of: viewModel.sidebarSelection) { _, newValue in
+            if newValue == .history && !hasVisitedHistory {
+                hasVisitedHistory = true
+            }
         }
         .onChange(of: viewModel.appearanceMode) { _, newMode in
             applyWindowAppearance(newMode)

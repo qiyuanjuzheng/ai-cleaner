@@ -173,16 +173,37 @@ enum AppTheme {
             : Color(red: 0.952, green: 0.960, blue: 0.976)
     }
 
+    static func glassHeroCardFill(for colorScheme: ColorScheme) -> LinearGradient {
+        if colorScheme == .dark {
+            return LinearGradient(
+                colors: [
+                    Color(red: 0.115, green: 0.128, blue: 0.168).opacity(0.90),
+                    Color(red: 0.085, green: 0.096, blue: 0.130).opacity(0.86)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        return LinearGradient(
+            colors: [
+                Color.white.opacity(0.95),
+                Color(red: 0.985, green: 0.990, blue: 0.998).opacity(0.90)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     static func glassCardFill(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
-            ? Color.white.opacity(0.042)
-            : Color.white.opacity(0.88)
+            ? Color(red: 0.105, green: 0.116, blue: 0.152).opacity(0.76)
+            : Color.white.opacity(0.90)
     }
 
     static func glassElevatedFill(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
-            ? Color(red: 0.095, green: 0.108, blue: 0.145).opacity(0.92)
-            : Color.white.opacity(0.96)
+            ? Color(red: 0.105, green: 0.118, blue: 0.158).opacity(0.95)
+            : Color.white.opacity(0.97)
     }
 
     static func hairlineDivider(for colorScheme: ColorScheme) -> Color {
@@ -282,7 +303,7 @@ struct GlowingPillButtonStyle: ButtonStyle {
                             )
                     }
 
-                    if !reduceMotion && isEnabled {
+                    if isHovered && !reduceMotion && isEnabled {
                         GeometryReader { proxy in
                             LinearGradient(
                                 colors: [

@@ -1,7 +1,7 @@
 import AICleanerCore
 import SwiftUI
 
-enum RowCardPosition {
+enum RowCardPosition: Equatable, Hashable, Sendable {
     case single
     case first
     case middle
@@ -20,23 +20,41 @@ enum RowCardPosition {
     }
 }
 
-struct ItemRowView: View {
-    let item: CleanableItem
-    let showClientBadge: Bool
-    let relativeSizeFraction: Double
+/// 轻量容器：仅订阅自身 `isSelected`，将纯值快照传递给 `Equatable` 渲染视图，避免勾选单行导致邻近行重绘
+struct ItemRowContainer: View {
+    let row: ItemDisplayRow
+    let viewModel: CleanerViewModel
+
+    var body: some View {
+        ItemRowView(
+            row: row,
+            isSelected: viewModel.isSelected(itemID: row.id),
+            viewModel: viewModel
+        )
+        .equatable()
+    }
+}
+
+struct ItemRowView: View, Equatable {
+    let row: ItemDisplayRow
     let isSelected: Bool
-    let position: RowCardPosition
-    let onToggle: () -> Void
-    let onRevealInFinder: () -> Void
-    let onCopyPath: () -> Void
+    let viewModel: CleanerViewModel
 
     @State private var isHovered: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    nonisolated static func == (lhs: ItemRowView, rhs: ItemRowView) -> Bool {
+        lhs.row == rhs.row
+            && lhs.isSelected == rhs.isSelected
+            && lhs.viewModel === rhs.viewModel
+    }
+
     var body: some View {
+        let item = row.item
         let recColor = AppTheme.color(for: item.recommendation)
-        let barWidth = max(2.5, min(44.0, 44.0 * CGFloat(relativeSizeFraction)))
+        let barWidth = max(2.5, min(44.0, 44.0 * CGFloat(row.relativeSizeFraction)))
+        let position = row.position
         let shape = UnevenRoundedRectangle(
             topLeadingRadius: position.topRadius,
             bottomLeadingRadius: position.bottomRadius,
@@ -49,12 +67,15 @@ struct ItemRowView: View {
             if item.isCleanable {
                 AnimatedCheckbox(
                     isChecked: isSelected,
-                    tint: recColor,
-                    onToggle: onToggle
-                )
+                    tint: recColor
+                ) {
+                    viewModel.toggleSelection(for: item)
+                }
             } else {
                 // 「不建议清理」项：未勾选时展示克制风险锁框，点击弹出风险提醒确认；已勾选则高亮警示勾选态
-                Button(action: onToggle) {
+                Button {
+                    viewModel.toggleSelection(for: item)
+                } label: {
                     ZStack {
                         RoundedRectangle(cornerRadius: 5.5, style: .continuous)
                             .fill(
@@ -87,11 +108,6 @@ struct ItemRowView: View {
                     .animation(reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.66), value: isSelected)
                 }
                 .buttonStyle(.plain)
-                .help(
-                    isSelected
-                        ? "取消勾选此「不建议清理」项"
-                        : "不建议清理：点击可弹出风险提醒并强制勾选"
-                )
             }
 
             HStack(alignment: .center, spacing: 11) {
@@ -120,7 +136,7 @@ struct ItemRowView: View {
                                 .foregroundStyle(recColor)
                         }
 
-                        if showClientBadge {
+                        if row.showClientBadge {
                             Text(item.clientName)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
@@ -137,30 +153,37 @@ struct ItemRowView: View {
 
                 Spacer(minLength: 10)
 
-                // 悬停才丝滑显露的 Finder 定位按钮（固定占位，数字列永不抖动）
-                Button(action: onRevealInFinder) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 26, height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06))
-                        )
+                // 悬停才挂载 Finder 定位按钮（固定 26×24 占位，零隐藏按钮/tooltip 开销且数字列永不抖动）
+                Group {
+                    if isHovered {
+                        Button {
+                            viewModel.revealInFinder(item)
+                        } label: {
+                            Image(systemName: "folder")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 26, height: 24)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("在 Finder 中显示：\(row.abbreviatedPath)")
+                    } else {
+                        Color.clear
+                    }
                 }
-                .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.92))
-                .opacity(isHovered ? 1.0 : 0.0)
-                .allowsHitTesting(isHovered)
-                .help("在 Finder 中显示：\(CleanerFormatting.abbreviatePath(item.url))")
+                .frame(width: 26, height: 24)
 
-                // 右侧对齐体积列 + 无 GeometryReader 零开销 2.5pt 占比线
+                // 右侧对齐体积列 + 预格式化文本（零 Formatter 锁、零 GeometryReader）
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(CleanerFormatting.formatBytes(item.sizeBytes))
+                    Text(row.sizeText)
                         .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
                         .foregroundStyle(item.isCleanable ? .primary : .secondary)
 
                     HStack(spacing: 6) {
-                        Text(CleanerFormatting.formatDate(item.modifiedAt))
+                        Text(row.dateText)
                             .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(.tertiary)
 
@@ -181,15 +204,14 @@ struct ItemRowView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                onToggle()
+                viewModel.toggleSelection(for: item)
             }
         }
         .padding(.horizontal, 14)
         .frame(height: 54)
-        .background(
-            shape.fill(AppTheme.glassCardFill(for: colorScheme))
-                .overlay(shape.fill(rowOverlayTint))
-        )
+        .background {
+            shape.fill(effectiveRowFill)
+        }
         .overlay(alignment: .bottom) {
             if position.showsBottomDivider {
                 Rectangle()
@@ -203,19 +225,18 @@ struct ItemRowView: View {
             if position == .single {
                 shape.strokeBorder(borderColor, lineWidth: 0.75)
             } else {
-                // 仅绘制卡片外轮廓边线，相邻行之间绝不出现双层横线
+                // 仅绘制卡片外轮廓边线，相邻行之间绝不出现双层横线，且免除每行离屏 clipShape 遮罩开销
                 SeamlessGroupBorder(position: position, cornerRadius: 13)
                     .stroke(borderColor, lineWidth: 0.75)
             }
         }
-        .clipShape(shape)
-        .help("\(item.safetyNote)\n路径：\(CleanerFormatting.abbreviatePath(item.url))")
+        .help(row.rowTooltip)
         .onHover { hovering in
             isHovered = hovering
         }
         .contextMenu {
             Button {
-                onToggle()
+                viewModel.toggleSelection(for: item)
             } label: {
                 if item.isCleanable {
                     Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
@@ -229,17 +250,22 @@ struct ItemRowView: View {
 
             Divider()
 
-            Button(action: onRevealInFinder) {
+            Button {
+                viewModel.revealInFinder(item)
+            } label: {
                 Label("在 Finder 中显示", systemImage: "folder")
             }
 
-            Button(action: onCopyPath) {
+            Button {
+                viewModel.copyPath(item)
+            } label: {
                 Label("复制完整路径", systemImage: "doc.on.doc")
             }
         }
     }
 
     private var leadingSymbolName: String {
+        let item = row.item
         if !item.isCleanable {
             return "lock.shield"
         }
@@ -260,21 +286,35 @@ struct ItemRowView: View {
     }
 
     private var leadingSymbolColor: Color {
-        if !item.isCleanable {
+        if !row.item.isCleanable {
             return .secondary
         }
-        return AppTheme.color(for: item.category)
+        return AppTheme.color(for: row.item.category)
     }
 
-    private var rowOverlayTint: Color {
-        let recColor = AppTheme.color(for: item.recommendation)
+    private var effectiveRowFill: Color {
         if isSelected {
-            return recColor.opacity(colorScheme == .dark ? 0.10 : 0.08)
+            switch row.item.recommendation {
+            case .recommended:
+                return colorScheme == .dark
+                    ? Color(red: 0.085, green: 0.165, blue: 0.145)
+                    : Color(red: 0.945, green: 0.988, blue: 0.968)
+            case .reviewSuggested:
+                return colorScheme == .dark
+                    ? Color(red: 0.175, green: 0.135, blue: 0.095)
+                    : Color(red: 0.996, green: 0.968, blue: 0.925)
+            case .notRecommended:
+                return colorScheme == .dark
+                    ? Color(red: 0.175, green: 0.105, blue: 0.125)
+                    : Color(red: 0.995, green: 0.945, blue: 0.952)
+            }
         }
         if isHovered {
-            return Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.032)
+            return colorScheme == .dark
+                ? Color(red: 0.135, green: 0.148, blue: 0.190).opacity(0.84)
+                : Color(red: 0.965, green: 0.972, blue: 0.984)
         }
-        return Color.clear
+        return AppTheme.glassCardFill(for: colorScheme)
     }
 
     private var borderColor: Color {

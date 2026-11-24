@@ -53,20 +53,90 @@ final class CleanerViewModel {
     private let historyStore: CleanupHistoryStore
     private let safetyGuard: SafetyGuard
 
-    // MARK: - Published UI State
-    var report: ScanReport?
-    var customDirectories: [CustomScanDirectory] = []
-    var historyRecords: [CleanupHistoryRecord] = []
-    var historyRange: CleanupTrendRange = .days30
-    var historyMetricMode: CleanupTrendMetricMode = .cumulative
-    var sidebarSelection: SidebarSelection = .allClients
+    // MARK: - Nested Display Types
 
-    var searchText: String = ""
-    var selectedCategory: ScanCategory? = nil
-    var selectedRecommendation: CleanupRecommendation? = nil
-    var selectedAgeFilter: ItemAgeFilter = .all
-    var sortOrder: ItemSortOrder = .sizeDescending
-    var selectedItemIDs: Set<String> = []
+    struct RecommendationSection: Identifiable {
+        let recommendation: CleanupRecommendation
+        let items: [CleanableItem]
+        let totalBytes: Int64
+
+        var id: CleanupRecommendation { recommendation }
+    }
+
+    struct SelectedClientGroup: Identifiable {
+        let id: String
+        let clientName: String
+        let items: [CleanableItem]
+        let totalBytes: Int64
+    }
+
+    // MARK: - Published Source State
+    var report: ScanReport? {
+        didSet {
+            guard !suppressCacheRebuild else { return }
+            rebuildReportCaches()
+        }
+    }
+    var customDirectories: [CustomScanDirectory] = []
+    var historyRecords: [CleanupHistoryRecord] = [] {
+        didSet {
+            guard !suppressCacheRebuild else { return }
+            rebuildHistoryCache()
+        }
+    }
+    var historyRange: CleanupTrendRange = .days30 {
+        didSet {
+            guard !suppressCacheRebuild else { return }
+            rebuildHistoryCache()
+        }
+    }
+    var historyMetricMode: CleanupTrendMetricMode = .cumulative
+
+    var sidebarSelection: SidebarSelection = .allClients {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != sidebarSelection else { return }
+            if sidebarSelection != .history {
+                rebuildScopeCache()
+            }
+        }
+    }
+
+    var searchText: String = "" {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != searchText else { return }
+            rebuildFilterCache()
+        }
+    }
+    var selectedCategory: ScanCategory? = nil {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != selectedCategory else { return }
+            rebuildFilterCache()
+        }
+    }
+    var selectedRecommendation: CleanupRecommendation? = nil {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != selectedRecommendation else { return }
+            rebuildFilterCache()
+        }
+    }
+    var selectedAgeFilter: ItemAgeFilter = .all {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != selectedAgeFilter else { return }
+            rebuildFilterCache()
+        }
+    }
+    var sortOrder: ItemSortOrder = .sizeDescending {
+        didSet {
+            guard !suppressCacheRebuild, oldValue != sortOrder else { return }
+            rebuildFilterCache()
+        }
+    }
+    var selectedItemIDs: Set<String> = [] {
+        didSet {
+            guard !suppressCacheRebuild else { return }
+            rebuildSelectionCache()
+        }
+    }
     var collapsedSections: Set<CleanupRecommendation> = [.notRecommended]
 
     var isScanning: Bool = false
@@ -81,14 +151,55 @@ final class CleanerViewModel {
             UserDefaults.standard.set(appearanceMode.rawValue, forKey: Self.appearanceStorageKey)
         }
     }
-    var hoveredRecommendation: CleanupRecommendation? = nil
     var cleanupCelebrationID: UUID = UUID()
 
     var lastCleanupResult: CleanupResult?
     var errorBannerMessage: String?
 
-    private static let appearanceStorageKey = "aiCleaner.appearanceMode.v2"
-    private var scanTask: Task<Void, Never>?
+    // MARK: - Memoized Derived Caches (O(1) Reads During SwiftUI Body Evaluation)
+
+    private(set) var builtInSummaries: [ClientScanSummary] = []
+    private(set) var customSummaries: [ClientScanSummary] = []
+    private(set) var activeSummary: ClientScanSummary? = nil
+
+    private(set) var scopedCleanableItems: [CleanableItem] = []
+    private(set) var scopedProtectedItems: [CleanableItem] = []
+    private(set) var scopedItems: [CleanableItem] = []
+
+    private(set) var scopedRecommendedItems: [CleanableItem] = []
+    private(set) var scopedReviewSuggestedItems: [CleanableItem] = []
+    private(set) var scopedRecommendedBytes: Int64 = 0
+    private(set) var scopedReviewSuggestedBytes: Int64 = 0
+    private(set) var scopedProtectedBytes: Int64 = 0
+    private(set) var scopedTotalFootprintBytes: Int64 = 0
+    private(set) var categoryCounts: [ScanCategory: Int] = [:]
+
+    private(set) var filteredItems: [CleanableItem] = []
+    private(set) var filteredCleanableItems: [CleanableItem] = []
+    private(set) var displayedSections: [RecommendationSection] = []
+    private(set) var maxDisplayedItemBytes: Int64 = 0
+
+    private(set) var selectedItems: [CleanableItem] = []
+    private(set) var selectedTotalBytes: Int64 = 0
+    private(set) var selectedNotRecommendedItems: [CleanableItem] = []
+    private(set) var selectedNotRecommendedTotalBytes: Int64 = 0
+    private(set) var groupedSelectedItems: [SelectedClientGroup] = []
+
+    private(set) var historySummary: CleanupHistorySummary = CleanupHistoryAnalytics.summarize(records: [], range: .days30)
+    private(set) var totalHistoricalFreedBytes: Int64 = 0
+
+    @ObservationIgnored private var allDisplayedItemsByID: [String: CleanableItem] = [:]
+    @ObservationIgnored private var clientSummaryByID: [String: ClientScanSummary] = [:]
+    @ObservationIgnored private var suppressCacheRebuild: Bool = false
+    @ObservationIgnored private static let appearanceStorageKey = "aiCleaner.appearanceMode.v2"
+    @ObservationIgnored private static let builtInVisualLookup: [String: (symbolName: String, tint: Color)] = {
+        Dictionary(
+            uniqueKeysWithValues: BuiltInClientRules.allProfiles.map { profile in
+                (profile.id, (profile.symbolName, AppTheme.color(forAccentToken: profile.accentToken)))
+            }
+        )
+    }()
+    @ObservationIgnored private var scanTask: Task<Void, Never>?
 
     init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -101,6 +212,8 @@ final class CleanerViewModel {
         self.trashCleaner = TrashCleaner(safetyGuard: guardInstance)
         self.customDirectoryStore = customDirectoryStore ?? CustomDirectoryStore(safetyGuard: guardInstance)
         self.historyStore = historyStore ?? CleanupHistoryStore()
+
+        self.suppressCacheRebuild = true
         self.customDirectories = self.customDirectoryStore.load()
         self.historyRecords = self.historyStore.load()
         if let savedRaw = UserDefaults.standard.string(forKey: Self.appearanceStorageKey),
@@ -109,24 +222,13 @@ final class CleanerViewModel {
         } else {
             self.appearanceMode = .light
         }
+        self.suppressCacheRebuild = false
+
+        rebuildHistoryCache()
     }
 
-    // MARK: - Derived Data
+    // MARK: - Lightweight Derived Accessors
 
-    var builtInSummaries: [ClientScanSummary] {
-        (report?.clientSummaries ?? []).filter { !$0.profile.isCustom }
-    }
-
-    var customSummaries: [ClientScanSummary] {
-        (report?.clientSummaries ?? []).filter { $0.profile.isCustom }
-    }
-
-    var activeSummary: ClientScanSummary? {
-        guard case let .client(clientID) = sidebarSelection else { return nil }
-        return report?.clientSummaries.first(where: { $0.id == clientID })
-    }
-
-    /// 驱动背景极光随当前选中 AI 客户端实时平滑变色
     var activeAccentColor: Color {
         if sidebarSelection == .history {
             return Color(red: 0.14, green: 0.80, blue: 0.66)
@@ -137,93 +239,140 @@ final class CleanerViewModel {
         return Color(red: 0.16, green: 0.78, blue: 0.64)
     }
 
-    var historySummary: CleanupHistorySummary {
-        CleanupHistoryAnalytics.summarize(records: historyRecords, range: historyRange)
-    }
-
-    var totalHistoricalFreedBytes: Int64 {
-        historyRecords.reduce(0) { $0 + $1.freedBytes }
-    }
-
-    var highlightedRingTier: CleanupRecommendation? {
-        hoveredRecommendation ?? selectedRecommendation
-    }
-
-    /// 当前侧边栏分组下的所有可清理条目（「建议清理」+「按需清理」）
-    var scopedCleanableItems: [CleanableItem] {
-        switch sidebarSelection {
-        case .allClients, .history:
-            return report?.allItems ?? []
-        case let .client(clientID):
-            return report?.clientSummaries.first(where: { $0.id == clientID })?.items ?? []
-        }
-    }
-
-    /// 当前侧边栏分组下所有透明展示的「不建议清理（锁定保护）」条目
-    var scopedProtectedItems: [CleanableItem] {
-        switch sidebarSelection {
-        case .allClients, .history:
-            return report?.allProtectedItems ?? []
-        case let .client(clientID):
-            return report?.clientSummaries.first(where: { $0.id == clientID })?.protectedItems ?? []
-        }
-    }
-
-    /// 当前侧边栏分组下展示的全部条目（含可清理与不建议清理）
-    var scopedItems: [CleanableItem] {
-        scopedCleanableItems + scopedProtectedItems
-    }
-
-    // MARK: - Scope Dashboard Metrics
-
-    var scopedRecommendedItems: [CleanableItem] {
-        scopedCleanableItems.filter { $0.recommendation == .recommended }
-    }
-
-    var scopedReviewSuggestedItems: [CleanableItem] {
-        scopedCleanableItems.filter { $0.recommendation == .reviewSuggested }
-    }
-
-    var scopedRecommendedBytes: Int64 {
-        scopedRecommendedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    var scopedReviewSuggestedBytes: Int64 {
-        scopedReviewSuggestedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    var scopedProtectedBytes: Int64 {
-        scopedProtectedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
     var scopedCleanableBytes: Int64 {
         scopedRecommendedBytes + scopedReviewSuggestedBytes
     }
 
-    var scopedTotalFootprintBytes: Int64 {
-        scopedCleanableBytes + scopedProtectedBytes
+    var hasSelectedNotRecommendedItems: Bool {
+        !selectedNotRecommendedItems.isEmpty
     }
 
-    var categoryCounts: [ScanCategory: Int] {
-        var counts: [ScanCategory: Int] = [:]
-        for item in scopedItems {
-            counts[item.category, default: 0] += 1
+    var allVisibleSelected: Bool {
+        guard !filteredCleanableItems.isEmpty else { return false }
+        return filteredCleanableItems.allSatisfy { selectedItemIDs.contains($0.id) }
+    }
+
+    var visibleSelectedCount: Int {
+        filteredItems.reduce(0) { $0 + (selectedItemIDs.contains($1.id) ? 1 : 0) }
+    }
+
+    var hasScanResults: Bool {
+        report != nil
+    }
+
+    var isIdleReadyToScan: Bool {
+        report == nil && !isScanning
+    }
+
+    var hasActiveFilters: Bool {
+        !searchText.isEmpty || selectedCategory != nil || selectedRecommendation != nil || selectedAgeFilter != .all
+    }
+
+    // MARK: - Cache Builders (Single-Pass, Strictly Scoped)
+
+    private func rebuildReportCaches() {
+        guard let report else {
+            builtInSummaries = []
+            customSummaries = []
+            clientSummaryByID = [:]
+            allDisplayedItemsByID = [:]
+            rebuildScopeCache()
+            rebuildSelectionCache()
+            return
         }
-        return counts
+
+        var builtIn: [ClientScanSummary] = []
+        var custom: [ClientScanSummary] = []
+        var summaryMap: [String: ClientScanSummary] = [:]
+        summaryMap.reserveCapacity(report.clientSummaries.count)
+
+        for summary in report.clientSummaries {
+            summaryMap[summary.id] = summary
+            if summary.profile.isCustom {
+                custom.append(summary)
+            } else {
+                builtIn.append(summary)
+            }
+        }
+
+        builtInSummaries = builtIn
+        customSummaries = custom
+        clientSummaryByID = summaryMap
+
+        var itemMap: [String: CleanableItem] = [:]
+        let allDisplayed = report.allDisplayedItems
+        itemMap.reserveCapacity(allDisplayed.count)
+        for item in allDisplayed where itemMap[item.id] == nil {
+            itemMap[item.id] = item
+        }
+        allDisplayedItemsByID = itemMap
+
+        rebuildScopeCache()
+        rebuildSelectionCache()
     }
 
-    func sessionCount(for summary: ClientScanSummary) -> Int {
-        summary.items.reduce(0) { $0 + ($1.category == .sessions ? 1 : 0) }
+    private func rebuildScopeCache() {
+        let cleanable: [CleanableItem]
+        let protected: [CleanableItem]
+
+        switch sidebarSelection {
+        case .allClients, .history:
+            activeSummary = nil
+            cleanable = report?.allItems ?? []
+            protected = report?.allProtectedItems ?? []
+        case let .client(clientID):
+            let summary = clientSummaryByID[clientID]
+            activeSummary = summary
+            cleanable = summary?.items ?? []
+            protected = summary?.protectedItems ?? []
+        }
+
+        scopedCleanableItems = cleanable
+        scopedProtectedItems = protected
+
+        var combined: [CleanableItem] = []
+        combined.reserveCapacity(cleanable.count + protected.count)
+        combined.append(contentsOf: cleanable)
+        combined.append(contentsOf: protected)
+        scopedItems = combined
+
+        var recItems: [CleanableItem] = []
+        var revItems: [CleanableItem] = []
+        var recBytes: Int64 = 0
+        var revBytes: Int64 = 0
+        var proBytes: Int64 = 0
+        var counts: [ScanCategory: Int] = [:]
+
+        for item in cleanable {
+            counts[item.category, default: 0] += 1
+            if item.recommendation == .recommended {
+                recItems.append(item)
+                recBytes += item.sizeBytes
+            } else {
+                revItems.append(item)
+                revBytes += item.sizeBytes
+            }
+        }
+        for item in protected {
+            counts[item.category, default: 0] += 1
+            proBytes += item.sizeBytes
+        }
+
+        scopedRecommendedItems = recItems
+        scopedReviewSuggestedItems = revItems
+        scopedRecommendedBytes = recBytes
+        scopedReviewSuggestedBytes = revBytes
+        scopedProtectedBytes = proBytes
+        scopedTotalFootprintBytes = recBytes + revBytes + proBytes
+        categoryCounts = counts
+
+        rebuildFilterCache()
     }
 
-    var totalSessionCount: Int {
-        (report?.allItems ?? []).reduce(0) { $0 + ($1.category == .sessions ? 1 : 0) }
-    }
-
-    /// 应用搜索、类别、建议等级与时间过滤后的全部展示条目
-    var filteredItems: [CleanableItem] {
+    private func rebuildFilterCache() {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let ageCutoff = selectedAgeFilter.cutoffDate()
+
         let filtered = scopedItems.filter { item in
             if let selectedRecommendation, item.recommendation != selectedRecommendation {
                 return false
@@ -231,12 +380,10 @@ final class CleanerViewModel {
             if let selectedCategory, item.category != selectedCategory {
                 return false
             }
-            if let ageCutoff, item.isCleanable, item.modifiedAt >= ageCutoff {
-                return false
-            }
-            if ageCutoff != nil && !item.isCleanable {
-                // 按「N 天前」筛选待清理项时，仅聚焦符合时间条件的可清理条目
-                return false
+            if let ageCutoff {
+                if !item.isCleanable || item.modifiedAt >= ageCutoff {
+                    return false
+                }
             }
             if trimmedQuery.isEmpty {
                 return true
@@ -250,7 +397,7 @@ final class CleanerViewModel {
                 || item.safetyNote.localizedCaseInsensitiveContains(trimmedQuery)
         }
 
-        return filtered.sorted { lhs, rhs in
+        let sorted = filtered.sorted { lhs, rhs in
             switch sortOrder {
             case .sizeDescending:
                 if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes > rhs.sizeBytes }
@@ -268,42 +415,65 @@ final class CleanerViewModel {
                 return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
             }
         }
-    }
 
-    var filteredCleanableItems: [CleanableItem] {
-        filteredItems.filter(\.isCleanable)
-    }
+        filteredItems = sorted
 
-    var maxDisplayedItemBytes: Int64 {
-        filteredItems.map(\.sizeBytes).max() ?? 0
-    }
+        var cleanable: [CleanableItem] = []
+        var maxBytes: Int64 = 0
+        var recBucket: [CleanableItem] = []
+        var revBucket: [CleanableItem] = []
+        var proBucket: [CleanableItem] = []
+        var recTotal: Int64 = 0
+        var revTotal: Int64 = 0
+        var proTotal: Int64 = 0
 
-    struct RecommendationSection: Identifiable {
-        let recommendation: CleanupRecommendation
-        let items: [CleanableItem]
-        let totalBytes: Int64
-
-        var id: CleanupRecommendation { recommendation }
-    }
-
-    /// 按「建议清理 → 按需清理 → 不建议清理（已锁定保护）」清晰分组展示
-    var displayedSections: [RecommendationSection] {
-        let visible = filteredItems
-        return CleanupRecommendation.allCases.compactMap { tier in
-            let tierItems = visible.filter { $0.recommendation == tier }
-            guard !tierItems.isEmpty else { return nil }
-            let total = tierItems.reduce(0) { $0 + $1.sizeBytes }
-            return RecommendationSection(recommendation: tier, items: tierItems, totalBytes: total)
+        for item in sorted {
+            if item.sizeBytes > maxBytes {
+                maxBytes = item.sizeBytes
+            }
+            if item.isCleanable {
+                cleanable.append(item)
+            }
+            switch item.recommendation {
+            case .recommended:
+                recBucket.append(item)
+                recTotal += item.sizeBytes
+            case .reviewSuggested:
+                revBucket.append(item)
+                revTotal += item.sizeBytes
+            case .notRecommended:
+                proBucket.append(item)
+                proTotal += item.sizeBytes
+            }
         }
+
+        filteredCleanableItems = cleanable
+        maxDisplayedItemBytes = maxBytes
+
+        var sections: [RecommendationSection] = []
+        if !recBucket.isEmpty {
+            sections.append(RecommendationSection(recommendation: .recommended, items: recBucket, totalBytes: recTotal))
+        }
+        if !revBucket.isEmpty {
+            sections.append(RecommendationSection(recommendation: .reviewSuggested, items: revBucket, totalBytes: revTotal))
+        }
+        if !proBucket.isEmpty {
+            sections.append(RecommendationSection(recommendation: .notRecommended, items: proBucket, totalBytes: proTotal))
+        }
+        displayedSections = sections
     }
 
-    var allDisplayedItemsByID: [String: CleanableItem] {
-        Dictionary((report?.allDisplayedItems ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    }
+    private func rebuildSelectionCache() {
+        guard !selectedItemIDs.isEmpty else {
+            selectedItems = []
+            selectedTotalBytes = 0
+            selectedNotRecommendedItems = []
+            selectedNotRecommendedTotalBytes = 0
+            groupedSelectedItems = []
+            return
+        }
 
-    var selectedItems: [CleanableItem] {
-        let lookup = allDisplayedItemsByID
-        return selectedItemIDs.compactMap { lookup[$0] }
+        let resolved = selectedItemIDs.compactMap { allDisplayedItemsByID[$0] }
             .sorted { lhs, rhs in
                 if lhs.recommendation == .notRecommended && rhs.recommendation != .notRecommended {
                     return true
@@ -316,66 +486,37 @@ final class CleanerViewModel {
                 }
                 return lhs.sizeBytes > rhs.sizeBytes
             }
-    }
 
-    var selectedNotRecommendedItems: [CleanableItem] {
-        selectedItems.filter { $0.recommendation == .notRecommended }
-    }
+        var totalBytes: Int64 = 0
+        var riskItems: [CleanableItem] = []
+        var riskBytes: Int64 = 0
+        var byClient: [String: (name: String, items: [CleanableItem], bytes: Int64)] = [:]
 
-    var hasSelectedNotRecommendedItems: Bool {
-        !selectedNotRecommendedItems.isEmpty
-    }
+        for item in resolved {
+            totalBytes += item.sizeBytes
+            if item.recommendation == .notRecommended {
+                riskItems.append(item)
+                riskBytes += item.sizeBytes
+            }
+            var entry = byClient[item.clientID] ?? (item.clientName, [], 0)
+            entry.items.append(item)
+            entry.bytes += item.sizeBytes
+            byClient[item.clientID] = entry
+        }
 
-    var selectedNotRecommendedTotalBytes: Int64 {
-        selectedNotRecommendedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    var selectedTotalBytes: Int64 {
-        selectedItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    struct SelectedClientGroup: Identifiable {
-        let id: String
-        let clientName: String
-        let items: [CleanableItem]
-        let totalBytes: Int64
-    }
-
-    var groupedSelectedItems: [SelectedClientGroup] {
-        let grouped = Dictionary(grouping: selectedItems, by: \.clientID)
-        return grouped.compactMap { clientID, value in
-            guard let first = value.first else { return nil }
-            let total = value.reduce(0) { $0 + $1.sizeBytes }
-            return SelectedClientGroup(
-                id: clientID,
-                clientName: first.clientName,
-                items: value,
-                totalBytes: total
-            )
+        selectedItems = resolved
+        selectedTotalBytes = totalBytes
+        selectedNotRecommendedItems = riskItems
+        selectedNotRecommendedTotalBytes = riskBytes
+        groupedSelectedItems = byClient.map { clientID, val in
+            SelectedClientGroup(id: clientID, clientName: val.name, items: val.items, totalBytes: val.bytes)
         }
         .sorted { $0.totalBytes > $1.totalBytes }
     }
 
-    var allVisibleSelected: Bool {
-        let visibleCleanable = filteredCleanableItems
-        guard !visibleCleanable.isEmpty else { return false }
-        return visibleCleanable.allSatisfy { selectedItemIDs.contains($0.id) }
-    }
-
-    var visibleSelectedCount: Int {
-        filteredItems.filter { selectedItemIDs.contains($0.id) }.count
-    }
-
-    var hasScanResults: Bool {
-        report != nil
-    }
-
-    var isIdleReadyToScan: Bool {
-        report == nil && !isScanning
-    }
-
-    var hasActiveFilters: Bool {
-        !searchText.isEmpty || selectedCategory != nil || selectedRecommendation != nil || selectedAgeFilter != .all
+    private func rebuildHistoryCache() {
+        totalHistoricalFreedBytes = historyRecords.reduce(0) { $0 + $1.freedBytes }
+        historySummary = CleanupHistoryAnalytics.summarize(records: historyRecords, range: historyRange)
     }
 
     // MARK: - Actions
@@ -400,15 +541,22 @@ final class CleanerViewModel {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
+
+        suppressCacheRebuild = true
         report = nil
         selectedItemIDs.removeAll()
         lastCleanupResult = nil
         errorBannerMessage = nil
-        hoveredRecommendation = nil
         pendingRiskItemToSelect = nil
-        clearAllFilters()
+        searchText = ""
+        selectedCategory = nil
+        selectedRecommendation = nil
+        selectedAgeFilter = .all
         collapsedSections = [.notRecommended]
         sidebarSelection = .allClients
+        suppressCacheRebuild = false
+
+        rebuildReportCaches()
     }
 
     func rescan() {
@@ -425,18 +573,20 @@ final class CleanerViewModel {
             }.value
 
             guard !Task.isCancelled else { return }
+
+            let validIDs = Set(newReport.allDisplayedItems.map(\.id))
+            self.suppressCacheRebuild = true
             self.report = newReport
             self.isScanning = false
-
-            // 保留本次扫描后仍存在的勾选状态（含已确认勾选的不建议清理项）
-            let validIDs = Set(newReport.allDisplayedItems.map(\.id))
             self.selectedItemIDs.formIntersection(validIDs)
 
-            // 如果当前选中的客户端已无数据或已移除，则回退至「全部客户端」
             if case let .client(clientID) = self.sidebarSelection,
                !newReport.clientSummaries.contains(where: { $0.id == clientID }) {
                 self.sidebarSelection = .allClients
             }
+            self.suppressCacheRebuild = false
+
+            self.rebuildReportCaches()
         }
     }
 
@@ -465,10 +615,13 @@ final class CleanerViewModel {
     }
 
     func clearAllFilters() {
+        suppressCacheRebuild = true
         searchText = ""
         selectedCategory = nil
         selectedRecommendation = nil
         selectedAgeFilter = .all
+        suppressCacheRebuild = false
+        rebuildFilterCache()
     }
 
     func toggleSelection(for item: CleanableItem) {
@@ -499,38 +652,48 @@ final class CleanerViewModel {
 
     /// 一键勾选当前视图下的全部「建议清理」项
     func selectRecommendedInScope() {
+        var next = selectedItemIDs
         for item in scopedRecommendedItems where item.isCleanable {
-            selectedItemIDs.insert(item.id)
+            next.insert(item.id)
         }
+        selectedItemIDs = next
     }
 
     func selectSection(_ recommendation: CleanupRecommendation) {
         guard recommendation.isCleanable else { return }
+        var next = selectedItemIDs
         for item in filteredCleanableItems where item.recommendation == recommendation {
-            selectedItemIDs.insert(item.id)
+            next.insert(item.id)
         }
+        selectedItemIDs = next
     }
 
     func selectAllVisible() {
+        var next = selectedItemIDs
         for item in filteredCleanableItems {
-            selectedItemIDs.insert(item.id)
+            next.insert(item.id)
         }
+        selectedItemIDs = next
     }
 
     func invertVisibleSelection() {
+        var next = selectedItemIDs
         for item in filteredCleanableItems {
-            if selectedItemIDs.contains(item.id) {
-                selectedItemIDs.remove(item.id)
+            if next.contains(item.id) {
+                next.remove(item.id)
             } else {
-                selectedItemIDs.insert(item.id)
+                next.insert(item.id)
             }
         }
+        selectedItemIDs = next
     }
 
     func clearVisibleSelection() {
+        var next = selectedItemIDs
         for item in filteredItems {
-            selectedItemIDs.remove(item.id)
+            next.remove(item.id)
         }
+        selectedItemIDs = next
     }
 
     func clearAllSelection() {
@@ -643,10 +806,7 @@ final class CleanerViewModel {
     }
 
     func clientVisualMeta(for clientID: String) -> (symbolName: String, tint: Color) {
-        if let profile = BuiltInClientRules.allProfiles.first(where: { $0.id == clientID }) {
-            return (profile.symbolName, AppTheme.color(forAccentToken: profile.accentToken))
-        }
-        return ("folder.fill", Color(red: 0.18, green: 0.78, blue: 0.74))
+        Self.builtInVisualLookup[clientID] ?? ("folder.fill", Color(red: 0.18, green: 0.78, blue: 0.74))
     }
 
     func dismissCleanupBanner() {

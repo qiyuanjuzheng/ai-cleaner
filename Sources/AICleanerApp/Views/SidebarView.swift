@@ -212,6 +212,7 @@ struct SidebarView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
+                .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.84), value: viewModel.sidebarSelection)
             }
 
             // 极简底部安全状态行（固定高度）
@@ -243,9 +244,8 @@ struct SidebarView: View {
     }
 
     private func select(_ selection: SidebarSelection) {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82)) {
-            viewModel.sidebarSelection = selection
-        }
+        // 仅由侧边栏局部动画驱动荧光指示条滑行，不对主内容区施加全局弹簧 diff 动画，确保切换瞬时顺滑
+        viewModel.sidebarSelection = selection
     }
 
     private func sectionHeader(title: String, trailing: String? = nil) -> some View {

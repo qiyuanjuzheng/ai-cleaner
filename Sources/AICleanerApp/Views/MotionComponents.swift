@@ -1,71 +1,36 @@
 import AICleanerCore
 import SwiftUI
 
-// MARK: - 1. 克制而流动的顶部极光氛围背景（不干扰下方列表可读性）
+// MARK: - 1. 零主线程开销的柔和极光氛围背景（纯 GPU 径向渐变，取消高频离屏 blur 避免切换掉帧）
 
 struct AmbientAuroraBackdrop: View {
     let accentColor: Color
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: reduceMotion)) { timeline in
-            let t = reduceMotion ? 0.0 : timeline.date.timeIntervalSinceReferenceDate * 0.16
-            Canvas { context, size in
-                drawAurora(in: &context, size: size, time: t)
-            }
-            .blur(radius: 64)
+        let isDark = colorScheme == .dark
+        let primaryAlpha = isDark ? 0.14 : 0.08
+        let secondaryAlpha = isDark ? 0.095 : 0.06
+
+        ZStack {
+            AppTheme.canvasBackground(for: colorScheme)
+
+            RadialGradient(
+                colors: [accentColor.opacity(primaryAlpha), .clear],
+                center: UnitPoint(x: 0.22, y: 0.04),
+                startRadius: 20,
+                endRadius: 520
+            )
+
+            RadialGradient(
+                colors: [Color(red: 0.14, green: 0.82, blue: 0.64).opacity(secondaryAlpha), .clear],
+                center: UnitPoint(x: 0.82, y: 0.08),
+                startRadius: 20,
+                endRadius: 460
+            )
         }
-        .background(AppTheme.canvasBackground(for: colorScheme))
         .ignoresSafeArea()
         .allowsHitTesting(false)
-    }
-
-    private func drawAurora(in context: inout GraphicsContext, size: CGSize, time t: Double) {
-        let isDark = colorScheme == .dark
-        let primaryAlpha = isDark ? 0.13 : 0.075
-        let secondaryAlpha = isDark ? 0.09 : 0.055
-        let maxDim = max(size.width, size.height)
-
-        // 顶部柔和主极光（跟随当前选中客户端色相缓慢流转）
-        let p1 = CGPoint(
-            x: size.width * CGFloat(0.24 + 0.07 * cos(t)),
-            y: size.height * CGFloat(0.06 + 0.04 * sin(t * 0.8))
-        )
-        drawOrb(
-            in: &context,
-            center: p1,
-            radius: maxDim * 0.42,
-            color: accentColor.opacity(primaryAlpha)
-        )
-
-        // 右上角静谧青绿光晕
-        let p2 = CGPoint(
-            x: size.width * CGFloat(0.80 + 0.06 * sin(t * 0.68)),
-            y: size.height * CGFloat(0.10 + 0.05 * cos(t * 0.6))
-        )
-        drawOrb(
-            in: &context,
-            center: p2,
-            radius: maxDim * 0.36,
-            color: Color(red: 0.14, green: 0.82, blue: 0.64).opacity(secondaryAlpha)
-        )
-    }
-
-    private func drawOrb(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, color: Color) {
-        let rect = CGRect(
-            x: center.x - radius,
-            y: center.y - radius,
-            width: radius * 2,
-            height: radius * 2
-        )
-        let shading = GraphicsContext.Shading.radialGradient(
-            Gradient(colors: [color, color.opacity(0.0)]),
-            center: center,
-            startRadius: 6,
-            endRadius: radius
-        )
-        context.fill(Path(ellipseIn: rect), with: shading)
     }
 }
 

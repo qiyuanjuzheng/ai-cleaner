@@ -14,7 +14,7 @@ struct ContentView: View {
             ZStack(alignment: .bottom) {
                 AmbientAuroraBackdrop(accentColor: viewModel.activeAccentColor)
                     .animation(
-                        reduceMotion ? nil : .easeInOut(duration: 0.65),
+                        reduceMotion ? nil : .easeInOut(duration: 0.35),
                         value: viewModel.sidebarSelection
                     )
 

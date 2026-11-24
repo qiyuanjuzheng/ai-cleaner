@@ -1,11 +1,31 @@
 import AICleanerCore
 import SwiftUI
 
+enum RowCardPosition {
+    case single
+    case first
+    case middle
+    case last
+
+    var topRadius: CGFloat {
+        (self == .single || self == .first) ? 13 : 0
+    }
+
+    var bottomRadius: CGFloat {
+        (self == .single || self == .last) ? 13 : 0
+    }
+
+    var showsBottomDivider: Bool {
+        self == .first || self == .middle
+    }
+}
+
 struct ItemRowView: View {
     let item: CleanableItem
     let showClientBadge: Bool
     let relativeSizeFraction: Double
     let isSelected: Bool
+    let position: RowCardPosition
     let onToggle: () -> Void
     let onRevealInFinder: () -> Void
     let onCopyPath: () -> Void
@@ -16,6 +36,14 @@ struct ItemRowView: View {
 
     var body: some View {
         let recColor = AppTheme.color(for: item.recommendation)
+        let barWidth = max(2.5, min(44.0, 44.0 * CGFloat(relativeSizeFraction)))
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: position.topRadius,
+            bottomLeadingRadius: position.bottomRadius,
+            bottomTrailingRadius: position.bottomRadius,
+            topTrailingRadius: position.topRadius,
+            style: .continuous
+        )
 
         HStack(alignment: .center, spacing: 11) {
             if item.isCleanable {
@@ -25,7 +53,7 @@ struct ItemRowView: View {
                     onToggle: onToggle
                 )
             } else {
-                // 「不建议清理」项：未勾选时展示克制风险锁框，点击可弹出风险提醒强制勾选；已勾选则高亮警示勾选态
+                // 「不建议清理」项：未勾选时展示克制风险锁框，点击弹出风险提醒确认；已勾选则高亮警示勾选态
                 Button(action: onToggle) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 5.5, style: .continuous)
@@ -50,7 +78,6 @@ struct ItemRowView: View {
                                         lineWidth: 1.0
                                     )
                             )
-                            .shadow(color: isSelected ? recColor.opacity(0.45) : .clear, radius: 4, y: 1)
 
                         Image(systemName: isSelected ? "checkmark" : "lock.fill")
                             .font(.system(size: isSelected ? 9.5 : 8.5, weight: .bold))
@@ -68,7 +95,6 @@ struct ItemRowView: View {
             }
 
             HStack(alignment: .center, spacing: 11) {
-                // 克制单色柔和图标（去掉刺眼边框）
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(leadingSymbolColor.opacity(colorScheme == .dark ? 0.14 : 0.10))
@@ -78,7 +104,6 @@ struct ItemRowView: View {
                         .foregroundStyle(leadingSymbolColor)
                 }
 
-                // 清爽 2 行信息区：无重复胶囊堆砌
                 VStack(alignment: .leading, spacing: 2.5) {
                     HStack(spacing: 7) {
                         Text(item.displayName)
@@ -128,7 +153,7 @@ struct ItemRowView: View {
                 .allowsHitTesting(isHovered)
                 .help("在 Finder 中显示：\(CleanerFormatting.abbreviatePath(item.url))")
 
-                // 右侧对齐体积列 + 极细 2.5pt 占比线
+                // 右侧对齐体积列 + 无 GeometryReader 零开销 2.5pt 占比线
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(CleanerFormatting.formatBytes(item.sizeBytes))
                         .font(.system(.callout, design: .rounded).weight(.semibold).monospacedDigit())
@@ -139,16 +164,14 @@ struct ItemRowView: View {
                             .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(.tertiary)
 
-                        GeometryReader { proxy in
-                            let clamped = max(0.06, min(1.0, relativeSizeFraction))
-                            ZStack(alignment: .trailing) {
+                        ZStack(alignment: .trailing) {
+                            Capsule()
+                                .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.07))
+                                .frame(width: 44, height: 2.5)
+                            if item.sizeBytes > 0 {
                                 Capsule()
-                                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.07))
-                                if item.sizeBytes > 0 {
-                                    Capsule()
-                                        .fill(recColor.opacity(item.isCleanable ? 0.78 : 0.38))
-                                        .frame(width: proxy.size.width * clamped)
-                                }
+                                    .fill(recColor.opacity(item.isCleanable ? 0.78 : 0.38))
+                                    .frame(width: barWidth, height: 2.5)
                             }
                         }
                         .frame(width: 44, height: 2.5)
@@ -163,10 +186,30 @@ struct ItemRowView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 54)
-        .background(rowBackground)
+        .background(
+            shape.fill(AppTheme.glassCardFill(for: colorScheme))
+                .overlay(shape.fill(rowOverlayTint))
+        )
+        .overlay(alignment: .bottom) {
+            if position.showsBottomDivider {
+                Rectangle()
+                    .fill(AppTheme.hairlineDivider(for: colorScheme))
+                    .frame(height: 0.5)
+                    .padding(.leading, 56)
+                    .padding(.trailing, 14)
+            }
+        }
+        .overlay {
+            if position == .single {
+                shape.strokeBorder(borderColor, lineWidth: 0.75)
+            } else {
+                // 仅绘制卡片外轮廓边线，相邻行之间绝不出现双层横线
+                SeamlessGroupBorder(position: position, cornerRadius: 13)
+                    .stroke(borderColor, lineWidth: 0.75)
+            }
+        }
+        .clipShape(shape)
         .help("\(item.safetyNote)\n路径：\(CleanerFormatting.abbreviatePath(item.url))")
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelected)
         .onHover { hovering in
             isHovered = hovering
         }
@@ -223,14 +266,69 @@ struct ItemRowView: View {
         return AppTheme.color(for: item.category)
     }
 
-    private var rowBackground: Color {
+    private var rowOverlayTint: Color {
         let recColor = AppTheme.color(for: item.recommendation)
         if isSelected {
             return recColor.opacity(colorScheme == .dark ? 0.10 : 0.08)
         }
         if isHovered {
-            return Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.035)
+            return Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.032)
         }
         return Color.clear
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.075)
+    }
+}
+
+/// 扁平虚拟化分组卡片的无缝外框路径：仅画外侧边缘，行与行交界处保持通透无双线
+private struct SeamlessGroupBorder: Shape {
+    let position: RowCardPosition
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(cornerRadius, rect.height / 2, rect.width / 2)
+        let inset = rect.insetBy(dx: 0.375, dy: 0.375)
+        var path = Path()
+
+        switch position {
+        case .single:
+            path.addRoundedRect(in: inset, cornerSize: CGSize(width: r, height: r), style: .continuous)
+        case .first:
+            path.move(to: CGPoint(x: inset.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: inset.minX, y: inset.minY + r))
+            path.addQuadCurve(
+                to: CGPoint(x: inset.minX + r, y: inset.minY),
+                control: CGPoint(x: inset.minX, y: inset.minY)
+            )
+            path.addLine(to: CGPoint(x: inset.maxX - r, y: inset.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: inset.maxX, y: inset.minY + r),
+                control: CGPoint(x: inset.maxX, y: inset.minY)
+            )
+            path.addLine(to: CGPoint(x: inset.maxX, y: rect.maxY))
+        case .middle:
+            path.move(to: CGPoint(x: inset.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: inset.minX, y: rect.maxY))
+            path.move(to: CGPoint(x: inset.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: inset.maxX, y: rect.maxY))
+        case .last:
+            path.move(to: CGPoint(x: inset.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: inset.minX, y: inset.maxY - r))
+            path.addQuadCurve(
+                to: CGPoint(x: inset.minX + r, y: inset.maxY),
+                control: CGPoint(x: inset.minX, y: inset.maxY)
+            )
+            path.addLine(to: CGPoint(x: inset.maxX - r, y: inset.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: inset.maxX, y: inset.maxY - r),
+                control: CGPoint(x: inset.maxX, y: inset.maxY)
+            )
+            path.addLine(to: CGPoint(x: inset.maxX, y: rect.minY))
+        }
+        return path
     }
 }

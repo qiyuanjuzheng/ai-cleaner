@@ -5,8 +5,13 @@ struct ItemListView: View {
     @Bindable var viewModel: CleanerViewModel
     @Namespace private var categoryNamespace
     @Namespace private var tierNamespace
+    @State private var hoveredRecommendation: CleanupRecommendation? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var highlightedRingTier: CleanupRecommendation? {
+        hoveredRecommendation ?? viewModel.selectedRecommendation
+    }
 
     var body: some View {
         if viewModel.isScanning && viewModel.report == nil {
@@ -59,7 +64,7 @@ struct ItemListView: View {
                     recommendedBytes: viewModel.scopedRecommendedBytes,
                     reviewBytes: viewModel.scopedReviewSuggestedBytes,
                     protectedBytes: viewModel.scopedProtectedBytes,
-                    highlightedTier: viewModel.highlightedRingTier,
+                    highlightedTier: highlightedRingTier,
                     isScanning: viewModel.isScanning
                 )
 
@@ -111,9 +116,7 @@ struct ItemListView: View {
 
                         if !viewModel.scopedRecommendedItems.isEmpty {
                             Button {
-                                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.78)) {
-                                    viewModel.selectRecommendedInScope()
-                                }
+                                viewModel.selectRecommendedInScope()
                             } label: {
                                 HStack(spacing: 5) {
                                     Image(systemName: "sparkles")
@@ -162,6 +165,7 @@ struct ItemListView: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.035))
                     )
+                    .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.84), value: viewModel.selectedRecommendation)
                 }
             }
 
@@ -170,7 +174,7 @@ struct ItemListView: View {
                 recommendedBytes: viewModel.scopedRecommendedBytes,
                 reviewBytes: viewModel.scopedReviewSuggestedBytes,
                 protectedBytes: viewModel.scopedProtectedBytes,
-                highlightedTier: viewModel.highlightedRingTier
+                highlightedTier: highlightedRingTier
             )
         }
         .padding(.horizontal, 16)
@@ -211,13 +215,11 @@ struct ItemListView: View {
 
     private func tierMetricSegment(tier: CleanupRecommendation, bytes: Int64, count: Int) -> some View {
         let isSelected = viewModel.selectedRecommendation == tier
-        let isHovered = viewModel.hoveredRecommendation == tier
+        let isHovered = hoveredRecommendation == tier
         let tint = AppTheme.color(for: tier)
 
         return Button {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.80)) {
-                viewModel.toggleRecommendationFilter(tier)
-            }
+            viewModel.toggleRecommendationFilter(tier)
         } label: {
             HStack(spacing: 7) {
                 Circle()
@@ -263,12 +265,10 @@ struct ItemListView: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                if hovering {
-                    viewModel.hoveredRecommendation = tier
-                } else if viewModel.hoveredRecommendation == tier {
-                    viewModel.hoveredRecommendation = nil
-                }
+            if hovering {
+                hoveredRecommendation = tier
+            } else if hoveredRecommendation == tier {
+                hoveredRecommendation = nil
             }
         }
     }
@@ -277,7 +277,7 @@ struct ItemListView: View {
 
     private var singleControlBar: some View {
         HStack(spacing: 10) {
-            // 紧凑自适应宽度的滑动胶囊分类切换（不再拉伸留白）
+            // 紧凑自适应宽度的滑动胶囊分类切换（局部微动画，绝不拖慢下方列表刷新）
             HStack(spacing: 2) {
                 categoryFilterButton(title: "全部", category: nil)
                 ForEach(visibleCategories) { category in
@@ -294,14 +294,13 @@ struct ItemListView: View {
                     .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.65)
             )
             .fixedSize(horizontal: true, vertical: false)
+            .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.84), value: viewModel.selectedCategory)
 
             Spacer(minLength: 8)
 
             if viewModel.hasActiveFilters {
                 Button("重置") {
-                    withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82)) {
-                        viewModel.clearAllFilters()
-                    }
+                    viewModel.clearAllFilters()
                 }
                 .buttonStyle(.link)
                 .font(.caption)
@@ -442,9 +441,7 @@ struct ItemListView: View {
         let isSelected = viewModel.selectedCategory == category
 
         return Button {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.80)) {
-                viewModel.selectedCategory = category
-            }
+            viewModel.selectedCategory = category
         } label: {
             Text(title)
                 .font(.caption.weight(isSelected ? .semibold : .regular))
@@ -498,65 +495,53 @@ struct ItemListView: View {
             }
         } else {
             let maxBytes = max(1, viewModel.maxDisplayedItemBytes)
+            let showClientBadge = viewModel.sidebarSelection == .allClients
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                // 单层扁平 LazyVStack：真正按可见区域按需虚拟化渲染（~15 行），切换大列表毫秒级响应
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(viewModel.displayedSections) { section in
                         let isCollapsed = viewModel.isSectionCollapsed(section.recommendation)
+                        let isFirstSection = section.recommendation == viewModel.displayedSections.first?.recommendation
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            CleanSectionHeader(
-                                section: section,
-                                isCollapsed: isCollapsed,
-                                onToggleCollapse: {
-                                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
-                                        viewModel.toggleSectionCollapsed(section.recommendation)
-                                    }
-                                },
-                                onSelectSection: {
-                                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                                        viewModel.selectSection(section.recommendation)
-                                    }
-                                }
-                            )
+                        CleanSectionHeader(
+                            section: section,
+                            isCollapsed: isCollapsed,
+                            onToggleCollapse: {
+                                viewModel.toggleSectionCollapsed(section.recommendation)
+                            },
+                            onSelectSection: {
+                                viewModel.selectSection(section.recommendation)
+                            }
+                        )
+                        .padding(.top, isFirstSection ? 2 : 14)
+                        .padding(.bottom, 6)
 
-                            if !isCollapsed {
-                                // 同一分组所有行收敛在一张通透圆角玻璃卡片内，用极淡发丝线分隔
-                                LazyVStack(spacing: 0) {
-                                    ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
-                                        ItemRowView(
-                                            item: item,
-                                            showClientBadge: viewModel.sidebarSelection == .allClients,
-                                            relativeSizeFraction: Double(item.sizeBytes) / Double(maxBytes),
-                                            isSelected: viewModel.isSelected(item),
-                                            onToggle: { viewModel.toggleSelection(for: item) },
-                                            onRevealInFinder: { viewModel.revealInFinder(item) },
-                                            onCopyPath: { viewModel.copyPath(item) }
-                                        )
+                        if !isCollapsed {
+                            let firstID = section.items.first?.id
+                            let lastID = section.items.last?.id
+                            ForEach(section.items) { item in
+                                let position: RowCardPosition = {
+                                    if item.id == firstID && item.id == lastID { return .single }
+                                    if item.id == firstID { return .first }
+                                    if item.id == lastID { return .last }
+                                    return .middle
+                                }()
 
-                                        if index < section.items.count - 1 {
-                                            Rectangle()
-                                                .fill(AppTheme.hairlineDivider(for: colorScheme))
-                                                .frame(height: 0.5)
-                                                .padding(.leading, 56)
-                                                .padding(.trailing, 14)
-                                        }
-                                    }
-                                }
-                                .background(
-                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                        .fill(AppTheme.glassCardFill(for: colorScheme))
+                                ItemRowView(
+                                    item: item,
+                                    showClientBadge: showClientBadge,
+                                    relativeSizeFraction: Double(item.sizeBytes) / Double(maxBytes),
+                                    isSelected: viewModel.isSelected(item),
+                                    position: position,
+                                    onToggle: { viewModel.toggleSelection(for: item) },
+                                    onRevealInFinder: { viewModel.revealInFinder(item) },
+                                    onCopyPath: { viewModel.copyPath(item) }
                                 )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                        .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.75)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                             }
                         }
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 2)
                 .padding(.bottom, 88)
             }
         }

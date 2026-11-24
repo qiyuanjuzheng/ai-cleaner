@@ -56,6 +56,15 @@ private struct HeroDashboardHeaderView: View {
         hoveredRecommendation ?? viewModel.selectedRecommendation
     }
 
+    private var recommendedActionTooltip: String {
+        guard let summary = viewModel.activeSummary else {
+            return "勾选全部客户端及自定义目录中的「建议清理」项"
+        }
+        return summary.profile.isCustom
+            ? "勾选当前自定义目录中的「建议清理」项"
+            : "勾选当前客户端中的「建议清理」项"
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             HStack(alignment: .center, spacing: 18) {
@@ -84,7 +93,7 @@ private struct HeroDashboardHeaderView: View {
 
                         Spacer(minLength: 8)
 
-                        // 返回待扫描状态按钮（固定高度 30pt，清爽克制不抢主按钮焦点）
+                        // 返回扫描状态按钮（固定高度 30pt，清爽克制不抢主按钮焦点）
                         Button {
                             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.20)) {
                                 viewModel.returnToIdleState()
@@ -93,7 +102,7 @@ private struct HeroDashboardHeaderView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "chevron.backward")
                                     .font(.system(size: 11, weight: .semibold))
-                                Text("返回待扫描")
+                                Text("返回扫描")
                                     .font(.caption.weight(.medium))
                                     .lineLimit(1)
                             }
@@ -112,7 +121,7 @@ private struct HeroDashboardHeaderView: View {
                         }
                         .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.97))
                         .disabled(viewModel.isCleaning)
-                        .help("清空当前扫描结果并返回待扫描首页")
+                        .help("返回扫描并清空本次结果")
 
                         if !viewModel.scopedRecommendedItems.isEmpty {
                             Button {
@@ -120,7 +129,7 @@ private struct HeroDashboardHeaderView: View {
                             } label: {
                                 HStack(spacing: 5) {
                                     Image(systemName: "sparkles")
-                                    Text("一键勾选建议清理 · \(CleanerFormatting.formatBytes(viewModel.scopedRecommendedBytes))")
+                                    Text("勾选建议清理项 · \(CleanerFormatting.formatBytes(viewModel.scopedRecommendedBytes))")
                                         .monospacedDigit()
                                         .lineLimit(1)
                                 }
@@ -136,7 +145,7 @@ private struct HeroDashboardHeaderView: View {
                             )
                             .layoutPriority(1)
                             .disabled(viewModel.isCleaning || viewModel.isScanning)
-                            .help("自动勾选当前视图中所有「建议清理」项，绝不勾选「按需清理」或「不建议清理」项")
+                            .help(recommendedActionTooltip)
                         }
                     }
                     .frame(height: 44)
@@ -290,7 +299,7 @@ private struct ItemControlBarView: View {
             Spacer(minLength: 8)
 
             if viewModel.hasActiveFilters {
-                Button("重置") {
+                Button("重置筛选") {
                     viewModel.clearAllFilters()
                 }
                 .buttonStyle(.link)
@@ -302,7 +311,7 @@ private struct ItemControlBarView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                TextField("搜索会话、项目或路径…", text: $viewModel.searchText)
+                TextField("搜索条目、项目或路径…", text: $viewModel.searchText)
                     .textFieldStyle(.plain)
                     .font(.callout)
                 if !viewModel.searchText.isEmpty {
@@ -314,6 +323,8 @@ private struct ItemControlBarView: View {
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("清空搜索")
+                    .help("清空搜索")
                 }
             }
             .padding(.horizontal, 10)
@@ -359,18 +370,18 @@ private struct ItemControlBarView: View {
 
                 Divider()
 
-                Section("当前列表批量操作") {
-                    Button("全选当前可清理项（\(viewModel.filteredCleanableItems.count)）") {
+                Section("批量勾选") {
+                    Button("全选可批量勾选项（\(viewModel.filteredBulkSelectableItems.count)）") {
                         viewModel.selectAllVisible()
                     }
-                    .disabled(viewModel.filteredCleanableItems.isEmpty || viewModel.allVisibleSelected)
+                    .disabled(viewModel.filteredBulkSelectableItems.isEmpty || viewModel.allVisibleSelected)
 
-                    Button("反选当前可清理项") {
+                    Button("反选可批量勾选项") {
                         viewModel.invertVisibleSelection()
                     }
-                    .disabled(viewModel.filteredCleanableItems.isEmpty)
+                    .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
 
-                    Button("清空本页选择") {
+                    Button("清空列表选择") {
                         viewModel.clearVisibleSelection()
                     }
                     .disabled(viewModel.visibleSelectedCount == 0)
@@ -462,9 +473,9 @@ private struct VirtualizedItemListView: View {
         if viewModel.displayedRows.isEmpty {
             if viewModel.hasActiveFilters {
                 ContentUnavailableView {
-                    Label("未找到匹配的条目", systemImage: "magnifyingglass")
+                    Label("没有匹配的条目", systemImage: "magnifyingglass")
                 } description: {
-                    Text("可调整搜索词、建议档位或分类筛选条件。")
+                    Text("调整搜索词或筛选条件。")
                 } actions: {
                     Button("重置筛选") {
                         viewModel.clearAllFilters()
@@ -474,7 +485,7 @@ private struct VirtualizedItemListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView {
-                    Label("暂无可清理条目", systemImage: "checkmark.seal.fill")
+                    Label("未找到可清理条目", systemImage: "checkmark.seal.fill")
                 } actions: {
                     Button("重新扫描") {
                         viewModel.rescan()
@@ -664,7 +675,7 @@ private struct CleanSectionHeader: View, Equatable {
 
             Spacer(minLength: 8)
 
-            if header.recommendation.isCleanable {
+            if header.supportsBulkSelection {
                 Button("勾选本组") {
                     viewModel.selectSection(header.recommendation)
                 }
@@ -674,14 +685,7 @@ private struct CleanSectionHeader: View, Equatable {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(Capsule().fill(tint.opacity(0.11)))
-            } else {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.shield.fill")
-                        .font(.system(size: 9.5))
-                    Text("默认不选 · 手动勾选需二次确认")
-                }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .help("勾选本组中可批量选择的条目")
             }
         }
         .padding(.horizontal, 4)

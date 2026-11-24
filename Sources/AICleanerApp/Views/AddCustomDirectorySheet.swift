@@ -53,9 +53,9 @@ struct AddCustomDirectorySheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("添加自定义扫描目录")
+                    Text("添加自定义目录")
                         .font(.system(.title3, design: .rounded).weight(.bold))
-                    Text("将自定义 AI 缓存、导出或日志目录加入侧边栏。扫描严格只读，且自动排除凭据与数据库。")
+                    Text("可添加缓存、导出文件或日志所在的文件夹。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -78,8 +78,8 @@ struct AddCustomDirectorySheet: View {
                     }
                 }
 
-                if let url = resolvedURL {
-                    validationBanner(url: url)
+                if resolvedURL != nil {
+                    validationBanner
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -91,7 +91,7 @@ struct AddCustomDirectorySheet: View {
 
                 HStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("默认类别标签")
+                        Text("类别")
                             .font(.subheadline.weight(.medium))
                         Picker("类别", selection: $category) {
                             ForEach(ScanCategory.userSelectableCases) { item in
@@ -103,11 +103,11 @@ struct AddCustomDirectorySheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("扫描粒度")
+                        Text("扫描方式")
                             .font(.subheadline.weight(.medium))
-                        Picker("扫描粒度", selection: $scanMode) {
-                            Text("展开一级子项（推荐）").tag(ScanTargetMode.children)
-                            Text("作为整体目录").tag(ScanTargetMode.directory)
+                        Picker("扫描方式", selection: $scanMode) {
+                            Text("显示文件夹中的一级条目").tag(ScanTargetMode.children)
+                            Text("将整个文件夹作为一项").tag(ScanTargetMode.directory)
                         }
                         .labelsHidden()
                     }
@@ -153,7 +153,7 @@ struct AddCustomDirectorySheet: View {
     }
 
     @ViewBuilder
-    private func validationBanner(url: URL) -> some View {
+    private var validationBanner: some View {
         if let decision = liveValidation, let reason = decision.blockReason {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "shield.slash.fill")
@@ -172,7 +172,7 @@ struct AddCustomDirectorySheet: View {
             HStack(spacing: 8) {
                 Image(systemName: "folder.badge.questionmark")
                     .foregroundStyle(.orange)
-                Text("未找到该文件夹，请检查路径是否正确：\(url.path)")
+                Text("找不到文件夹，请检查路径。")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -181,20 +181,6 @@ struct AddCustomDirectorySheet: View {
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Color.orange.opacity(0.08))
-            )
-        } else {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
-                Text("已通过安全路径校验，扫描时将自动跳过目录内的凭据、配置与数据库文件。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.green.opacity(0.08))
             )
         }
     }
@@ -205,8 +191,8 @@ struct AddCustomDirectorySheet: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
-        panel.prompt = "选择目录"
-        panel.message = "请选择要纳入只读扫描的缓存或临时文件夹"
+        panel.prompt = "选择文件夹"
+        panel.message = "选择要扫描的文件夹"
 
         if panel.runModal() == .OK, let selectedURL = panel.url {
             pathText = selectedURL.path

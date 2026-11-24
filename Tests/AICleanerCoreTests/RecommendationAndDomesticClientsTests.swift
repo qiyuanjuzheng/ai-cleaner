@@ -31,7 +31,7 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         try sandbox.createFile(relativeToHome: ".workbuddy/traces/1001.log", byteCount: 3_000)
         try sandbox.createFile(relativeToHome: ".workbuddy/cache/data.bin", byteCount: 1_500)
 
-        // 聊天会话：超过 14 天的任务目录自动升级为「建议清理」，近期任务目录保持「按需清理」
+        // 聊天会话：超过 14 天的任务目录和近期任务目录均为「按需清理」
         try sandbox.createFile(
             relativeToHome: "WorkBuddy/2026-09-01-10-00-00/output.txt",
             byteCount: 2_000,
@@ -54,8 +54,8 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         let report = engine.scan()
 
         let workBuddy = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "workbuddy" }))
-        XCTAssertEqual(workBuddy.recommendedItems.count, 3) // traces + cache + old WorkBuddy task
-        XCTAssertEqual(workBuddy.reviewSuggestedItems.count, 1) // recent WorkBuddy task
+        XCTAssertEqual(workBuddy.recommendedItems.count, 2) // traces + cache
+        XCTAssertEqual(workBuddy.reviewSuggestedItems.count, 2) // old and recent WorkBuddy tasks
         XCTAssertEqual(workBuddy.protectedItems.count, 2) // binaries + skills
         XCTAssertEqual(workBuddy.totalSizeBytes, 7_700)
         XCTAssertEqual(workBuddy.protectedSizeBytes, 10_400)
@@ -111,115 +111,74 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: binFile.path))
     }
 
-    func testTrashCleanerAllowsExplicitNotRecommendedOverrideWhileStillBlockingSystemAndRootPaths() throws {
-        // 1. 具体受保护子项（含 skills/binaries/auth.json/db 等）在用户显式覆盖时允许移入废纸篓
-        let skillsDir = try sandbox.createFile(relativeToHome: ".workbuddy/skills/demo/SKILL.md", byteCount: 600)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let authFile = try sandbox.createFile(relativeToHome: ".codex/auth.json", byteCount: 128)
-        let dbFile = try sandbox.createFile(relativeToHome: ".local/share/opencode/opencode.db", byteCount: 4_096)
-
-        // 2. 即便开启覆盖，客户端根目录（~/.claude）与敏感隐私目录（~/.ssh）依然必须死守拦住
-        let clientRoot = try sandbox.createFile(relativeToHome: ".claude/settings.json", byteCount: 64)
-            .deletingLastPathComponent()
-        let sshKey = try sandbox.createFile(relativeToHome: ".ssh/id_ed25519", byteCount: 256)
-
-        let items: [CleanableItem] = [
-            CleanableItem(
-                clientID: "workbuddy",
-                clientName: "WorkBuddy",
-                ruleID: "workbuddy-protected-skills",
-                displayName: "技能库 (skills)",
-                fileName: "skills",
-                url: skillsDir,
-                category: .protectedData,
-                recommendation: .notRecommended,
-                safetyNote: "保存自定义技能库，不建议清理",
-                sizeBytes: 600,
-                fileCount: 1,
-                modifiedAt: Date(),
-                isDirectory: true,
-                isCustom: false
-            ),
-            CleanableItem(
-                clientID: "codex",
-                clientName: "Codex",
-                ruleID: "codex-protected-auth",
-                displayName: "登录凭据 (auth.json)",
-                fileName: "auth.json",
-                url: authFile,
-                category: .protectedData,
-                recommendation: .notRecommended,
-                safetyNote: "删除后需重新登录",
-                sizeBytes: 128,
-                fileCount: 1,
-                modifiedAt: Date(),
-                isDirectory: false,
-                isCustom: false
-            ),
-            CleanableItem(
-                clientID: "opencode",
-                clientName: "OpenCode",
-                ruleID: "opencode-protected-db",
-                displayName: "主数据库 (opencode.db)",
-                fileName: "opencode.db",
-                url: dbFile,
-                category: .protectedData,
-                recommendation: .notRecommended,
-                safetyNote: "删除后丢失会话索引",
-                sizeBytes: 4_096,
-                fileCount: 1,
-                modifiedAt: Date(),
-                isDirectory: false,
-                isCustom: false
-            ),
-            CleanableItem(
-                clientID: "claude-code",
-                clientName: "Claude Code",
-                ruleID: "forged-root",
-                displayName: "客户端根目录",
-                fileName: ".claude",
-                url: clientRoot,
-                category: .protectedData,
-                recommendation: .notRecommended,
-                safetyNote: "底线禁止",
-                sizeBytes: 1_000,
-                fileCount: 1,
-                modifiedAt: Date(),
-                isDirectory: true,
-                isCustom: false
-            ),
-            CleanableItem(
-                clientID: "system",
-                clientName: "System",
-                ruleID: "forged-ssh",
-                displayName: "SSH 密钥",
-                fileName: "id_ed25519",
-                url: sshKey,
-                category: .protectedData,
-                recommendation: .notRecommended,
-                safetyNote: "底线禁止",
-                sizeBytes: 256,
-                fileCount: 1,
-                modifiedAt: Date(),
-                isDirectory: false,
-                isCustom: false
-            )
+    func testScanDistinguishesHardProtectionFromRiskOverrides() throws {
+        let paths = [
+            ".codex/auth.json",
+            ".local/share/opencode/opencode.db",
+            ".workbuddy/security/current.dat",
+            ".workbuddy-ai/plugins/demo/auth.json",
+            ".workbuddy/plugins/demo/plugin.js",
+            ".ollama/models/example.gguf"
         ]
+        for path in paths {
+            try sandbox.createFile(relativeToHome: path, byteCount: 64)
+        }
+        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let items = Dictionary(uniqueKeysWithValues: report.allProtectedItems.map { ($0.ruleID, $0) })
+
+        let hardLocked: [String: String] = [
+            "codex-protected-auth": "auth.json",
+            "opencode-protected-db": "opencode.db",
+            "workbuddy-protected-security": "security",
+            "workbuddy-ai-protected-plugins": "auth.json"
+        ]
+        for (ruleID, protectedName) in hardLocked {
+            let item = try XCTUnwrap(items[ruleID])
+            let reason = try XCTUnwrap(item.hardProtectionReason)
+            XCTAssertTrue(reason.contains(protectedName))
+            XCTAssertEqual(item.safetyNote, reason)
+        }
+
+        let plugins = try XCTUnwrap(items["workbuddy-protected-plugins"])
+        let models = try XCTUnwrap(items["ollama-protected-models"])
+        let overridable = [plugins, models]
+        XCTAssertTrue(overridable.allSatisfy { $0.hardProtectionReason == nil && !$0.isCleanable })
 
         let spy = GuardedPerformerSpy()
-        let cleaner = TrashCleaner(
-            safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL),
-            performer: spy
-        )
+        let cleaner = TrashCleaner(safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL), performer: spy)
+        let normal = cleaner.trash(items: overridable)
+        XCTAssertEqual(normal.skippedProtectedItems.count, 2)
+        XCTAssertTrue(spy.calledPaths.isEmpty)
 
+        let override = cleaner.trash(items: overridable, allowNotRecommendedOverride: true)
+        XCTAssertEqual(override.trashedCount, 2)
+        XCTAssertEqual(Set(spy.calledPaths), Set(overridable.map { $0.url.path }))
+    }
+
+    func testRiskOverrideStillBlocksClientRootsAndSensitivePaths() throws {
+        let clientRoot = try sandbox.createDirectory(relativeToHome: ".claude")
+        let sensitiveFile = try sandbox.createFile(relativeToHome: ".ssh/other.dat", byteCount: 64)
+        let items = [clientRoot, sensitiveFile].map { url in
+            CleanableItem(
+                clientID: "fixture",
+                clientName: "Fixture",
+                ruleID: "fixture-rule",
+                displayName: url.lastPathComponent,
+                fileName: url.lastPathComponent,
+                url: url,
+                category: .protectedData,
+                safetyNote: "fixture",
+                sizeBytes: 64,
+                fileCount: 1,
+                modifiedAt: Date(),
+                isDirectory: url == clientRoot,
+                isCustom: false
+            )
+        }
+        let spy = GuardedPerformerSpy()
+        let cleaner = TrashCleaner(safetyGuard: SafetyGuard(homeDirectory: sandbox.homeURL), performer: spy)
         let result = cleaner.trash(items: items, allowNotRecommendedOverride: true)
-        XCTAssertEqual(result.trashedCount, 3)
         XCTAssertEqual(result.skippedProtectedItems.count, 2)
-        XCTAssertTrue(spy.calledPaths.contains(skillsDir.standardizedFileURL.path))
-        XCTAssertTrue(spy.calledPaths.contains(authFile.standardizedFileURL.path))
-        XCTAssertTrue(spy.calledPaths.contains(dbFile.standardizedFileURL.path))
-        XCTAssertFalse(spy.calledPaths.contains(clientRoot.standardizedFileURL.path))
-        XCTAssertFalse(spy.calledPaths.contains(sshKey.standardizedFileURL.path))
+        XCTAssertTrue(spy.calledPaths.isEmpty)
     }
 }

@@ -1,12 +1,12 @@
 import Foundation
 
-/// 条目清理建议等级：明确区分「建议清理」「按需清理」与「不建议清理（已锁定保护）」，让用户一眼辨别风险。
+/// 条目清理建议等级：明确区分「建议清理」「按需清理」与「不建议清理」，让用户一眼辨别风险。
 public enum CleanupRecommendation: String, CaseIterable, Codable, Hashable, Sendable, Identifiable {
-    /// 建议清理：缓存、日志、临时产物或较早的历史/归档会话，移入废纸篓可安全释放空间
+    /// 建议清理：缓存、日志或临时产物，适合批量移入废纸篓
     case recommended
-    /// 按需清理：近期聊天会话、任务产物目录、自定义目录或可重建但耗时的索引，请确认无需保留后再清理
+    /// 按需清理：聊天会话、任务产物目录、自定义目录或可重建但耗时的索引，请确认无需保留后再清理
     case reviewSuggested
-    /// 不建议清理：登录态、凭据、核心配置、项目记忆、主数据库、已装插件与运行时组件，仅透明展示体积并锁定保护
+    /// 不建议清理：登录态、凭据、核心配置、项目记忆、主数据库、已装插件与运行时组件，包括硬保护条目和须确认风险的条目
     case notRecommended
 
     public var id: String { rawValue }
@@ -27,11 +27,11 @@ public enum CleanupRecommendation: String, CaseIterable, Codable, Hashable, Send
     public var shortGuidance: String {
         switch self {
         case .recommended:
-            return "安全可重建或已过时，可放心移入废纸篓"
+            return "缓存、日志或临时文件，可移入废纸篓"
         case .reviewSuggested:
-            return "确认是一次性会话或无用产物后再勾选"
+            return "确认无需保留后再勾选"
         case .notRecommended:
-            return "核心配置、记忆、插件或主库，默认不选；如需删除可手动勾选并二次确认"
+            return "凭据和主库已锁定；插件、模型权重等需单独勾选并两次确认"
         }
     }
 

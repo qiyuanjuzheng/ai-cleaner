@@ -64,7 +64,14 @@ struct ItemRowView: View, Equatable {
         )
 
         HStack(alignment: .center, spacing: 11) {
-            if item.isCleanable {
+            if let reason = item.hardProtectionReason {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(recColor)
+                    .frame(width: 17, height: 17)
+                    .help(reason)
+                    .accessibilityLabel("已锁定")
+            } else if item.isCleanable {
                 AnimatedCheckbox(
                     isChecked: isSelected,
                     tint: recColor
@@ -108,6 +115,7 @@ struct ItemRowView: View, Equatable {
                     .animation(reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.66), value: isSelected)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(isSelected ? "取消勾选" : "勾选并确认风险")
             }
 
             HStack(alignment: .center, spacing: 11) {
@@ -204,7 +212,9 @@ struct ItemRowView: View, Equatable {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                viewModel.toggleSelection(for: item)
+                if item.hardProtectionReason == nil {
+                    viewModel.toggleSelection(for: item)
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -235,20 +245,22 @@ struct ItemRowView: View, Equatable {
             isHovered = hovering
         }
         .contextMenu {
-            Button {
-                viewModel.toggleSelection(for: item)
-            } label: {
-                if item.isCleanable {
-                    Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
-                } else {
-                    Label(
-                        isSelected ? "取消勾选（不建议清理）" : "强制勾选（需风险确认）…",
-                        systemImage: isSelected ? "checkmark.square" : "exclamationmark.shield"
-                    )
+            if item.hardProtectionReason == nil {
+                Button {
+                    viewModel.toggleSelection(for: item)
+                } label: {
+                    if item.isCleanable {
+                        Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
+                    } else {
+                        Label(
+                            isSelected ? "取消勾选" : "勾选并确认风险…",
+                            systemImage: isSelected ? "checkmark.square" : "exclamationmark.shield"
+                        )
+                    }
                 }
-            }
 
-            Divider()
+                Divider()
+            }
 
             Button {
                 viewModel.revealInFinder(item)

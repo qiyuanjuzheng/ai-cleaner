@@ -121,14 +121,9 @@ struct ScanReadyHeroView: View {
                 .frame(width: 210, height: 210)
             }
 
-            VStack(spacing: 6) {
-                Text("AI 客户端空间清理")
-                    .font(.system(.title2, design: .rounded).weight(.bold))
-                Text("只读扫描会话、缓存和日志等文件")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(height: 50)
+            Text("扫描 AI 客户端")
+                .font(.system(.title2, design: .rounded).weight(.bold))
+                .frame(height: 50)
 
             HStack(spacing: 12) {
                 Button(action: onStartScan) {
@@ -156,13 +151,13 @@ struct ScanReadyHeroView: View {
                             Image(systemName: "chart.line.uptrend.xyaxis")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(AppTheme.color(for: .recommended))
-                            Text("累计释放 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
+                            Text("累计已移入废纸篓 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("查看历史清理趋势")
+                    .help("查看移入废纸篓趋势")
                 }
             }
             .frame(height: 18)
@@ -271,7 +266,7 @@ struct OrbitalScannerHero: View {
                 .frame(width: 210, height: 210)
             }
 
-            Text("正在只读扫描…")
+            Text("正在扫描 AI 客户端…")
                 .font(.system(.title2, design: .rounded).weight(.bold))
                 .frame(height: 50)
 
@@ -460,8 +455,8 @@ struct StorageRingGauge: View {
         switch highlightedTier {
         case .recommended: return "建议清理"
         case .reviewSuggested: return "按需清理"
-        case .notRecommended: return "已保护"
-        case nil: return "可释放"
+        case .notRecommended: return "不建议清理"
+        case nil: return "可清理"
         }
     }
 

@@ -31,6 +31,10 @@ let package = Package(
             name: "AICleanerCoreTests",
             dependencies: ["AICleanerCore"],
             path: "Tests/AICleanerCoreTests"
+        ),
+        .testTarget(
+            name: "AICleanerAppTests",
+            dependencies: ["AICleanerApp", "AICleanerCore"]
         )
     ]
 )

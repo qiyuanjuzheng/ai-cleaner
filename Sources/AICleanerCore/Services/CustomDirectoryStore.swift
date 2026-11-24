@@ -16,7 +16,7 @@ public enum CustomDirectoryError: LocalizedError, Equatable, Sendable {
         case let .protectedPath(reason):
             return "出于安全限制，无法添加该目录：\(reason)"
         case let .duplicatePath(path):
-            return "该目录已在自定义扫描列表中：\(path)"
+            return "该目录已在扫描列表中：\(path)"
         }
     }
 }

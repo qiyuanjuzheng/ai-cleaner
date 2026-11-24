@@ -67,7 +67,7 @@ struct AICleanerApp: App {
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(viewModel.isScanning || viewModel.isCleaning)
 
-                Button("返回待扫描状态") {
+                Button("返回扫描") {
                     viewModel.returnToIdleState()
                 }
                 .disabled((!viewModel.hasScanResults && !viewModel.isScanning) || viewModel.isCleaning)
@@ -77,28 +77,28 @@ struct AICleanerApp: App {
                 }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
 
-                Button("查看历史清理趋势") {
+                Button("查看移入废纸篓趋势") {
                     viewModel.sidebarSelection = .history
                 }
                 .keyboardShortcut("2", modifiers: .command)
 
                 Divider()
 
-                Button("一键勾选建议清理项") {
+                Button("勾选建议清理项") {
                     viewModel.selectRecommendedInScope()
                 }
                 .disabled(viewModel.scopedRecommendedItems.isEmpty)
 
-                Button("全选当前可清理项") {
+                Button("全选可批量勾选项") {
                     viewModel.selectAllVisible()
                 }
                 .keyboardShortcut("a", modifiers: [.command, .option])
-                .disabled(viewModel.filteredCleanableItems.isEmpty)
+                .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
 
-                Button("反选当前可清理项") {
+                Button("反选可批量勾选项") {
                     viewModel.invertVisibleSelection()
                 }
-                .disabled(viewModel.filteredCleanableItems.isEmpty)
+                .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
 
                 Button("清空全部选择") {
                     viewModel.clearAllSelection()

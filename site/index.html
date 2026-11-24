@@ -3,180 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f8f7">
-  <meta name="description" content="AI Cleaner 是 macOS 上的 AI 客户端清理工具，只读扫描缓存、日志与聊天会话，分级展示结果，并将选定项目移入系统废纸篓。">
+  <meta name="theme-color" content="#f7f8f4">
+  <meta name="description" content="AI Cleaner 是 macOS 上的 AI 客户端清理工具。只读扫描聊天会话、缓存和日志，按建议分级，并将选定项目移入系统废纸篓。">
   <title>AI Cleaner — macOS AI 客户端清理工具</title>
   <link rel="icon" href="./assets/app-icon.png" type="image/png">
-  <link rel="stylesheet" href="./assets/site.css">
-  <script src="./assets/site.js" defer></script>
+  <link rel="stylesheet" href="./assets/site.css?v=2">
+  <script src="./assets/site.js?v=2" defer></script>
 </head>
 <body id="top">
   <a class="skip-link" href="#main">跳到正文</a>
   <header class="site-header">
     <div class="wrap header-inner">
       <a class="brand" href="#top">
-        <img src="./assets/app-icon.png" width="42" height="42" alt="">
+        <img src="./assets/app-icon.png" width="40" height="40" alt="">
         <span>AI Cleaner</span>
       </a>
       <nav aria-label="主导航">
         <a href="#how-it-works">清理流程</a>
         <a href="#clients">支持的客户端</a>
-        <a class="nav-install" href="#install">安装指南 <span aria-hidden="true">↗</span></a>
+        <a class="nav-install" href="#install">安装</a>
       </nav>
     </div>
   </header>
 
   <main id="main">
-    <section class="hero" aria-labelledby="hero-title">
-      <div class="wrap hero-grid">
-        <div class="hero-copy">
-          <p class="platform"><span></span> macOS 原生工具</p>
-          <h1 id="hero-title">给 AI 客户端<br>腾出空间<span>。</span></h1>
-          <p class="intro">看看缓存、日志和聊天会话占了多少空间。AI Cleaner 先只读扫描，再按清理建议分级。选好要清理的条目后，确认移入系统废纸篓。</p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#install">查看安装指南 <span aria-hidden="true">↓</span></a>
-            <a class="button button-outline" href="https://github.com/qiyuanjuzheng/ai-cleaner">GitHub 源码 <span aria-hidden="true">↗</span></a>
-          </div>
-          <p class="requirements">适用于 macOS 14 Sonoma 或更高版本</p>
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="product-label">AI 客户端清理工具 <span>·</span> macOS</p>
+        <h1 id="hero-title">看清占用，<br class="narrow-break">再清理。</h1>
+        <p class="intro">在 Mac 上扫描 AI 客户端的会话、缓存和日志。按建议找出可以清理的条目，确认后移入废纸篓。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#install">查看安装指南</a>
+          <a class="button button-quiet" href="https://github.com/qiyuanjuzheng/ai-cleaner">GitHub 源码</a>
         </div>
+      </div>
 
-        <figure class="preview">
-          <div class="demo" id="demo">
-            <div class="window-bar">
-              <div class="window-lights" aria-hidden="true"><i></i><i></i><i></i></div>
-              <span class="window-name">AI Cleaner</span>
-              <span class="demo-badge">示例模式</span>
-            </div>
-            <div class="demo-layout">
-              <aside class="demo-sidebar" aria-label="示例扫描范围">
-                <p>扫描范围</p>
-                <span class="sidebar-selected"><i aria-hidden="true">▦</i> 全部</span>
-                <span><i class="codex-dot" aria-hidden="true"></i> Codex</span>
-                <span><i class="claude-dot" aria-hidden="true"></i> Claude Code</span>
-                <span><i class="cursor-dot" aria-hidden="true"></i> Cursor</span>
-              </aside>
-              <div class="demo-content">
-                <div class="scan-heading">
-                  <h2>扫描概览</h2>
-                  <button class="demo-button" type="button" id="demo-scan" disabled><span aria-hidden="true">↻</span> 重新扫描</button>
-                </div>
-                <div class="storage-meter" aria-hidden="true">
-                  <span class="meter-recommended"></span><span class="meter-review"></span><span class="meter-protected"></span>
-                </div>
-                <dl class="tier-grid">
-                  <div class="tier recommended"><dt>建议清理</dt><dd id="demo-recommended-size">1.30 GB</dd></div>
-                  <div class="tier review"><dt>按需清理</dt><dd id="demo-review-size">326 MB</dd></div>
-                  <div class="tier protected"><dt>不建议清理</dt><dd>214 MB</dd></div>
-                </dl>
-                <ul class="demo-items" aria-label="扫描结果">
-                  <li>
-                    <label>
-                      <input type="checkbox" data-mb="820" data-tier="recommended" disabled>
-                      <span class="item-info"><strong>Codex CLI 缓存</strong><span>Codex · 缓存</span></span>
-                      <span class="item-size">820 MB</span>
-                    </label>
-                  </li>
-                  <li>
-                    <label>
-                      <input type="checkbox" data-mb="480" data-tier="recommended" disabled>
-                      <span class="item-info"><strong>示例项目归档会话</strong><span>Claude Code · 历史会话</span></span>
-                      <span class="item-size">480 MB</span>
-                    </label>
-                  </li>
-                  <li>
-                    <label>
-                      <input type="checkbox" data-mb="326" data-tier="review" disabled>
-                      <span class="item-info"><strong>示例项目近期会话</strong><span>Claude Code · 近期会话</span></span>
-                      <span class="item-size">326 MB</span>
-                    </label>
-                  </li>
-                  <li>
-                    <div class="locked-item">
-                      <span class="lock-icon" aria-hidden="true"></span>
-                      <span class="item-info"><strong>已安装编辑器扩展</strong><span>Cursor · 默认锁定</span></span>
-                      <span class="item-size">214 MB</span>
-                    </div>
-                  </li>
-                  <li id="demo-empty" class="demo-empty" hidden>已清理可选的示例条目。</li>
-                </ul>
-                <div class="demo-actions">
-                  <button class="demo-button demo-select" type="button" id="demo-select" disabled>勾选建议项</button>
-                  <button class="demo-button demo-trash" type="button" id="demo-trash" disabled>移入废纸篓</button>
-                </div>
-                <p class="demo-status" id="demo-status" role="status">扫描到 4 项</p>
-              </div>
-            </div>
-            <dialog id="demo-confirm" aria-labelledby="demo-confirm-title">
-              <h2 id="demo-confirm-title">确认移入废纸篓</h2>
-              <p id="demo-confirm-detail"></p>
-              <form method="dialog">
-                <button class="demo-button" value="cancel" autofocus>取消</button>
-                <button class="demo-button demo-trash" value="trash">确认移入</button>
-              </form>
-            </dialog>
+      <figure class="product-figure">
+        <div class="product-stage">
+          <a class="screenshot-link" href="./assets/scan-results.webp" aria-label="查看扫描结果原图">
+            <img class="screenshot" src="./assets/scan-results.webp" width="1180" height="760" alt="AI Cleaner 原生应用扫描结果。侧边栏列出检测到的客户端，右侧显示空间占用分布、清理等级和文件明细。" fetchpriority="high">
+          </a>
+        </div>
+        <figcaption><span>AI Cleaner 扫描结果</span><span>原生应用截图 · 隔离示例数据</span></figcaption>
+      </figure>
+    </section>
+
+    <section class="section wrap" id="how-it-works" aria-labelledby="flow-title">
+      <div class="section-intro">
+        <h2 id="flow-title">每一项，都有<br class="wide-break">清理建议。</h2>
+        <p>扫描只读。结果按客户端整理，可搜索会话摘要和路径，也能按体积、时间或名称排序。</p>
+      </div>
+      <div class="flow-details">
+        <dl class="level-list">
+          <div>
+            <dt><span class="level-dot green"></span>建议清理</dt>
+            <dd>缓存、临时日志，以及部分压缩归档或超过 14 天未活跃的会话。可批量勾选建议项。</dd>
           </div>
-          <figcaption><span aria-hidden="true"></span> 网页演示使用虚构数据，操作仅更新示例。</figcaption>
+          <div>
+            <dt><span class="level-dot amber"></span>按需清理</dt>
+            <dd>近期聊天、一次性任务目录、回滚快照和自定义目录。部分 JSONL 会话会显示项目名和首条提问摘要。</dd>
+          </div>
+          <div>
+            <dt><span class="level-dot violet"></span>不建议清理</dt>
+            <dd>凭据、核心配置、记忆、插件、数据库和本地模型等高风险条目默认锁定。可解锁的条目须经两次风险确认。</dd>
+          </div>
+        </dl>
+        <p class="boundary">应用在清理前再次校验路径，拦截系统目录、敏感隐私目录、受保护的客户端根目录和越界符号链接。</p>
+      </div>
+    </section>
+
+    <section class="trash-section" aria-labelledby="trash-title">
+      <div class="wrap trash-inner">
+        <div class="trash-copy">
+          <h2 id="trash-title">选好文件，<br class="wide-break">确认后再移走。</h2>
+          <p>在确认窗口核对文件和大小。选中的文件会进入 macOS 系统废纸篓，清空前可用 Finder 的「放回原处」恢复。</p>
+        </div>
+        <figure class="trash-figure">
+          <a class="screenshot-link" href="./assets/trash-confirmation.webp" aria-label="查看移入废纸篓确认窗口原图">
+            <img class="screenshot" src="./assets/trash-confirmation.webp" width="580" height="524" alt="AI Cleaner 原生应用的移入系统废纸篓确认窗口，列出将移入的条目和预计清理的空间。" loading="lazy">
+          </a>
+          <figcaption>移入废纸篓前的确认窗口</figcaption>
         </figure>
       </div>
     </section>
 
-    <section class="flow wrap" id="how-it-works" aria-labelledby="flow-title">
-      <div class="section-heading">
-        <h2 id="flow-title">从扫描到清理</h2>
-        <p>查看占用，逐项决定哪些文件可以移走。</p>
-      </div>
-      <ol class="flow-list">
-        <li>
-          <span class="step">1</span>
-          <h3>只读扫描</h3>
-          <p>查找已支持客户端的缓存、日志、临时文件和聊天会话。部分 JSONL 会话可显示项目名和首条提问摘要。</p>
-        </li>
-        <li>
-          <span class="step">2</span>
-          <h3>按建议选取</h3>
-          <p>按体积、时间或名称排序，也可搜索会话摘要和路径。建议清理项可批量勾选，近期会话等条目可按需选取。</p>
-        </li>
-        <li>
-          <span class="step">3</span>
-          <h3>移入废纸篓</h3>
-          <p>在确认窗口核对清单。文件移入 macOS 系统废纸篓后，可在清空前用 Finder 的「放回原处」恢复。</p>
-        </li>
-      </ol>
-    </section>
-
-    <section class="safety" aria-labelledby="safety-title">
-      <div class="wrap safety-grid">
-        <div class="section-heading">
-          <h2 id="safety-title">哪些文件会被保护</h2>
-          <p>三档建议会随条目类型和部分会话的活跃时间变化。执行清理前，应用会再次校验目标路径。</p>
-        </div>
-        <dl class="safety-levels">
-          <div class="recommended">
-            <dt><span></span> 建议清理</dt>
-            <dd>可重建的缓存、临时日志，以及识别到的压缩归档会话或超过 14 天未活跃的历史会话。</dd>
-          </div>
-          <div class="review">
-            <dt><span></span> 按需清理</dt>
-            <dd>近期聊天、一次性任务目录、回滚快照与自定义目录。先确认内容是否还需要。</dd>
-          </div>
-          <div class="protected">
-            <dt><span></span> 不建议清理</dt>
-            <dd>凭据、核心配置、记忆、插件、数据库和本地模型等高风险条目默认锁定。对可解锁条目，须经两次风险确认。</dd>
-          </div>
-        </dl>
-        <p class="safety-note"><span class="lock-icon" aria-hidden="true"></span> 系统目录、敏感隐私目录、受保护的客户端根目录和越界符号链接仍受路径校验拦截。</p>
-      </div>
-    </section>
-
-    <section class="clients wrap" id="clients" aria-labelledby="clients-title">
-      <div class="section-heading">
+    <section class="section wrap clients" id="clients" aria-labelledby="clients-title">
+      <div class="section-intro">
         <h2 id="clients-title">支持的客户端</h2>
-        <p>内置 31 套客户端规则。每个客户端的扫描范围取决于其规则与本机目录。</p>
+        <p>内置 31 套规则。各客户端的扫描范围取决于其规则和本机目录。</p>
       </div>
       <div class="client-groups">
         <div>
           <h3>编程助手、桌面应用与本地模型工具</h3>
-          <ul class="client-list">
+          <ul class="client-list" role="list">
             <li>Claude Code</li><li>Codex</li><li>Cursor</li><li>Windsurf</li><li>Claude Desktop</li>
             <li>ChatGPT Desktop</li><li>OpenCode</li><li>Pi</li><li>Gemini / Antigravity</li><li>Kiro</li>
             <li>GitHub Copilot</li><li>Multica</li><li>Cherry Studio</li><li>AnythingLLM</li><li>T3 Code</li>
@@ -185,7 +104,7 @@
         </div>
         <div>
           <h3>国内客户端与工作伙伴</h3>
-          <ul class="client-list">
+          <ul class="client-list" role="list">
             <li>WorkBuddy</li><li>豆包工作伙伴 / 豆包</li><li>WorkDaddy</li><li>DeepSeek Harness</li>
             <li>Trae / Trae CN</li><li>Qoder</li><li>通义灵码</li><li>ZCode / 智谱清言</li>
             <li>阶跃星辰</li><li>Kimi</li><li>腾讯元宝</li>
@@ -199,8 +118,8 @@
         <div class="install-copy">
           <img src="./assets/app-icon.png" width="72" height="72" alt="">
           <h2 id="install-title">在 Mac 上安装</h2>
-          <p>目前通过源码构建。需要 macOS 14 Sonoma 或更高版本，以及 Xcode 16 或更新版本（Swift 6+）。</p>
-          <a href="https://github.com/qiyuanjuzheng/ai-cleaner#构建测试与运行">查看完整构建说明 <span aria-hidden="true">↗</span></a>
+          <p>目前通过源码构建。需要 macOS 14 Sonoma 或更新版本，以及 Xcode 16 或更新版本（Swift 6+）。</p>
+          <a href="https://github.com/qiyuanjuzheng/ai-cleaner#构建测试与运行">完整构建说明</a>
         </div>
         <div class="terminal">
           <div class="terminal-bar">
@@ -222,7 +141,7 @@ open "dist/AI Cleaner.app"</code></pre>
       <img src="./assets/app-icon.png" width="34" height="34" alt="">
       <span>AI Cleaner</span>
     </a>
-    <a href="https://github.com/qiyuanjuzheng/ai-cleaner/releases">GitHub Releases <span aria-hidden="true">↗</span></a>
+    <a href="https://github.com/qiyuanjuzheng/ai-cleaner/releases">GitHub Releases</a>
   </footer>
 </body>
 </html>

@@ -11,10 +11,10 @@ struct BottomActionBar: View {
                 Divider()
             }
 
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     if viewModel.selectedItems.isEmpty {
-                        Text("勾选需要清理的条目，所有操作均移入 macOS 系统废纸篓")
+                        Text("勾选「建议清理」或确认无用的「按需清理」条目，所有清理均进入 macOS 废纸篓")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
@@ -43,6 +43,19 @@ struct BottomActionBar: View {
                 }
 
                 Spacer()
+
+                if viewModel.selectedItems.isEmpty && !viewModel.scopedRecommendedItems.isEmpty {
+                    Button {
+                        viewModel.selectRecommendedInScope()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.circle")
+                            Text("勾选建议项")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                }
 
                 Button {
                     viewModel.requestTrashConfirmation()

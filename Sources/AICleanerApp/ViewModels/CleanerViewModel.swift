@@ -57,9 +57,11 @@ final class CleanerViewModel {
 
     var searchText: String = ""
     var selectedCategory: ScanCategory? = nil
+    var selectedRecommendation: CleanupRecommendation? = nil
     var selectedAgeFilter: ItemAgeFilter = .all
     var sortOrder: ItemSortOrder = .sizeDescending
     var selectedItemIDs: Set<String> = []
+    var collapsedSections: Set<CleanupRecommendation> = []
 
     var isScanning: Bool = false
     var isCleaning: Bool = false
@@ -98,13 +100,59 @@ final class CleanerViewModel {
         return report?.clientSummaries.first(where: { $0.id == clientID })
     }
 
-    var scopedItems: [CleanableItem] {
+    /// 当前侧边栏分组下的所有可清理条目（「建议清理」+「按需清理」）
+    var scopedCleanableItems: [CleanableItem] {
         switch sidebarSelection {
         case .allClients:
             return report?.allItems ?? []
         case let .client(clientID):
             return report?.clientSummaries.first(where: { $0.id == clientID })?.items ?? []
         }
+    }
+
+    /// 当前侧边栏分组下所有透明展示的「不建议清理（锁定保护）」条目
+    var scopedProtectedItems: [CleanableItem] {
+        switch sidebarSelection {
+        case .allClients:
+            return report?.allProtectedItems ?? []
+        case let .client(clientID):
+            return report?.clientSummaries.first(where: { $0.id == clientID })?.protectedItems ?? []
+        }
+    }
+
+    /// 当前侧边栏分组下展示的全部条目（含可清理与不建议清理）
+    var scopedItems: [CleanableItem] {
+        scopedCleanableItems + scopedProtectedItems
+    }
+
+    // MARK: - Scope Dashboard Metrics
+
+    var scopedRecommendedItems: [CleanableItem] {
+        scopedCleanableItems.filter { $0.recommendation == .recommended }
+    }
+
+    var scopedReviewSuggestedItems: [CleanableItem] {
+        scopedCleanableItems.filter { $0.recommendation == .reviewSuggested }
+    }
+
+    var scopedRecommendedBytes: Int64 {
+        scopedRecommendedItems.reduce(0) { $0 + $1.sizeBytes }
+    }
+
+    var scopedReviewSuggestedBytes: Int64 {
+        scopedReviewSuggestedItems.reduce(0) { $0 + $1.sizeBytes }
+    }
+
+    var scopedProtectedBytes: Int64 {
+        scopedProtectedItems.reduce(0) { $0 + $1.sizeBytes }
+    }
+
+    var scopedCleanableBytes: Int64 {
+        scopedRecommendedBytes + scopedReviewSuggestedBytes
+    }
+
+    var scopedTotalFootprintBytes: Int64 {
+        scopedCleanableBytes + scopedProtectedBytes
     }
 
     var categoryCounts: [ScanCategory: Int] {
@@ -123,14 +171,22 @@ final class CleanerViewModel {
         (report?.allItems ?? []).reduce(0) { $0 + ($1.category == .sessions ? 1 : 0) }
     }
 
+    /// 应用搜索、类别、建议等级与时间过滤后的全部展示条目
     var filteredItems: [CleanableItem] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let ageCutoff = selectedAgeFilter.cutoffDate()
         let filtered = scopedItems.filter { item in
+            if let selectedRecommendation, item.recommendation != selectedRecommendation {
+                return false
+            }
             if let selectedCategory, item.category != selectedCategory {
                 return false
             }
-            if let ageCutoff, item.modifiedAt >= ageCutoff {
+            if let ageCutoff, item.isCleanable, item.modifiedAt >= ageCutoff {
+                return false
+            }
+            if ageCutoff != nil && !item.isCleanable {
+                // 按「N 天前」筛选待清理项时，仅聚焦符合时间条件的可清理条目
                 return false
             }
             if trimmedQuery.isEmpty {
@@ -141,6 +197,7 @@ final class CleanerViewModel {
                 || item.url.path.localizedCaseInsensitiveContains(trimmedQuery)
                 || item.clientName.localizedCaseInsensitiveContains(trimmedQuery)
                 || item.category.displayName.localizedCaseInsensitiveContains(trimmedQuery)
+                || item.recommendation.displayName.localizedCaseInsensitiveContains(trimmedQuery)
                 || item.safetyNote.localizedCaseInsensitiveContains(trimmedQuery)
         }
 
@@ -164,13 +221,41 @@ final class CleanerViewModel {
         }
     }
 
-    var allItemsByID: [String: CleanableItem] {
+    var filteredCleanableItems: [CleanableItem] {
+        filteredItems.filter(\.isCleanable)
+    }
+
+    var maxDisplayedItemBytes: Int64 {
+        filteredItems.map(\.sizeBytes).max() ?? 0
+    }
+
+    struct RecommendationSection: Identifiable {
+        let recommendation: CleanupRecommendation
+        let items: [CleanableItem]
+        let totalBytes: Int64
+
+        var id: CleanupRecommendation { recommendation }
+    }
+
+    /// 按「建议清理 → 按需清理 → 不建议清理（已锁定保护）」清晰分组展示
+    var displayedSections: [RecommendationSection] {
+        let visible = filteredItems
+        return CleanupRecommendation.allCases.compactMap { tier in
+            let tierItems = visible.filter { $0.recommendation == tier }
+            guard !tierItems.isEmpty else { return nil }
+            let total = tierItems.reduce(0) { $0 + $1.sizeBytes }
+            return RecommendationSection(recommendation: tier, items: tierItems, totalBytes: total)
+        }
+    }
+
+    var allCleanableItemsByID: [String: CleanableItem] {
         Dictionary((report?.allItems ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     var selectedItems: [CleanableItem] {
-        let lookup = allItemsByID
+        let lookup = allCleanableItemsByID
         return selectedItemIDs.compactMap { lookup[$0] }
+            .filter(\.isCleanable)
             .sorted { lhs, rhs in
                 if lhs.clientName != rhs.clientName {
                     return lhs.clientName.localizedCaseInsensitiveCompare(rhs.clientName) == .orderedAscending
@@ -206,13 +291,17 @@ final class CleanerViewModel {
     }
 
     var allVisibleSelected: Bool {
-        let visible = filteredItems
-        guard !visible.isEmpty else { return false }
-        return visible.allSatisfy { selectedItemIDs.contains($0.id) }
+        let visibleCleanable = filteredCleanableItems
+        guard !visibleCleanable.isEmpty else { return false }
+        return visibleCleanable.allSatisfy { selectedItemIDs.contains($0.id) }
     }
 
     var visibleSelectedCount: Int {
-        filteredItems.filter { selectedItemIDs.contains($0.id) }.count
+        filteredCleanableItems.filter { selectedItemIDs.contains($0.id) }.count
+    }
+
+    var hasActiveFilters: Bool {
+        !searchText.isEmpty || selectedCategory != nil || selectedRecommendation != nil || selectedAgeFilter != .all
     }
 
     // MARK: - Actions
@@ -240,7 +329,7 @@ final class CleanerViewModel {
             self.report = newReport
             self.isScanning = false
 
-            // 仅保留本次扫描后仍存在的勾选状态
+            // 仅保留本次扫描后仍存在且可清理的勾选状态
             let validIDs = Set(newReport.allItems.map(\.id))
             self.selectedItemIDs.formIntersection(validIDs)
 
@@ -252,7 +341,32 @@ final class CleanerViewModel {
         }
     }
 
+    func toggleRecommendationFilter(_ recommendation: CleanupRecommendation) {
+        if selectedRecommendation == recommendation {
+            selectedRecommendation = nil
+        } else {
+            selectedRecommendation = recommendation
+            collapsedSections.remove(recommendation)
+        }
+    }
+
+    func toggleSectionCollapsed(_ recommendation: CleanupRecommendation) {
+        if collapsedSections.contains(recommendation) {
+            collapsedSections.remove(recommendation)
+        } else {
+            collapsedSections.insert(recommendation)
+        }
+    }
+
+    func clearAllFilters() {
+        searchText = ""
+        selectedCategory = nil
+        selectedRecommendation = nil
+        selectedAgeFilter = .all
+    }
+
     func toggleSelection(for item: CleanableItem) {
+        guard item.isCleanable else { return }
         if selectedItemIDs.contains(item.id) {
             selectedItemIDs.remove(item.id)
         } else {
@@ -261,17 +375,31 @@ final class CleanerViewModel {
     }
 
     func isSelected(_ item: CleanableItem) -> Bool {
-        selectedItemIDs.contains(item.id)
+        item.isCleanable && selectedItemIDs.contains(item.id)
+    }
+
+    /// 一键勾选当前视图下的全部「建议清理」项
+    func selectRecommendedInScope() {
+        for item in scopedRecommendedItems where item.isCleanable {
+            selectedItemIDs.insert(item.id)
+        }
+    }
+
+    func selectSection(_ recommendation: CleanupRecommendation) {
+        guard recommendation.isCleanable else { return }
+        for item in filteredCleanableItems where item.recommendation == recommendation {
+            selectedItemIDs.insert(item.id)
+        }
     }
 
     func selectAllVisible() {
-        for item in filteredItems {
+        for item in filteredCleanableItems {
             selectedItemIDs.insert(item.id)
         }
     }
 
     func invertVisibleSelection() {
-        for item in filteredItems {
+        for item in filteredCleanableItems {
             if selectedItemIDs.contains(item.id) {
                 selectedItemIDs.remove(item.id)
             } else {
@@ -281,7 +409,7 @@ final class CleanerViewModel {
     }
 
     func clearVisibleSelection() {
-        for item in filteredItems {
+        for item in filteredCleanableItems {
             selectedItemIDs.remove(item.id)
         }
     }

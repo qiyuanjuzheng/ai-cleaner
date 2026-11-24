@@ -4,46 +4,54 @@ import SwiftUI
 struct ItemRowView: View {
     let item: CleanableItem
     let showClientBadge: Bool
+    let relativeSizeFraction: Double
     let isSelected: Bool
     let onToggle: () -> Void
     let onRevealInFinder: () -> Void
     let onCopyPath: () -> Void
 
     @State private var isHovered: Bool = false
-    @State private var showingSafetyInfo: Bool = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Toggle(
-                isOn: Binding(
-                    get: { isSelected },
-                    set: { _ in onToggle() }
-                )
-            ) {
-                EmptyView()
+            if item.isCleanable {
+                Toggle(
+                    isOn: Binding(
+                        get: { isSelected },
+                        set: { _ in onToggle() }
+                    )
+                ) {
+                    EmptyView()
+                }
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .frame(width: 18)
+            } else {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.color(for: .notRecommended).opacity(0.75))
+                    .frame(width: 18)
+                    .help("该条目被标记为「不建议清理」，已锁定保护不可勾选")
             }
-            .toggleStyle(.checkbox)
-            .labelsHidden()
 
             HStack(alignment: .center, spacing: 12) {
-                Image(systemName: leadingSymbolName)
-                    .font(.system(size: 17))
-                    .foregroundStyle(leadingSymbolColor)
-                    .frame(width: 24)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(leadingSymbolColor.opacity(0.13))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: leadingSymbolName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(leadingSymbolColor)
+                }
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(item.displayName)
                             .font(.system(.body, weight: .medium))
+                            .foregroundStyle(item.isCleanable ? .primary : .secondary)
                             .lineLimit(1)
 
-                        if item.displayName != item.fileName {
-                            Text(item.fileName)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
+                        RecommendationPillView(recommendation: item.recommendation)
                         CategoryTagView(category: item.category)
 
                         if showClientBadge {
@@ -57,37 +65,19 @@ struct ItemRowView: View {
                                 )
                                 .foregroundStyle(.secondary)
                         }
-
-                        Button {
-                            showingSafetyInfo.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(item.safetyNote)
-                        .popover(isPresented: $showingSafetyInfo, arrowEdge: .bottom) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "checkmark.shield.fill")
-                                        .foregroundStyle(.green)
-                                    Text("\(item.category.displayName) · 安全说明")
-                                        .font(.headline)
-                                }
-                                Text(item.safetyNote)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(12)
-                            .frame(width: 300)
-                        }
                     }
 
+                    // 直接展示一目了然的中文原因（为什么建议清理 / 按需清理 / 不建议清理）
+                    Text(item.safetyNote)
+                        .font(.caption)
+                        .foregroundStyle(item.isCleanable ? .secondary : AppTheme.color(for: .notRecommended).opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(item.safetyNote)
+
                     Text(CleanerFormatting.abbreviatePath(item.url))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(item.url.path)
@@ -95,14 +85,27 @@ struct ItemRowView: View {
 
                 Spacer(minLength: 12)
 
-                VStack(alignment: .trailing, spacing: 3) {
+                VStack(alignment: .trailing, spacing: 4) {
                     Text(CleanerFormatting.formatBytes(item.sizeBytes))
                         .font(.system(.body, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(item.isCleanable ? .primary : .secondary)
 
-                    HStack(spacing: 8) {
+                    // 直观迷你体积占比条
+                    GeometryReader { proxy in
+                        let clamped = max(0.03, min(1.0, relativeSizeFraction))
+                        ZStack(alignment: .trailing) {
+                            Capsule()
+                                .fill(Color.secondary.opacity(0.12))
+                            Capsule()
+                                .fill(AppTheme.color(for: item.recommendation).opacity(item.isCleanable ? 0.78 : 0.45))
+                                .frame(width: item.sizeBytes > 0 ? proxy.size.width * clamped : 0)
+                        }
+                    }
+                    .frame(width: 92, height: 4)
+
+                    HStack(spacing: 6) {
                         if item.isDirectory && item.fileCount > 0 {
-                            Text("\(item.fileCount) 个文件")
+                            Text("\(item.fileCount) 文件")
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
@@ -111,11 +114,13 @@ struct ItemRowView: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
-                .frame(minWidth: 138, alignment: .trailing)
+                .frame(minWidth: 146, alignment: .trailing)
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                onToggle()
+                if item.isCleanable {
+                    onToggle()
+                }
             }
 
             Button {
@@ -131,19 +136,22 @@ struct ItemRowView: View {
             .help("在 Finder 中显示")
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .background(rowBackground)
+        .opacity(item.isCleanable ? 1.0 : 0.88)
         .onHover { hovering in
             isHovered = hovering
         }
         .contextMenu {
-            Button {
-                onToggle()
-            } label: {
-                Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
-            }
+            if item.isCleanable {
+                Button {
+                    onToggle()
+                } label: {
+                    Label(isSelected ? "取消勾选" : "勾选此项", systemImage: isSelected ? "checkmark.square" : "square")
+                }
 
-            Divider()
+                Divider()
+            }
 
             Button {
                 onRevealInFinder()
@@ -160,20 +168,36 @@ struct ItemRowView: View {
     }
 
     private var leadingSymbolName: String {
-        if item.category == .sessions {
-            return item.isDirectory ? "bubble.left.and.bubble.right.fill" : "text.bubble.fill"
+        if !item.isCleanable {
+            return "lock.shield.fill"
         }
-        return item.isDirectory ? "folder.fill" : "doc.fill"
+        switch item.category {
+        case .sessions:
+            return item.isDirectory ? "bubble.left.and.bubble.right.fill" : "text.bubble.fill"
+        case .cache:
+            return "internaldrive.fill"
+        case .temporary:
+            return "clock.arrow.circlepath"
+        case .logs:
+            return "doc.text.fill"
+        case .custom:
+            return item.isDirectory ? "folder.fill" : "doc.fill"
+        case .protectedData:
+            return "lock.shield.fill"
+        }
     }
 
     private var leadingSymbolColor: Color {
-        if item.category == .sessions {
-            return AppTheme.color(for: .sessions).opacity(0.88)
+        if !item.isCleanable {
+            return AppTheme.color(for: .notRecommended)
         }
-        return item.isDirectory ? Color.accentColor.opacity(0.85) : Color.secondary
+        return AppTheme.color(for: item.category)
     }
 
     private var rowBackground: Color {
+        if !item.isCleanable {
+            return isHovered ? Color.primary.opacity(0.025) : Color.secondary.opacity(0.02)
+        }
         if isSelected {
             return Color.accentColor.opacity(0.08)
         }
@@ -184,15 +208,15 @@ struct ItemRowView: View {
     }
 }
 
-private struct CategoryTagView: View {
-    let category: ScanCategory
+private struct RecommendationPillView: View {
+    let recommendation: CleanupRecommendation
 
     var body: some View {
-        let color = AppTheme.color(for: category)
+        let color = AppTheme.color(for: recommendation)
         HStack(spacing: 3) {
-            Image(systemName: category.symbolName)
-                .font(.system(size: 9, weight: .semibold))
-            Text(category.displayName)
+            Image(systemName: recommendation.symbolName)
+                .font(.system(size: 9, weight: .bold))
+            Text(recommendation.displayName)
                 .font(.caption2.weight(.semibold))
         }
         .padding(.horizontal, 6)
@@ -201,6 +225,27 @@ private struct CategoryTagView: View {
             Capsule()
                 .fill(color.opacity(0.14))
         )
+        .overlay(
+            Capsule()
+                .strokeBorder(color.opacity(0.32), lineWidth: 0.6)
+        )
         .foregroundStyle(color)
+    }
+}
+
+private struct CategoryTagView: View {
+    let category: ScanCategory
+
+    var body: some View {
+        let color = AppTheme.color(for: category)
+        Text(category.displayName)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(color.opacity(0.10))
+            )
+            .foregroundStyle(color)
     }
 }

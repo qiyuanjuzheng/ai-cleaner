@@ -58,16 +58,21 @@ struct AICleanerApp: App {
 
                 Divider()
 
-                Button("全选当前列表") {
+                Button("一键勾选建议清理项") {
+                    viewModel.selectRecommendedInScope()
+                }
+                .disabled(viewModel.scopedRecommendedItems.isEmpty)
+
+                Button("全选当前可清理项") {
                     viewModel.selectAllVisible()
                 }
                 .keyboardShortcut("a", modifiers: [.command, .option])
-                .disabled(viewModel.filteredItems.isEmpty)
+                .disabled(viewModel.filteredCleanableItems.isEmpty)
 
-                Button("反选当前列表") {
+                Button("反选当前可清理项") {
                     viewModel.invertVisibleSelection()
                 }
-                .disabled(viewModel.filteredItems.isEmpty)
+                .disabled(viewModel.filteredCleanableItems.isEmpty)
 
                 Button("清空全部选择") {
                     viewModel.clearAllSelection()

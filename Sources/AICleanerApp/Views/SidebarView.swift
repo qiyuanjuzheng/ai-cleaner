@@ -9,9 +9,11 @@ struct SidebarView: View {
             List(selection: $viewModel.sidebarSelection) {
                 Section("总览") {
                     SidebarSummaryRow(
-                        title: "全部可清理项",
+                        title: "全部 AI 客户端",
                         subtitle: allOverviewSubtitle,
-                        sizeBytes: viewModel.report?.totalSizeBytes ?? 0,
+                        cleanableBytes: viewModel.report?.totalSizeBytes ?? 0,
+                        protectedBytes: viewModel.report?.protectedSizeBytes ?? 0,
+                        hasRecommended: (viewModel.report?.totalRecommendedCount ?? 0) > 0,
                         symbolName: "tray.full.fill",
                         tint: .accentColor
                     )
@@ -20,7 +22,7 @@ struct SidebarView: View {
 
                 Section {
                     if viewModel.builtInSummaries.isEmpty && !viewModel.isScanning {
-                        Text("本机暂未检测到可清理的 AI 客户端数据")
+                        Text("本机暂未检测到已安装的 AI 客户端目录")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 4)
@@ -29,7 +31,9 @@ struct SidebarView: View {
                             SidebarSummaryRow(
                                 title: summary.profile.name,
                                 subtitle: subtitleText(for: summary),
-                                sizeBytes: summary.totalSizeBytes,
+                                cleanableBytes: summary.totalSizeBytes,
+                                protectedBytes: summary.protectedSizeBytes,
+                                hasRecommended: !summary.recommendedItems.isEmpty,
                                 symbolName: summary.profile.symbolName,
                                 tint: AppTheme.color(forAccentToken: summary.profile.accentToken)
                             )
@@ -41,7 +45,7 @@ struct SidebarView: View {
                         Text("AI 客户端")
                         Spacer()
                         if let report = viewModel.report {
-                            Text("\(report.detectedBuiltInClientsCount)/\(report.totalBuiltInProfilesCount)")
+                            Text("已识别 \(report.detectedBuiltInClientsCount)/\(report.totalBuiltInProfilesCount)")
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.tertiary)
                         }
@@ -60,7 +64,9 @@ struct SidebarView: View {
                                 SidebarSummaryRow(
                                     title: summary.profile.name,
                                     subtitle: "\(summary.itemCount) 项",
-                                    sizeBytes: summary.totalSizeBytes,
+                                    cleanableBytes: summary.totalSizeBytes,
+                                    protectedBytes: 0,
+                                    hasRecommended: false,
                                     symbolName: summary.profile.symbolName,
                                     tint: .teal
                                 )
@@ -128,11 +134,11 @@ struct SidebarView: View {
                         .font(.caption)
                         .foregroundStyle(.green)
                     if let scannedAt = viewModel.report?.scannedAt {
-                        Text("只读扫描 · \(CleanerFormatting.formatTime(scannedAt))")
+                        Text("只读扫描 · \(CleanerFormatting.formatTime(scannedAt)) · 仅入废纸篓")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("只读扫描 · 仅移入废纸篓")
+                        Text("只读扫描 · 仅移入系统废纸篓")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -144,30 +150,44 @@ struct SidebarView: View {
     }
 
     private var allOverviewSubtitle: String {
-        let total = viewModel.report?.totalItemCount ?? 0
-        let sessions = viewModel.totalSessionCount
-        if sessions > 0 {
-            return "\(total) 项 · \(sessions) 条会话"
+        guard let report = viewModel.report else { return "等待扫描" }
+        var parts: [String] = []
+        if report.totalRecommendedCount > 0 {
+            parts.append("建议清 \(CleanerFormatting.formatBytes(report.recommendedSizeBytes))")
         }
-        return "\(total) 项"
+        if viewModel.totalSessionCount > 0 {
+            parts.append("\(viewModel.totalSessionCount) 条会话")
+        }
+        if parts.isEmpty {
+            return "\(report.totalItemCount) 项可清"
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func subtitleText(for summary: ClientScanSummary) -> String {
-        let sessions = viewModel.sessionCount(for: summary)
-        if sessions == 0 {
-            return "\(summary.itemCount) 项"
+        if summary.itemCount == 0 && summary.protectedItemCount > 0 {
+            return "已保护 \(CleanerFormatting.formatBytes(summary.protectedSizeBytes))"
         }
-        if sessions == summary.itemCount {
+        let sessions = viewModel.sessionCount(for: summary)
+        if summary.recommendedSizeBytes > 0 && sessions > 0 {
+            return "建议清 \(CleanerFormatting.formatBytes(summary.recommendedSizeBytes)) · \(sessions) 会话"
+        }
+        if summary.recommendedSizeBytes > 0 {
+            return "建议清 \(CleanerFormatting.formatBytes(summary.recommendedSizeBytes))"
+        }
+        if sessions > 0 {
             return "\(sessions) 条会话"
         }
-        return "\(summary.itemCount) 项 · \(sessions) 条会话"
+        return "\(summary.itemCount) 项"
     }
 }
 
 private struct SidebarSummaryRow: View {
     let title: String
     let subtitle: String
-    let sizeBytes: Int64
+    let cleanableBytes: Int64
+    let protectedBytes: Int64
+    let hasRecommended: Bool
     let symbolName: String
     let tint: Color
 
@@ -183,19 +203,42 @@ private struct SidebarSummaryRow: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(.body, weight: .medium))
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.system(.body, weight: .medium))
+                        .lineLimit(1)
+                    if hasRecommended {
+                        Circle()
+                            .fill(AppTheme.color(for: .recommended))
+                            .frame(width: 6, height: 6)
+                            .help("包含建议清理项")
+                    }
+                }
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: 4)
 
-            Text(CleanerFormatting.formatBytes(sizeBytes))
-                .font(.caption.monospacedDigit().weight(.medium))
-                .foregroundStyle(sizeBytes > 0 ? .primary : .tertiary)
+            if cleanableBytes > 0 {
+                Text(CleanerFormatting.formatBytes(cleanableBytes))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.primary)
+            } else if protectedBytes > 0 {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                    Text("受保护")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.tertiary)
+            } else {
+                Text("0 KB")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.vertical, 2)
     }

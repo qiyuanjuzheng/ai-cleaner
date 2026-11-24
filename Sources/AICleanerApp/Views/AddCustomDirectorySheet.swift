@@ -78,7 +78,7 @@ struct AddCustomDirectorySheet: View {
                         Text("默认类别标签")
                             .font(.subheadline.weight(.medium))
                         Picker("类别", selection: $category) {
-                            ForEach(ScanCategory.allCases) { item in
+                            ForEach(ScanCategory.userSelectableCases) { item in
                                 Text(item.displayName).tag(item)
                             }
                         }

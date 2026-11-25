@@ -6,7 +6,14 @@ CONFIG="release"
 APP_NAME="AI Cleaner"
 EXECUTABLE_NAME="AICleanerApp"
 BUNDLE_ID="com.qiyuanjuzheng.ai-cleaner"
-VERSION="${APP_VERSION:-0.1.0}"
+DEFAULT_VERSION="0.1.0"
+if [[ -f "${ROOT_DIR}/CHANGELOG.md" ]]; then
+  CHANGELOG_VERSION="$(awk '/^## \[v?[0-9]+\.[0-9]+\.[0-9]+\]/ {gsub(/[][]/, "", $2); sub(/^v/, "", $2); print $2; exit}' "${ROOT_DIR}/CHANGELOG.md")"
+  if [[ -n "$CHANGELOG_VERSION" ]]; then
+    DEFAULT_VERSION="$CHANGELOG_VERSION"
+  fi
+fi
+VERSION="${APP_VERSION:-${DEFAULT_VERSION}}"
 BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
 SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
 ARCH=""

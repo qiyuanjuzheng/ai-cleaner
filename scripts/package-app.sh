@@ -76,8 +76,8 @@ if [[ ! -d "${SWIFTPM_BUNDLE}/Contents/Resources/ClientLogos" && ! -d "${SWIFTPM
 fi
 
 case "$ARCH" in
-  universal) lipo -verify_arch arm64 x86_64 "${BIN_PATH}" ;;
-  arm64|x86_64) lipo -verify_arch "${ARCH}" "${BIN_PATH}" ;;
+  universal) lipo "${BIN_PATH}" -verify_arch arm64 x86_64 ;;
+  arm64|x86_64) lipo "${BIN_PATH}" -verify_arch "${ARCH}" ;;
 esac
 
 DIST_DIR="${ROOT_DIR}/dist"

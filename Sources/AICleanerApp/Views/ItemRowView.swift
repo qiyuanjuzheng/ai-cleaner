@@ -41,6 +41,7 @@ struct ItemRowView: View, Equatable {
     let viewModel: CleanerViewModel
 
     @State private var isHovered: Bool = false
+    @State private var showsFullTitle = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -130,7 +131,7 @@ struct ItemRowView: View, Equatable {
 
                 VStack(alignment: .leading, spacing: 2.5) {
                     HStack(spacing: 7) {
-                        Text(item.displayName)
+                        Text(row.title)
                             .font(.system(.callout, weight: .medium))
                             .foregroundStyle(item.isCleanable || isSelected ? .primary : .secondary)
                             .lineLimit(1)
@@ -152,7 +153,7 @@ struct ItemRowView: View, Equatable {
                         }
                     }
 
-                    Text(item.safetyNote)
+                    Text(row.detailText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -160,6 +161,10 @@ struct ItemRowView: View, Equatable {
                 }
 
                 Spacer(minLength: 10)
+
+                if item.category == .sessions {
+                    fullTitleButton
+                }
 
                 // 悬停才挂载 Finder 定位按钮（固定 26×24 占位，零隐藏按钮/tooltip 开销且数字列永不抖动）
                 Group {
@@ -273,6 +278,30 @@ struct ItemRowView: View, Equatable {
             } label: {
                 Label("复制完整路径", systemImage: "doc.on.doc")
             }
+        }
+    }
+
+    private var fullTitleButton: some View {
+        Button {
+            showsFullTitle = true
+        } label: {
+            Image(systemName: "text.alignleft")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("查看完整会话标题")
+        .help("查看完整会话标题")
+        .popover(isPresented: $showsFullTitle, arrowEdge: .bottom) {
+            ScrollView {
+                Text(row.title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(width: 340, height: 132)
+            .padding(14)
         }
     }
 

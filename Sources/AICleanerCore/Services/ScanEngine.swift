@@ -104,6 +104,13 @@ public struct ScanEngine: Sendable {
         var seenCleanablePaths: Set<String> = []
         var seenProtectedPaths: Set<String> = []
         var skippedProtectedCount = 0
+        var codexTitles: [UUID: String] = [:]
+        if profile.id == "codex" {
+            let indexURL = homeDirectory.appendingPathComponent(".codex/session_index.jsonl")
+            if safetyGuard.validateBuiltInContainer(indexURL).isAllowed {
+                codexTitles = sessionReader.readCodexTitles(from: indexURL)
+            }
+        }
 
         for rule in profile.rules {
             if Task.isCancelled { break }
@@ -299,14 +306,15 @@ public struct ScanEngine: Sendable {
                     let canonicalPath = childURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                    let displayName: String
+                    let metadata: SessionItemMetadata
                     if rule.category == .sessions {
-                        displayName = sessionReader.buildFlatSessionDisplayName(
+                        metadata = sessionReader.flatSessionMetadata(
                             itemURL: childURL,
-                            isDirectory: inspection.isDirectory
+                            isDirectory: inspection.isDirectory,
+                            codexTitles: codexTitles
                         )
                     } else {
-                        displayName = childURL.lastPathComponent
+                        metadata = SessionItemMetadata(displayName: childURL.lastPathComponent)
                     }
 
                     let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
@@ -321,7 +329,7 @@ public struct ScanEngine: Sendable {
                             clientID: profile.id,
                             clientName: profile.name,
                             ruleID: rule.id,
-                            displayName: displayName,
+                            displayName: metadata.displayName,
                             fileName: childURL.lastPathComponent,
                             url: childURL,
                             category: rule.category,
@@ -332,7 +340,9 @@ public struct ScanEngine: Sendable {
                             modifiedAt: inspection.modifiedAt,
                             isDirectory: inspection.isDirectory,
                             isCustom: profile.isCustom,
-                            requiresIndividualSelection: requiresIndividualSelection
+                            requiresIndividualSelection: requiresIndividualSelection,
+                            sessionTitle: metadata.title,
+                            sessionProjectName: metadata.projectName
                         )
                     )
                 }
@@ -399,7 +409,7 @@ public struct ScanEngine: Sendable {
                         let canonicalPath = sessionURL.standardizedFileURL.path
                         guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                        let displayName = sessionReader.buildProjectSessionDisplayName(
+                        let metadata = sessionReader.projectSessionMetadata(
                             itemURL: sessionURL,
                             projectFolderName: projectFolderName,
                             isDirectory: inspection.isDirectory,
@@ -418,7 +428,7 @@ public struct ScanEngine: Sendable {
                                 clientID: profile.id,
                                 clientName: profile.name,
                                 ruleID: rule.id,
-                                displayName: displayName,
+                                displayName: metadata.displayName,
                                 fileName: entryName,
                                 url: sessionURL,
                                 category: rule.category,
@@ -429,7 +439,9 @@ public struct ScanEngine: Sendable {
                                 modifiedAt: inspection.modifiedAt,
                                 isDirectory: inspection.isDirectory,
                                 isCustom: profile.isCustom,
-                                requiresIndividualSelection: requiresIndividualSelection
+                                requiresIndividualSelection: requiresIndividualSelection,
+                                sessionTitle: metadata.title,
+                                sessionProjectName: metadata.projectName
                             )
                         )
                     }
@@ -489,9 +501,10 @@ public struct ScanEngine: Sendable {
                     let canonicalPath = fileURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                    let displayName = sessionReader.buildFlatSessionDisplayName(
+                    let metadata = sessionReader.flatSessionMetadata(
                         itemURL: fileURL,
-                        isDirectory: false
+                        isDirectory: false,
+                        codexTitles: codexTitles
                     )
 
                     let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
@@ -506,7 +519,7 @@ public struct ScanEngine: Sendable {
                             clientID: profile.id,
                             clientName: profile.name,
                             ruleID: rule.id,
-                            displayName: displayName,
+                            displayName: metadata.displayName,
                             fileName: fileName,
                             url: fileURL,
                             category: rule.category,
@@ -517,7 +530,9 @@ public struct ScanEngine: Sendable {
                             modifiedAt: inspection.modifiedAt,
                             isDirectory: false,
                             isCustom: profile.isCustom,
-                            requiresIndividualSelection: requiresIndividualSelection
+                            requiresIndividualSelection: requiresIndividualSelection,
+                            sessionTitle: metadata.title,
+                            sessionProjectName: metadata.projectName
                         )
                     )
                 }

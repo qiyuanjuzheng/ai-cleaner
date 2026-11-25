@@ -190,7 +190,7 @@ struct ItemRowView: View, Equatable {
 
                 Spacer(minLength: 10)
 
-                if item.category == .sessions {
+                if item.category == .sessions || item.sessionTitle != nil {
                     fullTitleButton
                 }
 

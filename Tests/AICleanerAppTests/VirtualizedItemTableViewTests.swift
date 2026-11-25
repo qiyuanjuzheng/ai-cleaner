@@ -781,9 +781,13 @@ final class VirtualizedItemTableViewTests: XCTestCase {
         window.orderBack(nil)
 
         var bannerHeights: [CGFloat] = []
-        for size in [NSSize(width: 1020, height: 660), NSSize(width: 1180, height: 760)] {
-            window.setFrame(NSRect(origin: window.frame.origin, size: size), display: false)
+        for requestedSize in [NSSize(width: 1020, height: 660), NSSize(width: 1180, height: 760)] {
+            window.setFrame(NSRect(origin: window.frame.origin, size: requestedSize), display: false)
             layoutHostedWindow(window)
+            // AppKit may constrain the requested frame to the display before any scope changes.
+            let initialSize = window.frame.size
+            XCTAssertLessThanOrEqual(initialSize.width, requestedSize.width)
+            XCTAssertLessThanOrEqual(initialSize.height, requestedSize.height)
             for selection in [
                 SidebarSelection.allClients, .client(unattributed.id), .client(builtIn[0].id),
                 .client(otherTemp.id), .history, .excluded, .allClients
@@ -791,7 +795,7 @@ final class VirtualizedItemTableViewTests: XCTestCase {
                 model.sidebarSelection = selection
                 layoutHostedWindow(window)
                 let visibleBounds = window.contentLayoutRect.insetBy(dx: -1, dy: -1)
-                XCTAssertEqual(window.frame.size, size, "\(selection)")
+                XCTAssertEqual(window.frame.size, initialSize, "\(selection)")
 
                 let views = descendants(of: hosting)
                 let scrollViews = views.compactMap { $0 as? NSScrollView }

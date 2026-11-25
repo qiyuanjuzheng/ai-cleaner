@@ -53,6 +53,8 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
 enum AppTheme {
     // MARK: - Semantic Palette (90% Neutral Canvas + 10% Intentional Accent)
 
+    static let excludedAccentColor = Color(red: 0.56, green: 0.50, blue: 0.96)
+
     static func color(for recommendation: CleanupRecommendation) -> Color {
         switch recommendation {
         case .recommended:

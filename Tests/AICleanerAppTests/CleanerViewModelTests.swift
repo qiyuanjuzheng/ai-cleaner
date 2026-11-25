@@ -304,6 +304,243 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testExcludeSelectedItemUpdatesListStatsSelectionAndPersistsAcrossRestart() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try write(String(repeating: "A", count: 4_000), at: ".claude/debug/alpha.log", in: home)
+        try write(String(repeating: "B", count: 6_000), at: ".claude/debug/beta.log", in: home)
+        try write(
+            String(repeating: "C", count: 9_000),
+            at: "Library/Application Support/Cursor/GPUCache/data_0",
+            in: home
+        )
+
+        let model = makeViewModel(home: home)
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+
+        let initialTotalBytes = try XCTUnwrap(model.report?.totalSizeBytes)
+        let alphaItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "alpha.log" }))
+        let betaItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "beta.log" }))
+        let gpuCacheItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "GPUCache" }))
+
+        // 先勾选 alpha 与 beta，再排除 alpha
+        model.toggleSelection(for: alphaItem)
+        model.toggleSelection(for: betaItem)
+        XCTAssertEqual(model.selectedItems.count, 2)
+        XCTAssertEqual(model.selectedTotalBytes, alphaItem.sizeBytes + betaItem.sizeBytes)
+
+        model.excludeItem(alphaItem)
+
+        // 立即同步生效（无需等待重新扫描）
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.id == alphaItem.id }))
+        XCTAssertFalse(model.isSelected(alphaItem))
+        XCTAssertEqual(model.selectedItems.map(\.id), [betaItem.id])
+        XCTAssertEqual(model.selectedTotalBytes, betaItem.sizeBytes)
+        XCTAssertEqual(model.report?.totalSizeBytes, initialTotalBytes - alphaItem.sizeBytes)
+        XCTAssertEqual(model.scopedRecommendedBytes, initialTotalBytes - alphaItem.sizeBytes)
+        XCTAssertEqual(model.excludedItems.count, 1)
+        XCTAssertEqual(model.excludedItemCountText, "1 项")
+        XCTAssertEqual(model.excludedItemRows.first?.existsOnDisk, true)
+
+        let claudeSidebarEntry = try XCTUnwrap(model.builtInSidebarEntries.first(where: { $0.id == "claude-code" }))
+        XCTAssertEqual(claudeSidebarEntry.cleanableBytes, betaItem.sizeBytes)
+
+        // 各种批量勾选均不会选中已排除条目
+        model.clearAllSelection()
+        model.selectRecommendedInScope()
+        XCTAssertFalse(model.selectedItemIDs.contains(alphaItem.id))
+        model.selectAllVisible()
+        XCTAssertFalse(model.selectedItemIDs.contains(alphaItem.id))
+        model.selectSection(.recommended)
+        XCTAssertFalse(model.selectedItemIDs.contains(alphaItem.id))
+        model.clearAllSelection()
+        model.invertVisibleSelection()
+        XCTAssertFalse(model.selectedItemIDs.contains(alphaItem.id))
+
+        // 切换到单个客户端 Cursor，排除它唯一的目录项 GPUCache -> 侧栏自动切回空间总览且客户端计数减少
+        model.sidebarSelection = .client("cursor")
+        model.excludeItem(gpuCacheItem)
+        XCTAssertEqual(model.sidebarSelection, .allClients)
+        XCTAssertNil(model.builtInSidebarEntries.first(where: { $0.id == "cursor" }))
+        XCTAssertEqual(model.report?.detectedBuiltInClientsCount, 1)
+        XCTAssertEqual(model.excludedItems.count, 2)
+        XCTAssertEqual(model.excludedItemCountText, "2 项")
+
+        // 重新扫描后仍然保持排除
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.url.path == alphaItem.url.path }))
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.url.path == gpuCacheItem.url.path }))
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["beta.log"])
+
+        // 模拟应用重启：新建 ViewModel 指向相同隔离存储
+        let restarted = makeViewModel(home: home)
+        XCTAssertEqual(restarted.excludedItems.count, 2)
+        XCTAssertEqual(restarted.excludedItemCountText, "2 项")
+        restarted.rescan()
+        try await waitUntil { restarted.hasScanResults && !restarted.isScanning }
+        XCTAssertEqual(restarted.filteredItems.map(\.fileName), ["beta.log"])
+        restarted.selectRecommendedInScope()
+        XCTAssertEqual(restarted.selectedItems.map(\.fileName), ["beta.log"])
+    }
+
+    @MainActor
+    func testRestoreSingleAndAllItemsPreservesRiskRulesAndHandlesMissingPaths() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let oldDate = Date().addingTimeInterval(-20 * 86_400)
+        try write(String(repeating: "L", count: 3_000), at: ".claude/debug/keep.log", in: home)
+        try write(String(repeating: "D", count: 2_500), at: ".claude/debug/vanished.log", in: home)
+        try write(
+            [
+                #"{"type":"user","cwd":"/Users/fixture/demo","message":{"role":"user","content":"原始提问"}}"#,
+                #"{"type":"custom-title","customTitle":"重要历史排查会话"}"#
+            ].joined(separator: "\n"),
+            at: ".claude/projects/-Users-fixture-demo/old-session.jsonl",
+            in: home,
+            modifiedAt: oldDate
+        )
+        try write("plugin fixture", at: ".claude/plugins/demo-plugin.js", in: home)
+
+        let model = makeViewModel(home: home)
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+
+        let keepLog = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "keep.log" }))
+        let vanishedLog = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "vanished.log" }))
+        let oldSession = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "old-session.jsonl" }))
+        let pluginItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "plugins" }))
+
+        model.excludeItem(keepLog)
+        model.excludeItem(vanishedLog)
+        model.excludeItem(oldSession)
+        model.excludeItem(pluginItem)
+        XCTAssertEqual(model.excludedItems.count, 4)
+
+        // 核对会话条目在排除记录中保留可读标题
+        let sessionRecord = try XCTUnwrap(model.excludedItems.first(where: { $0.normalizedPath == oldSession.url.path }))
+        XCTAssertEqual(sessionRecord.displayName, "重要历史排查会话")
+        XCTAssertEqual(sessionRecord.category, .sessions)
+
+        // 外部删除 vanished.log 后刷新状态 -> 标记路径已不存在，但仍允许从排除清单移除
+        try FileManager.default.removeItem(at: vanishedLog.url)
+        model.sidebarSelection = .excluded
+        XCTAssertEqual(model.missingExcludedItemCount, 1)
+        let vanishedRow = try XCTUnwrap(model.excludedItemRows.first(where: { $0.record.normalizedPath == vanishedLog.url.path }))
+        XCTAssertFalse(vanishedRow.existsOnDisk)
+
+        model.restoreExcludedItem(vanishedRow.record)
+        XCTAssertEqual(model.excludedItems.count, 3)
+        XCTAssertEqual(model.missingExcludedItemCount, 0)
+        XCTAssertNil(model.errorBannerMessage)
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.url.path == vanishedLog.url.path }))
+
+        // 单条恢复旧会话：重新回到待清理列表，不自动勾选且仍要求逐条勾选
+        model.restoreExcludedItem(sessionRecord)
+        try await waitUntil { !model.isScanning }
+        model.sidebarSelection = .allClients
+
+        let restoredSession = try XCTUnwrap(model.filteredItems.first(where: { $0.url.path == oldSession.url.path }))
+        XCTAssertEqual(restoredSession.preferredDisplayTitle, "重要历史排查会话")
+        XCTAssertFalse(model.isSelected(restoredSession))
+        XCTAssertFalse(restoredSession.isBulkSelectable)
+        model.selectAllVisible()
+        XCTAssertFalse(model.isSelected(restoredSession))
+
+        // 跨重启后「全部恢复」：剩余 keep.log 与高风险 plugins 均回到待清理列表且均不自动勾选
+        let restarted = makeViewModel(home: home)
+        restarted.rescan()
+        try await waitUntil { restarted.hasScanResults && !restarted.isScanning }
+        XCTAssertEqual(restarted.excludedItems.count, 2)
+        XCTAssertFalse(restarted.filteredItems.contains(where: { $0.fileName == "keep.log" }))
+        XCTAssertFalse(restarted.filteredItems.contains(where: { $0.fileName == "plugins" }))
+
+        restarted.sidebarSelection = .excluded
+        restarted.restoreAllExcludedItems()
+        try await waitUntil { !restarted.isScanning }
+
+        XCTAssertTrue(restarted.excludedItems.isEmpty)
+        XCTAssertEqual(restarted.excludedItemCountText, "")
+        XCTAssertTrue(restarted.selectedItemIDs.isEmpty)
+
+        restarted.sidebarSelection = .allClients
+        let restoredKeep = try XCTUnwrap(restarted.filteredItems.first(where: { $0.fileName == "keep.log" }))
+        let restoredPlugin = try XCTUnwrap(restarted.filteredItems.first(where: { $0.fileName == "plugins" }))
+        XCTAssertFalse(restarted.isSelected(restoredKeep))
+        XCTAssertFalse(restarted.isSelected(restoredPlugin))
+        XCTAssertEqual(restoredPlugin.recommendation, .notRecommended)
+
+        // 高风险项恢复后仍需风险确认弹窗，不会静默勾选
+        restarted.toggleSelection(for: restoredPlugin)
+        XCTAssertEqual(restarted.pendingRiskItemToSelect?.id, restoredPlugin.id)
+        XCTAssertFalse(restarted.isSelected(restoredPlugin))
+    }
+
+    @MainActor
+    func testExcludedItemsViewLayoutsInLightAndDarkModes() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let existingFile = home.appendingPathComponent(".claude/debug/existing.log")
+        try write("existing", at: ".claude/debug/existing.log", in: home)
+
+        let model = makeViewModel(home: home)
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+            let emptyHost = NSHostingView(rootView: ExcludedItemsView(viewModel: model))
+            emptyHost.appearance = NSAppearance(named: appearanceName)
+            emptyHost.frame = NSRect(x: 0, y: 0, width: 880, height: 660)
+            emptyHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(emptyHost.fittingSize.width, 0)
+            XCTAssertGreaterThan(emptyHost.fittingSize.height, 0)
+        }
+
+        let item1 = CleanableItem(
+            clientID: "claude-code",
+            clientName: "Claude Code",
+            ruleID: "r1",
+            displayName: "existing.log",
+            fileName: "existing.log",
+            url: existingFile,
+            category: .logs,
+            safetyNote: "日志",
+            sizeBytes: 128,
+            fileCount: 1,
+            modifiedAt: Date(),
+            isDirectory: false,
+            isCustom: false
+        )
+        let item2 = CleanableItem(
+            clientID: "cursor",
+            clientName: "Cursor",
+            ruleID: "r2",
+            displayName: "GPU 缓存",
+            fileName: "GPUCache",
+            url: home.appendingPathComponent("Library/Application Support/Cursor/GPUCache"),
+            category: .cache,
+            safetyNote: "缓存",
+            sizeBytes: 1_024,
+            fileCount: 3,
+            modifiedAt: Date(),
+            isDirectory: true,
+            isCustom: false
+        )
+        model.excludeItem(item1)
+        model.excludeItem(item2)
+
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+            let populatedHost = NSHostingView(rootView: ExcludedItemsView(viewModel: model))
+            populatedHost.appearance = NSAppearance(named: appearanceName)
+            populatedHost.frame = NSRect(x: 0, y: 0, width: 880, height: 660)
+            populatedHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(populatedHost.fittingSize.width, 0)
+            XCTAssertGreaterThan(populatedHost.fittingSize.height, 0)
+        }
+    }
+
+    @MainActor
     private func makeViewModel(home: URL) -> CleanerViewModel {
         CleanerViewModel(
             homeDirectory: home,
@@ -312,6 +549,7 @@ final class CleanerViewModelTests: XCTestCase {
                 safetyGuard: SafetyGuard(homeDirectory: home)
             ),
             historyStore: CleanupHistoryStore(storageURL: home.appendingPathComponent("history.json")),
+            excludedItemStore: ExcludedItemStore(storageURL: home.appendingPathComponent("excluded-items.json")),
             trashPerformer: FixtureTrashPerformer(directory: home.appendingPathComponent(".fixture-trash"))
         )
     }

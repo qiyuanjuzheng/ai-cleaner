@@ -7,7 +7,17 @@ import SwiftUI
 enum SidebarSelection: Hashable, Sendable {
     case allClients
     case history
+    case excluded
     case client(String)
+
+    var isListScope: Bool {
+        switch self {
+        case .allClients, .client:
+            return true
+        case .history, .excluded:
+            return false
+        }
+    }
 }
 
 enum ItemAgeFilter: String, CaseIterable, Identifiable, Sendable {
@@ -54,7 +64,7 @@ struct PreparedItemPresentation: Sendable {
     let searchableLowercased: String
 
     static func make(for item: CleanableItem, homeDirectory: URL) -> PreparedItemPresentation {
-        let title = item.scanResultTitle
+        let title = item.preferredDisplayTitle
         let detailText: String
         if let projectName = item.sessionProjectName, item.sessionTitle != nil || title == "未命名会话" {
             detailText = "\(projectName) · \(item.safetyNote)"
@@ -92,17 +102,13 @@ struct PreparedItemPresentation: Sendable {
     }
 }
 
-private extension CleanableItem {
-    var scanResultTitle: String {
-        guard category == .sessions else { return displayName }
-        if let sessionTitle { return sessionTitle }
-        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileStem = isDirectory ? fileName : url.deletingPathExtension().lastPathComponent
-        if name.isEmpty || (name == fileName && UUID(uuidString: fileStem) != nil) {
-            return "未命名会话"
-        }
-        return name
-    }
+/// 已排除条目列表的展示行快照（预检测磁盘存在状态与格式化时间，避免 SwiftUI body 反复访问文件系统）
+struct ExcludedItemDisplayRow: Identifiable, Equatable, Sendable {
+    let record: ExcludedItemRecord
+    let existsOnDisk: Bool
+    let excludedAtText: String
+
+    var id: UUID { record.id }
 }
 
 /// 侧边栏客户端行预计算模型（切换选中态时 O(1) 读取，不重复格式化或遍历条目）
@@ -165,6 +171,7 @@ final class CleanerViewModel {
     private let trashCleaner: TrashCleaner
     private let customDirectoryStore: CustomDirectoryStore
     private let historyStore: CleanupHistoryStore
+    private let excludedItemStore: ExcludedItemStore
     private let safetyGuard: SafetyGuard
 
     // MARK: - Nested Display & Cache Types
@@ -235,6 +242,7 @@ final class CleanerViewModel {
         }
     }
     var customDirectories: [CustomScanDirectory] = []
+    var excludedItems: [ExcludedItemRecord] = []
     var historyRecords: [CleanupHistoryRecord] = [] {
         didSet {
             guard !suppressCacheRebuild else { return }
@@ -252,10 +260,13 @@ final class CleanerViewModel {
     var sidebarSelection: SidebarSelection = .allClients {
         didSet {
             guard !suppressCacheRebuild, oldValue != sidebarSelection else { return }
-            if sidebarSelection == .history {
+            if !sidebarSelection.isListScope {
+                if sidebarSelection == .excluded {
+                    refreshExcludedItemStatuses()
+                }
                 return
             }
-            // 从历史趋势页返回刚才浏览的同一个客户端标签时，零重建直接瞬时恢复
+            // 从历史趋势页或已排除页返回刚才浏览的同一个客户端标签时，零重建直接瞬时恢复
             if sidebarSelection == activeListScopeSelection && hasAppliedCurrentScope {
                 return
             }
@@ -367,12 +378,17 @@ final class CleanerViewModel {
     private(set) var totalHistoricalFreedBytes: Int64 = 0
     private(set) var totalHistoricalFreedBytesText: String = "0 B"
 
+    private(set) var excludedItemRows: [ExcludedItemDisplayRow] = []
+    private(set) var excludedItemCountText: String = ""
+    private(set) var missingExcludedItemCount: Int = 0
+
     // MARK: - Internal Non-Observed Indexes
 
     @ObservationIgnored private var allDisplayedItemsByID: [String: CleanableItem] = [:]
     @ObservationIgnored private var clientSummaryByID: [String: ClientScanSummary] = [:]
     @ObservationIgnored private var presentationByID: [String: PreparedItemPresentation] = [:]
     @ObservationIgnored private var scopeCache: [SidebarSelection: CachedScopeData] = [:]
+    @ObservationIgnored private var sessionExcludedSnapshots: [String: [(item: CleanableItem, profile: AIClientProfile, isProtected: Bool)]] = [:]
     @ObservationIgnored private var activeListScopeSelection: SidebarSelection = .allClients
     @ObservationIgnored private var hasAppliedCurrentScope: Bool = false
     @ObservationIgnored private var suppressCacheRebuild: Bool = false
@@ -391,6 +407,7 @@ final class CleanerViewModel {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         customDirectoryStore: CustomDirectoryStore? = nil,
         historyStore: CleanupHistoryStore? = nil,
+        excludedItemStore: ExcludedItemStore? = nil,
         trashPerformer: any TrashPerforming = SystemTrashPerformer()
     ) {
         let guardInstance = SafetyGuard(homeDirectory: homeDirectory)
@@ -399,10 +416,12 @@ final class CleanerViewModel {
         self.trashCleaner = TrashCleaner(safetyGuard: guardInstance, performer: trashPerformer)
         self.customDirectoryStore = customDirectoryStore ?? CustomDirectoryStore(safetyGuard: guardInstance)
         self.historyStore = historyStore ?? CleanupHistoryStore()
+        self.excludedItemStore = excludedItemStore ?? ExcludedItemStore()
 
         self.suppressCacheRebuild = true
         self.customDirectories = self.customDirectoryStore.load()
         self.historyRecords = self.historyStore.load()
+        self.excludedItems = self.excludedItemStore.load()
         if let savedRaw = UserDefaults.standard.string(forKey: Self.appearanceStorageKey),
            let savedMode = AppAppearanceMode(rawValue: savedRaw) {
             self.appearanceMode = savedMode
@@ -412,6 +431,7 @@ final class CleanerViewModel {
         self.suppressCacheRebuild = false
 
         rebuildHistoryCache()
+        rebuildExcludedItemsCache()
     }
 
     // MARK: - Lightweight Derived Accessors
@@ -419,6 +439,9 @@ final class CleanerViewModel {
     var activeAccentColor: Color {
         if sidebarSelection == .history {
             return Color(red: 0.14, green: 0.80, blue: 0.66)
+        }
+        if sidebarSelection == .excluded {
+            return AppTheme.excludedAccentColor
         }
         if let summary = activeSummary {
             return AppTheme.color(forAccentToken: summary.profile.accentToken)
@@ -637,7 +660,7 @@ final class CleanerViewModel {
                 if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt < rhs.modifiedAt }
                 return lhs.sizeBytes > rhs.sizeBytes
             case .nameAscending:
-                return lhs.scanResultTitle.localizedCaseInsensitiveCompare(rhs.scanResultTitle) == .orderedAscending
+                return lhs.preferredDisplayTitle.localizedCaseInsensitiveCompare(rhs.preferredDisplayTitle) == .orderedAscending
             }
         }
     }
@@ -769,7 +792,7 @@ final class CleanerViewModel {
 
     // MARK: - Main-Thread Cache Application (O(1) Scope Switch)
 
-    private func applyPreparedReportBundle(_ bundle: PreparedReportBundle) {
+    private func applyPreparedReportBundle(_ bundle: PreparedReportBundle, resetViewport: Bool = true) {
         builtInSummaries = bundle.builtInSummaries
         customSummaries = bundle.customSummaries
         builtInSidebarEntries = bundle.builtInSidebarEntries
@@ -781,9 +804,9 @@ final class CleanerViewModel {
         presentationByID = bundle.presentationByID
         scopeCache = bundle.scopeCache
 
-        let targetScope: SidebarSelection = (sidebarSelection == .history) ? activeListScopeSelection : sidebarSelection
+        let targetScope: SidebarSelection = sidebarSelection.isListScope ? sidebarSelection : activeListScopeSelection
         activeListScopeSelection = targetScope
-        applyScope(for: targetScope, resetViewport: true)
+        applyScope(for: targetScope, resetViewport: resetViewport)
         rebuildSelectionCache()
     }
 
@@ -932,7 +955,7 @@ final class CleanerViewModel {
                 if let presentation = presentationByID[item.id] {
                     return presentation.searchableLowercased.contains(lowerQuery)
                 }
-                return item.scanResultTitle.localizedCaseInsensitiveContains(lowerQuery)
+                return item.preferredDisplayTitle.localizedCaseInsensitiveContains(lowerQuery)
                     || item.sessionProjectName?.localizedCaseInsensitiveContains(lowerQuery) == true
                     || item.displayName.localizedCaseInsensitiveContains(lowerQuery)
                     || item.fileName.localizedCaseInsensitiveContains(lowerQuery)
@@ -1030,11 +1053,36 @@ final class CleanerViewModel {
         historySummary = CleanupHistoryAnalytics.summarize(records: historyRecords, range: historyRange)
     }
 
+    private func rebuildExcludedItemsCache() {
+        let fm = FileManager.default
+        var missingCount = 0
+        var rows: [ExcludedItemDisplayRow] = []
+        rows.reserveCapacity(excludedItems.count)
+
+        for record in excludedItems {
+            let exists = fm.fileExists(atPath: record.normalizedPath)
+            if !exists {
+                missingCount += 1
+            }
+            rows.append(
+                ExcludedItemDisplayRow(
+                    record: record,
+                    existsOnDisk: exists,
+                    excludedAtText: CleanerFormatting.formatDate(record.excludedAt)
+                )
+            )
+        }
+
+        excludedItemRows = rows
+        missingExcludedItemCount = missingCount
+        excludedItemCountText = rows.isEmpty ? "" : "\(rows.count) 项"
+    }
+
     // MARK: - Actions
 
     /// 由用户主动触发扫描（从待扫描首页、工具栏或菜单启动）
     func startScan() {
-        if sidebarSelection == .history {
+        if !sidebarSelection.isListScope {
             sidebarSelection = .allClients
         }
         rescan()
@@ -1047,11 +1095,12 @@ final class CleanerViewModel {
         isScanning = false
     }
 
-    /// 从扫描结果页返回初始「待扫描」状态（保留历史清理统计与自定义目录配置）
+    /// 从扫描结果页返回初始「待扫描」状态（保留历史清理统计、自定义目录与已排除清单）
     func returnToIdleState() {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
+        sessionExcludedSnapshots.removeAll()
 
         suppressCacheRebuild = true
         report = nil
@@ -1077,20 +1126,33 @@ final class CleanerViewModel {
 
         let engine = scanEngine
         let customDirs = customDirectories
+        let excludedSnapshot = excludedItems
         let homeDir = scanEngine.homeDirectory
 
         scanTask = Task {
             let bundle = await Task.detached(priority: .userInitiated) {
-                let newReport = engine.scan(customDirectories: customDirs)
+                let newReport = engine.scan(
+                    customDirectories: customDirs,
+                    excludedItems: excludedSnapshot
+                )
                 return Self.buildPreparedReportBundle(from: newReport, homeDirectory: homeDir)
             }.value
 
             guard !Task.isCancelled else { return }
 
-            let selectableIDs = Set(bundle.allDisplayedItemsByID.values.lazy
+            let finalBundle: PreparedReportBundle
+            if self.excludedItems == excludedSnapshot {
+                finalBundle = bundle
+            } else {
+                let refiltered = bundle.report.filtering(excludedItems: self.excludedItems)
+                finalBundle = Self.buildPreparedReportBundle(from: refiltered, homeDirectory: homeDir)
+            }
+
+            let selectableIDs = Set(finalBundle.allDisplayedItemsByID.values.lazy
                 .filter { $0.hardProtectionReason == nil }.map(\.id))
+            self.sessionExcludedSnapshots.removeAll()
             self.suppressCacheRebuild = true
-            self.report = bundle.report
+            self.report = finalBundle.report
             self.isScanning = false
             self.selectedItemIDs.formIntersection(selectableIDs)
             if let pending = self.pendingRiskItemToSelect, !selectableIDs.contains(pending.id) {
@@ -1098,16 +1160,17 @@ final class CleanerViewModel {
             }
 
             if case let .client(clientID) = self.sidebarSelection,
-               bundle.clientSummaryByID[clientID] == nil {
+               finalBundle.clientSummaryByID[clientID] == nil {
                 self.sidebarSelection = .allClients
             }
             if case let .client(clientID) = self.activeListScopeSelection,
-               bundle.clientSummaryByID[clientID] == nil {
+               finalBundle.clientSummaryByID[clientID] == nil {
                 self.activeListScopeSelection = .allClients
             }
             self.suppressCacheRebuild = false
 
-            self.applyPreparedReportBundle(bundle)
+            self.applyPreparedReportBundle(finalBundle)
+            self.refreshExcludedItemStatuses()
         }
     }
 
@@ -1243,6 +1306,152 @@ final class CleanerViewModel {
     func copyPath(_ item: CleanableItem) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(item.url.path, forType: .string)
+    }
+
+    // MARK: - Excluded Items Management
+
+    /// 排除单条扫描条目：持久化到排除清单、立即从列表与统计中移除并取消已勾选状态
+    func excludeItem(_ item: CleanableItem) {
+        let canonicalKey = ExcludedItemMatcher.canonicalMatchPath(item.url.path)
+        do {
+            excludedItems = try excludedItemStore.exclude(item: item)
+            rebuildExcludedItemsCache()
+        } catch {
+            errorBannerMessage = "排除条目失败：\(error.localizedDescription)"
+            return
+        }
+
+        guard let currentReport = report else { return }
+
+        let singleMatcher = ExcludedItemMatcher(paths: [item.url.path])
+        var captured: [(item: CleanableItem, profile: AIClientProfile, isProtected: Bool)] = []
+        for summary in currentReport.clientSummaries {
+            for cleanable in summary.items where singleMatcher.isExcluded(cleanable.url) {
+                captured.append((item: cleanable, profile: summary.profile, isProtected: false))
+            }
+            for protected in summary.protectedItems where singleMatcher.isExcluded(protected.url) {
+                captured.append((item: protected, profile: summary.profile, isProtected: true))
+            }
+        }
+        if !captured.isEmpty {
+            sessionExcludedSnapshots[canonicalKey] = captured
+        }
+
+        let updatedReport = currentReport.filtering(excludedItems: excludedItems)
+        applyUpdatedReportInPlace(updatedReport)
+    }
+
+    /// 恢复单条被排除的条目：从排除清单移除；若路径仍存在于磁盘且已有扫描结果，立即同步恢复并触发轻量刷新
+    func restoreExcludedItem(_ record: ExcludedItemRecord) {
+        let canonicalKey = ExcludedItemMatcher.canonicalMatchPath(record.normalizedPath)
+        do {
+            excludedItems = try excludedItemStore.remove(id: record.id)
+            rebuildExcludedItemsCache()
+        } catch {
+            errorBannerMessage = "恢复排除条目失败：\(error.localizedDescription)"
+            return
+        }
+
+        let existsOnDisk = FileManager.default.fileExists(atPath: record.normalizedPath)
+        let restoredSnapshots = sessionExcludedSnapshots.removeValue(forKey: canonicalKey) ?? []
+
+        guard hasScanResults, existsOnDisk else { return }
+
+        if let currentReport = report, !restoredSnapshots.isEmpty {
+            let existingSnapshots = restoredSnapshots.filter {
+                FileManager.default.fileExists(atPath: $0.item.url.path)
+            }
+            if !existingSnapshots.isEmpty {
+                let remainingMatcher = ExcludedItemMatcher(records: excludedItems)
+                let merged = currentReport.mergingRestoredItems(existingSnapshots, excluding: remainingMatcher)
+                applyUpdatedReportInPlace(merged)
+            }
+        }
+
+        rescan()
+    }
+
+    /// 全部恢复所有已排除条目
+    func restoreAllExcludedItems() {
+        let previous = excludedItems
+        guard !previous.isEmpty else { return }
+
+        let anyExistsOnDisk = previous.contains {
+            FileManager.default.fileExists(atPath: $0.normalizedPath)
+        }
+
+        do {
+            excludedItems = try excludedItemStore.removeAll()
+            rebuildExcludedItemsCache()
+        } catch {
+            errorBannerMessage = "全部恢复失败：\(error.localizedDescription)"
+            return
+        }
+
+        let allSnapshots = sessionExcludedSnapshots.values.flatMap { $0 }
+        sessionExcludedSnapshots.removeAll()
+
+        guard hasScanResults, anyExistsOnDisk else { return }
+
+        if let currentReport = report, !allSnapshots.isEmpty {
+            let existingSnapshots = allSnapshots.filter {
+                FileManager.default.fileExists(atPath: $0.item.url.path)
+            }
+            if !existingSnapshots.isEmpty {
+                let merged = currentReport.mergingRestoredItems(existingSnapshots, excluding: ExcludedItemMatcher())
+                applyUpdatedReportInPlace(merged)
+            }
+        }
+
+        rescan()
+    }
+
+    /// 刷新已排除条目的磁盘存在状态
+    func refreshExcludedItemStatuses() {
+        rebuildExcludedItemsCache()
+    }
+
+    func revealExcludedItemInFinder(_ record: ExcludedItemRecord) {
+        guard FileManager.default.fileExists(atPath: record.normalizedPath) else {
+            refreshExcludedItemStatuses()
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([record.url])
+    }
+
+    func copyExcludedItemPath(_ record: ExcludedItemRecord) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(record.normalizedPath, forType: .string)
+    }
+
+    private func applyUpdatedReportInPlace(_ updatedReport: ScanReport) {
+        let bundle = Self.buildPreparedReportBundle(
+            from: updatedReport,
+            homeDirectory: scanEngine.homeDirectory
+        )
+        let selectableIDs = Set(bundle.allDisplayedItemsByID.values.lazy
+            .filter { $0.hardProtectionReason == nil }.map(\.id))
+
+        let previousScope = activeListScopeSelection
+        suppressCacheRebuild = true
+        self.report = bundle.report
+        self.selectedItemIDs.formIntersection(selectableIDs)
+        if let pending = self.pendingRiskItemToSelect, !selectableIDs.contains(pending.id) {
+            self.pendingRiskItemToSelect = nil
+        }
+
+        if case let .client(clientID) = self.sidebarSelection,
+           bundle.clientSummaryByID[clientID] == nil {
+            self.sidebarSelection = .allClients
+        }
+        if case let .client(clientID) = self.activeListScopeSelection,
+           bundle.clientSummaryByID[clientID] == nil {
+            self.activeListScopeSelection = .allClients
+        }
+        suppressCacheRebuild = false
+
+        let scopeChanged = activeListScopeSelection != previousScope
+        applyPreparedReportBundle(bundle, resetViewport: scopeChanged)
     }
 
     func validateCustomDirectory(_ url: URL) -> SafetyDecision {

@@ -5,11 +5,14 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var viewModel: CleanerViewModel
     @State private var hasVisitedHistory: Bool = false
+    @State private var hasVisitedExcluded: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let isHistory = viewModel.sidebarSelection == .history
+        let isExcluded = viewModel.sidebarSelection == .excluded
+        let isListPage = viewModel.sidebarSelection.isListScope
 
         NavigationSplitView {
             SidebarView(viewModel: viewModel)
@@ -44,13 +47,13 @@ struct ContentView: View {
                         .overlay(alignment: .bottom) { Divider() }
                     }
 
-                    // 列表页与历史趋势页使用 ZStack 保活切换，彻底消除切页时重建 ScrollView 与 Swift Charts 的卡顿
+                    // 列表页、历史趋势页与已排除页使用 ZStack 保活切换，彻底消除切页时重建 ScrollView 与 Swift Charts 的卡顿
                     ZStack {
-                        ItemListView(viewModel: viewModel, isVisible: !isHistory)
+                        ItemListView(viewModel: viewModel, isVisible: isListPage)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .opacity(isHistory ? 0 : 1)
-                            .allowsHitTesting(!isHistory)
-                            .accessibilityHidden(isHistory)
+                            .opacity(isListPage ? 1 : 0)
+                            .allowsHitTesting(isListPage)
+                            .accessibilityHidden(!isListPage)
 
                         if hasVisitedHistory || isHistory {
                             CleanupHistoryView(viewModel: viewModel)
@@ -59,11 +62,19 @@ struct ContentView: View {
                                 .allowsHitTesting(isHistory)
                                 .accessibilityHidden(!isHistory)
                         }
+
+                        if hasVisitedExcluded || isExcluded {
+                            ExcludedItemsView(viewModel: viewModel)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .opacity(isExcluded ? 1 : 0)
+                                .allowsHitTesting(isExcluded)
+                                .accessibilityHidden(!isExcluded)
+                        }
                     }
                 }
 
                 // 智能悬浮操作岛（仅在清理列表视图、勾选或清理完成时轻盈浮现）
-                if !isHistory {
+                if isListPage {
                     BottomActionBar(viewModel: viewModel)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 18)
@@ -141,11 +152,17 @@ struct ContentView: View {
             if viewModel.sidebarSelection == .history {
                 hasVisitedHistory = true
             }
+            if viewModel.sidebarSelection == .excluded {
+                hasVisitedExcluded = true
+            }
             applyWindowAppearance(viewModel.appearanceMode)
         }
         .onChange(of: viewModel.sidebarSelection) { _, newValue in
             if newValue == .history && !hasVisitedHistory {
                 hasVisitedHistory = true
+            }
+            if newValue == .excluded && !hasVisitedExcluded {
+                hasVisitedExcluded = true
             }
         }
         .onChange(of: viewModel.appearanceMode) { _, newMode in

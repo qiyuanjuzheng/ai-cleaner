@@ -37,11 +37,15 @@ struct AICleanerApp: App {
             let historyStore = CleanupHistoryStore(
                 storageURL: sandboxConfigDir.appendingPathComponent("cleanup-history.json")
             )
+            let excludedItemStore = ExcludedItemStore(
+                storageURL: sandboxConfigDir.appendingPathComponent("excluded-items.json")
+            )
             _viewModel = State(
                 initialValue: CleanerViewModel(
                     homeDirectory: homeURL,
                     customDirectoryStore: store,
-                    historyStore: historyStore
+                    historyStore: historyStore,
+                    excludedItemStore: excludedItemStore
                 )
             )
         } else {
@@ -81,6 +85,11 @@ struct AICleanerApp: App {
                     viewModel.sidebarSelection = .history
                 }
                 .keyboardShortcut("2", modifiers: .command)
+
+                Button("查看已排除条目") {
+                    viewModel.sidebarSelection = .excluded
+                }
+                .keyboardShortcut("3", modifiers: .command)
 
                 Divider()
 

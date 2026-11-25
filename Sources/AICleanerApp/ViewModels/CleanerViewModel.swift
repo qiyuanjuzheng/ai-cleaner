@@ -61,6 +61,7 @@ struct PreparedItemPresentation: Sendable {
     let dateText: String
     let abbreviatedPath: String
     let rowTooltip: String
+    let finderTooltip: String
     let searchableLowercased: String
 
     static func make(for item: CleanableItem, homeDirectory: URL) -> PreparedItemPresentation {
@@ -77,6 +78,7 @@ struct PreparedItemPresentation: Sendable {
             detailText = item.safetyNote
         }
         let rowTooltip = "\(item.safetyNote)\n路径：\(abbreviatedPath)"
+        let finderTooltip = "在 Finder 中显示：\(abbreviatedPath)"
         let searchable = [
             title,
             item.sessionTitle,
@@ -102,6 +104,7 @@ struct PreparedItemPresentation: Sendable {
             dateText: dateText,
             abbreviatedPath: abbreviatedPath,
             rowTooltip: rowTooltip,
+            finderTooltip: finderTooltip,
             searchableLowercased: searchable
         )
     }
@@ -142,6 +145,8 @@ struct SectionHeaderRow: Equatable, Sendable {
     let itemCount: Int
     let totalBytes: Int64
     let totalBytesText: String
+    let summaryText: String
+    let selectBulkTooltip: String
     let isCollapsed: Bool
     let isFirstSection: Bool
     let supportsBulkSelection: Bool
@@ -149,7 +154,7 @@ struct SectionHeaderRow: Equatable, Sendable {
     let individualOnlyCount: Int
 }
 
-/// 扁平虚拟化列表中的单条文件行模型（纯值类型，供 `ItemRowContent: Equatable` 跳过无变化行重绘）
+/// 扁平虚拟化列表中的单条文件行模型（纯值类型，预计算全部文案与提示以实现零滚动热路径拼接）
 struct ItemDisplayRow: Equatable, Sendable {
     let id: String
     let item: CleanableItem
@@ -159,12 +164,13 @@ struct ItemDisplayRow: Equatable, Sendable {
     let dateText: String
     let abbreviatedPath: String
     let rowTooltip: String
+    let finderTooltip: String
     let showClientBadge: Bool
     let relativeSizeFraction: Double
     let position: RowCardPosition
 }
 
-/// 单层扁平 LazyVStack 行元素（彻底消除嵌套 ForEach 导致的跨标签大规模 diff）
+/// 单层扁平虚拟化列表行元素（供原生 NSTableView 以 O(1) 行高查表与对象池 Cell 复用渲染）
 enum FlatListRow: Identifiable, Equatable, Sendable {
     case sectionHeader(SectionHeaderRow)
     case item(ItemDisplayRow)
@@ -386,9 +392,17 @@ final class CleanerViewModel {
     private(set) var filteredItems: [CleanableItem] = []
     private(set) var filteredBulkSelectableItems: [CleanableItem] = []
     private(set) var displayedSections: [RecommendationSection] = []
-    private(set) var displayedRows: [FlatListRow] = []
+    private(set) var displayedRows: [FlatListRow] = [] {
+        didSet {
+            displayedRowsRevision &+= 1
+        }
+    }
+    /// 仅在 `displayedRows` 结构或内容变化时递增，供 `NSTableView` O(1) 判定是否需要重新加载列表数据
+    private(set) var displayedRowsRevision: Int = 0
+    /// 仅在勾选状态变化时递增，供 `NSTableView` 仅局部刷新可视区选中态而绝不触发整表 `reloadData()`
+    private(set) var selectionRevision: Int = 0
     private(set) var maxDisplayedItemBytes: Int64 = 0
-    /// 仅在切换标签 / 筛选 / 排序时递增，让 ScrollView 瞬时重置顶部并彻底跳过千级条目 Collection Diff
+    /// 仅在切换标签 / 筛选 / 排序时递增，让列表瞬时重置顶部并彻底跳过千级条目 Collection Diff
     private(set) var listViewportID: Int = 0
 
     private(set) var selectedItems: [CleanableItem] = []
@@ -802,13 +816,24 @@ final class CleanerViewModel {
                 }
             }
 
+            let totalBytesText = CleanerFormatting.formatBytes(section.totalBytes)
+            let summaryText = "\(section.items.count) 项 · \(totalBytesText)"
+            let selectBulkTooltip: String
+            if individualOnlyCount > 0 {
+                selectBulkTooltip = "全选本组当前可见的 \(bulkSelectableCount) 条可批量项（自动跳过 \(individualOnlyCount) 条近期修改或 /tmp 仅手选项）"
+            } else {
+                selectBulkTooltip = "全选本组当前可见的 \(bulkSelectableCount) 条条目"
+            }
+
             rows.append(
                 .sectionHeader(
                     SectionHeaderRow(
                         recommendation: section.recommendation,
                         itemCount: section.items.count,
                         totalBytes: section.totalBytes,
-                        totalBytesText: CleanerFormatting.formatBytes(section.totalBytes),
+                        totalBytesText: totalBytesText,
+                        summaryText: summaryText,
+                        selectBulkTooltip: selectBulkTooltip,
                         isCollapsed: isCollapsed,
                         isFirstSection: sectionIndex == 0,
                         supportsBulkSelection: bulkSelectableCount > 0,
@@ -847,6 +872,7 @@ final class CleanerViewModel {
                             dateText: presentation.dateText,
                             abbreviatedPath: presentation.abbreviatedPath,
                             rowTooltip: presentation.rowTooltip,
+                            finderTooltip: presentation.finderTooltip,
                             showClientBadge: showClientBadge,
                             relativeSizeFraction: Double(item.sizeBytes) / safeMaxBytes,
                             position: position
@@ -1076,6 +1102,7 @@ final class CleanerViewModel {
     }
 
     private func rebuildSelectionCache() {
+        selectionRevision &+= 1
         guard !selectedItemIDs.isEmpty else {
             selectedItems = []
             selectedTotalBytes = 0
@@ -1132,6 +1159,7 @@ final class CleanerViewModel {
         guard !selectedItemIDs.isEmpty, !filteredBulkSelectableItems.isEmpty else {
             if !fullySelectedBulkSections.isEmpty {
                 fullySelectedBulkSections = []
+                selectionRevision &+= 1
             }
             return
         }
@@ -1170,6 +1198,7 @@ final class CleanerViewModel {
         }
         if fullySelectedBulkSections != next {
             fullySelectedBulkSections = next
+            selectionRevision &+= 1
         }
     }
 

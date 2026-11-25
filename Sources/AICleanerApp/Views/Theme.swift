@@ -226,6 +226,84 @@ enum AppTheme {
             : Color.black.opacity(0.065)
     }
 
+    // MARK: - AppKit NSColor Tokens (Native NSTableView Cells)
+
+    static func nsColor(for recommendation: CleanupRecommendation) -> NSColor {
+        switch recommendation {
+        case .recommended:
+            return NSColor(srgbRed: 0.16, green: 0.82, blue: 0.54, alpha: 1.0)
+        case .reviewSuggested:
+            return NSColor(srgbRed: 0.98, green: 0.66, blue: 0.22, alpha: 1.0)
+        case .notRecommended:
+            return NSColor(srgbRed: 0.88, green: 0.42, blue: 0.48, alpha: 1.0)
+        }
+    }
+
+    static func nsColor(for category: ScanCategory) -> NSColor {
+        switch category {
+        case .sessions:
+            return NSColor(srgbRed: 0.52, green: 0.50, blue: 0.98, alpha: 1.0)
+        case .cache:
+            return NSColor(srgbRed: 0.26, green: 0.68, blue: 1.00, alpha: 1.0)
+        case .temporary:
+            return NSColor(srgbRed: 0.98, green: 0.64, blue: 0.24, alpha: 1.0)
+        case .logs:
+            return NSColor(srgbRed: 0.74, green: 0.50, blue: 0.96, alpha: 1.0)
+        case .custom:
+            return NSColor(srgbRed: 0.18, green: 0.78, blue: 0.74, alpha: 1.0)
+        case .protectedData:
+            return NSColor(srgbRed: 0.84, green: 0.44, blue: 0.50, alpha: 1.0)
+        }
+    }
+
+    static func glassCardFillNSColor(isDark: Bool) -> NSColor {
+        isDark
+            ? NSColor(srgbRed: 0.105, green: 0.116, blue: 0.152, alpha: 0.76)
+            : NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 0.90)
+    }
+
+    static func hairlineDividerNSColor(isDark: Bool) -> NSColor {
+        isDark
+            ? NSColor.white.withAlphaComponent(0.065)
+            : NSColor.black.withAlphaComponent(0.065)
+    }
+
+    static func rowBorderNSColor(isDark: Bool) -> NSColor {
+        isDark
+            ? NSColor.white.withAlphaComponent(0.08)
+            : NSColor.black.withAlphaComponent(0.075)
+    }
+
+    static func rowFillNSColor(
+        recommendation: CleanupRecommendation,
+        isSelected: Bool,
+        isHovered: Bool,
+        isDark: Bool
+    ) -> NSColor {
+        if isSelected {
+            switch recommendation {
+            case .recommended:
+                return isDark
+                    ? NSColor(srgbRed: 0.085, green: 0.165, blue: 0.145, alpha: 1.0)
+                    : NSColor(srgbRed: 0.945, green: 0.988, blue: 0.968, alpha: 1.0)
+            case .reviewSuggested:
+                return isDark
+                    ? NSColor(srgbRed: 0.175, green: 0.135, blue: 0.095, alpha: 1.0)
+                    : NSColor(srgbRed: 0.996, green: 0.968, blue: 0.925, alpha: 1.0)
+            case .notRecommended:
+                return isDark
+                    ? NSColor(srgbRed: 0.175, green: 0.105, blue: 0.125, alpha: 1.0)
+                    : NSColor(srgbRed: 0.995, green: 0.945, blue: 0.952, alpha: 1.0)
+            }
+        }
+        if isHovered {
+            return isDark
+                ? NSColor(srgbRed: 0.135, green: 0.148, blue: 0.190, alpha: 0.84)
+                : NSColor(srgbRed: 0.965, green: 0.972, blue: 0.984, alpha: 1.0)
+        }
+        return glassCardFillNSColor(isDark: isDark)
+    }
+
     static func specularRimGradient(for colorScheme: ColorScheme, accent: Color? = nil) -> LinearGradient {
         if let accent {
             return LinearGradient(

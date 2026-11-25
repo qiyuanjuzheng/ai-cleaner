@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct AICleanerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewModel: CleanerViewModel
+    @StateObject private var updater = AppUpdater()
 
     init() {
         // 允许开发与验证阶段通过环境变量 AI_CLEANER_HOME（及可选 AI_CLEANER_SYSTEM_TMP / AI_CLEANER_USER_TMP）
@@ -73,11 +74,24 @@ struct AICleanerApp: App {
             ContentView(viewModel: viewModel)
                 .frame(minWidth: 1020, minHeight: 660)
                 .preferredColorScheme(viewModel.appearanceMode.colorScheme)
+                .task { updater.start(viewModel: viewModel) }
+                .onChange(of: viewModel.isCleaning) { _, isCleaning in
+                    if !isCleaning {
+                        updater.resumeInstallationAfterCleanup()
+                    }
+                }
         }
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {}
+
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates || viewModel.isCleaning)
+            }
 
             CommandMenu("扫描与清理") {
                 Button(viewModel.hasScanResults ? "重新扫描" : "开始扫描") {

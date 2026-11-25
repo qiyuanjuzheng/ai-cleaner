@@ -9,6 +9,8 @@ AI Cleaner 是一款 macOS 原生 SwiftUI 应用，可扫描 31 款 AI 客户端
 
 版本页面提供 `SHA256SUMS.txt`。将两个安装包和校验文件放在同一目录，运行 `shasum -a 256 -c SHA256SUMS.txt`。
 
+AI Cleaner 会在后台检查新版，也可以从菜单栏选择 **AI Cleaner → 检查更新…**。发现新版后，弹窗会显示该版本的更新日志。点击「安装更新」，应用会下载、验证更新包并重启。正在执行的清理会先完成。
+
 ## 界面截图
 
 ### 扫描结果
@@ -116,8 +118,14 @@ open "dist/AI Cleaner.app"
 ### 手动兜底发版与本地打包
 
 - **手动打标签发版**：在已包含对应 `CHANGELOG.md` 章节的 `main` 提交上执行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"` 并 `git push origin vX.Y.Z`，将直接触发 `Build and publish AI Cleaner`（`.github/workflows/release.yml`）完成测试、打包与发布。
-- **手动补发已有标签**：在 GitHub Actions 的 `Build and publish AI Cleaner` 工作流中点击 **Run workflow**（`workflow_dispatch`），输入已有 `vX.Y.Z` 标签即可重新构建并幂等更新 Release 附件。
+- **重试发布**：在 GitHub Actions 的 `Build and publish AI Cleaner` 工作流中点击 **Run workflow**（`workflow_dispatch`），输入待发布的 `vX.Y.Z` 标签即可重试构建和发布。修正已发布的安装包时请发新版本。
 - **本地构建安装包**：运行 `./scripts/build-release-assets.sh --tag vX.Y.Z`，产物位于 `dist/release/`。`./scripts/package-app.sh` 默认构建 Universal 发布版并自动读取 `CHANGELOG.md` 最新版本号，`--debug` 默认使用本机架构。可用 `--arch` 指定架构，用 `--version` 和 `--build` 或 `APP_VERSION` 和 `APP_BUILD_NUMBER` 设置版本及构建号；`CODESIGN_IDENTITY` 可指定签名身份。
+
+### 配置更新签名
+
+首次发布前运行 `swift package resolve`，再用 `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account ai-cleaner` 创建专用 EdDSA 密钥。用同一账号和 `-x <私钥文件>` 导出私钥，将文件内容配置为仓库 Actions Secret `SPARKLE_PRIVATE_ED_KEY`。发布流程从这把私钥推导公钥并随 App 打包。妥善备份私钥，后续更新继续使用同一密钥。
+
+每次正式发布都会为 Universal ZIP 生成已签名的 `appcast.xml`，并内嵌 `CHANGELOG.md` 中对应版本的更新日志。GitHub Release 随 ZIP 一起发布更新源，应用通过 `releases/latest/download/appcast.xml` 查找新版。功能 PR 使用临时密钥验证相同的打包和签名流程。
 
 ---
 

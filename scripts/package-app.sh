@@ -16,6 +16,8 @@ fi
 VERSION="${APP_VERSION:-${DEFAULT_VERSION}}"
 BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
 SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
+UPDATE_PUBLIC_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
+UPDATE_FEED_URL="${SPARKLE_FEED_URL:-https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest/download/appcast.xml}"
 ARCH=""
 
 usage() {
@@ -49,6 +51,14 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$BUILD_NUMBER" =~ ^[0-9]+(\.[
   echo "版本号须为 X.Y.Z（可带 v 前缀），构建号须为一至三段数字。" >&2
   exit 2
 fi
+if [[ -n "$UPDATE_PUBLIC_KEY" ]]; then
+  if ! [[ "$UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ && "$UPDATE_FEED_URL" == https://* ]]; then
+    echo "错误: 应用更新需要 Sparkle EdDSA 公钥和 HTTPS 更新源。" >&2
+    exit 2
+  fi
+  # Sparkle 比较构建号。以版本号排序，避免不同发布工作流的运行编号彼此冲突。
+  BUILD_NUMBER="$VERSION"
+fi
 
 if [[ -z "$ARCH" ]]; then
   if [[ "$CONFIG" == "release" ]]; then
@@ -72,6 +82,12 @@ swift build -c "${CONFIG}" --product "${EXECUTABLE_NAME}" "$@"
 BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path "$@")"
 BIN_PATH="${BIN_DIR}/${EXECUTABLE_NAME}"
 SWIFTPM_BUNDLE="${BIN_DIR}/AICleaner_AICleanerApp.bundle"
+SPARKLE_ARTIFACT="${ROOT_DIR}/.build/artifacts/sparkle/Sparkle"
+SPARKLE_FRAMEWORK="${BIN_DIR}/Sparkle.framework"
+if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
+  # SwiftPM 的 Universal 构建通过 XCBuild 链接预编译框架。
+  SPARKLE_FRAMEWORK="${SPARKLE_ARTIFACT}/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+fi
 
 if [[ ! -x "${BIN_PATH}" ]]; then
   echo "错误: 未找到构建产物 ${BIN_PATH}" >&2
@@ -96,11 +112,19 @@ STAGED_APP="${STAGING_DIR}/${APP_NAME}.app"
 CONTENTS_DIR="${STAGED_APP}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
 
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 
 cp "${BIN_PATH}" "${MACOS_DIR}/${EXECUTABLE_NAME}"
 chmod +x "${MACOS_DIR}/${EXECUTABLE_NAME}"
+ditto "$SPARKLE_FRAMEWORK" "${FRAMEWORKS_DIR}/Sparkle.framework"
+cp "$SPARKLE_ARTIFACT/LICENSE" "${RESOURCES_DIR}/Sparkle-LICENSE.txt"
+APP_EXECUTABLE="${MACOS_DIR}/${EXECUTABLE_NAME}"
+APP_FRAMEWORK_RPATH='@executable_path/../Frameworks'
+if ! otool -l "$APP_EXECUTABLE" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | grep -Fx "$APP_FRAMEWORK_RPATH" >/dev/null; then
+  install_name_tool -add_rpath "$APP_FRAMEWORK_RPATH" "$APP_EXECUTABLE"
+fi
 
 # 复制随应用分发的客户端品牌标识资源包
 ditto "${SWIFTPM_BUNDLE}" "${RESOURCES_DIR}/AICleaner_AICleanerApp.bundle"
@@ -156,8 +180,24 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
 </plist>
 EOF
 
+if [[ -n "$UPDATE_PUBLIC_KEY" ]]; then
+  INFO_PLIST="${CONTENTS_DIR}/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $UPDATE_FEED_URL" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $UPDATE_PUBLIC_KEY" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c 'Add :SUEnableAutomaticChecks bool true' "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c 'Add :SUAllowsAutomaticUpdates bool false' "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c 'Add :SUVerifyUpdateBeforeExtraction bool true' "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c 'Add :SURequireSignedFeed bool true' "$INFO_PLIST"
+fi
+
 echo "==> 正在签名并验证应用..."
-codesign --force --deep --sign "${SIGNING_IDENTITY}" "${STAGED_APP}"
+EMBEDDED_SPARKLE="${FRAMEWORKS_DIR}/Sparkle.framework"
+SPARKLE_VERSION_DIR="${EMBEDDED_SPARKLE}/Versions/Current"
+codesign --force --sign "$SIGNING_IDENTITY" \
+  "$SPARKLE_VERSION_DIR/Autoupdate" "$SPARKLE_VERSION_DIR/Updater.app" \
+  "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc" "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc"
+codesign --force --sign "$SIGNING_IDENTITY" "$EMBEDDED_SPARKLE"
+codesign --force --sign "$SIGNING_IDENTITY" "$STAGED_APP"
 codesign --verify --deep --strict "${STAGED_APP}"
 
 rm -rf "${APP_DIR}"

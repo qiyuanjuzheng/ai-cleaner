@@ -287,7 +287,7 @@ private struct HeroDashboardHeaderView: View {
 
 // MARK: - 2. 隔离的单行极简筛选与搜索栏
 
-private struct ItemControlBarView: View {
+struct ItemControlBarView: View {
     @Bindable var viewModel: CleanerViewModel
     @Namespace private var categoryNamespace
     @Environment(\.colorScheme) private var colorScheme
@@ -356,81 +356,14 @@ private struct ItemControlBarView: View {
                     .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
             )
 
-            // 折叠收纳的「排序 / 时间筛选 / 批量勾选」高级菜单（平时保持界面极简）
-            Menu {
-                Section("时间范围") {
-                    ForEach(ItemAgeFilter.allCases) { filter in
-                        Button {
-                            viewModel.selectedAgeFilter = filter
-                        } label: {
-                            if viewModel.selectedAgeFilter == filter {
-                                Label(filter.rawValue, systemImage: "checkmark")
-                            } else {
-                                Text(filter.rawValue)
-                            }
-                        }
-                    }
+            ControlBarIconMenuButton(
+                symbolName: "slider.horizontal.3",
+                accessibilityLabel: ItemControlBarMenuFactory.accessibilityLabel,
+                showsIndicatorBadge: viewModel.selectedAgeFilter != .all || viewModel.sortOrder != .sizeDescending,
+                menuBuilder: {
+                    ItemControlBarMenuFactory.makeMenu(for: viewModel)
                 }
-
-                Section("排序方式") {
-                    ForEach(ItemSortOrder.allCases) { order in
-                        Button {
-                            viewModel.sortOrder = order
-                        } label: {
-                            if viewModel.sortOrder == order {
-                                Label(order.rawValue, systemImage: "checkmark")
-                            } else {
-                                Text(order.rawValue)
-                            }
-                        }
-                    }
-                }
-
-                Divider()
-
-                Section("批量勾选") {
-                    Button("全选可批量勾选项（\(viewModel.filteredBulkSelectableItems.count)）") {
-                        viewModel.selectAllVisible()
-                    }
-                    .disabled(viewModel.filteredBulkSelectableItems.isEmpty || viewModel.allVisibleSelected)
-
-                    Button("反选可批量勾选项") {
-                        viewModel.invertVisibleSelection()
-                    }
-                    .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
-
-                    Button("清空列表选择") {
-                        viewModel.clearVisibleSelection()
-                    }
-                    .disabled(viewModel.visibleSelectedCount == 0)
-                }
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 30, height: 30)
-            .background(
-                RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                    .fill(AppTheme.glassCardFill(for: colorScheme))
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
-            )
-            .overlay(alignment: .topTrailing) {
-                if viewModel.selectedAgeFilter != .all || viewModel.sortOrder != .sizeDescending {
-                    Circle()
-                        .fill(AppTheme.color(for: .recommended))
-                        .frame(width: 6, height: 6)
-                        .offset(x: -3, y: 3)
-                }
-            }
-            .fixedSize()
-            .help("时间范围、排序与批量勾选")
         }
         .frame(height: 32)
     }

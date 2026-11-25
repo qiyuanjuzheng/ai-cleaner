@@ -180,29 +180,16 @@ struct CleanupHistoryView: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.historyRange)
 
             if !summary.isEmpty {
-                Menu {
-                    Button(CleanupHistoryCopy.clearRecordsMenuTitle, role: .destructive) {
-                        showingClearAlert = true
+                ControlBarIconMenuButton(
+                    symbolName: "ellipsis",
+                    symbolWeight: .semibold,
+                    accessibilityLabel: CleanupHistoryCopy.clearOptionsHelp,
+                    menuBuilder: {
+                        CleanupHistoryMenuFactory.makeMenu {
+                            showingClearAlert = true
+                        }
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 30, height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                        .fill(AppTheme.glassCardFill(for: colorScheme))
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8.5, style: .continuous)
-                        .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
-                )
-                .fixedSize()
-                .help(CleanupHistoryCopy.clearOptionsHelp)
             }
         }
         .frame(height: 44)

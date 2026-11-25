@@ -26,7 +26,7 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
     public let explanation: String
     /// 仅在 `recursiveFiles` 等模式下生效的文件名后缀过滤（为空表示不过滤），例如 `[".jsonl", ".jsonl.zst"]`
     public let allowedFileSuffixes: [String]
-    /// 规则指向历史会话归档，即使文件最近修改也需逐条勾选。
+    /// 规则指向历史会话归档，即使文件最近修改也标注为已归档历史会话并归入「按需清理」。
     public let isSessionArchive: Bool?
 
     public init(

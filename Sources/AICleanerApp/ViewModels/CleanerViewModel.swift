@@ -144,6 +144,8 @@ struct SectionHeaderRow: Equatable, Sendable {
     let isCollapsed: Bool
     let isFirstSection: Bool
     let supportsBulkSelection: Bool
+    let bulkSelectableCount: Int
+    let individualOnlyCount: Int
 }
 
 /// 扁平虚拟化列表中的单条文件行模型（纯值类型，供 `ItemRowContent: Equatable` 跳过无变化行重绘）
@@ -392,6 +394,8 @@ final class CleanerViewModel {
     private(set) var selectedNotRecommendedItems: [CleanableItem] = []
     private(set) var selectedNotRecommendedTotalBytes: Int64 = 0
     private(set) var groupedSelectedItems: [SelectedClientGroup] = []
+    /// 当前筛选可见范围内，所有可批量勾选项均已被选中的分组集合
+    private(set) var fullySelectedBulkSections: Set<CleanupRecommendation> = []
 
     private(set) var historySummary: CleanupHistorySummary = CleanupHistoryAnalytics.summarize(records: [], range: .days30)
     private(set) var totalHistoricalFreedBytes: Int64 = 0
@@ -664,7 +668,7 @@ final class CleanerViewModel {
         if summary?.profile.kind == .unattributedTemp {
             noticeBanner = ScopeNoticeBanner(
                 title: "仅支持逐条手动勾选",
-                message: "以下条目位于 /tmp（/private/tmp），无法自动确认是否由 AI 工具生成。为防止误删，一键勾选建议清理、勾选本组、全选与反选均会跳过这些条目，请核对路径后再逐条手动勾选。",
+                message: "以下条目位于 /tmp（/private/tmp），无法自动确认是否由 AI 工具生成。为防止误删，一键勾选建议清理、全选本组、全选与反选均会跳过这些条目，请核对路径后再逐条手动勾选。",
                 symbolName: "hand.point.up.left.fill"
             )
         } else {
@@ -786,6 +790,16 @@ final class CleanerViewModel {
             let isCollapsed = (sections.count > 1 && selectedRecommendation != section.recommendation)
                 && collapsedSections.contains(section.recommendation)
 
+            var bulkSelectableCount = 0
+            var individualOnlyCount = 0
+            for item in section.items {
+                if item.isBulkSelectable {
+                    bulkSelectableCount += 1
+                } else if item.isCleanable && item.requiresIndividualSelection {
+                    individualOnlyCount += 1
+                }
+            }
+
             rows.append(
                 .sectionHeader(
                     SectionHeaderRow(
@@ -795,7 +809,9 @@ final class CleanerViewModel {
                         totalBytesText: CleanerFormatting.formatBytes(section.totalBytes),
                         isCollapsed: isCollapsed,
                         isFirstSection: sectionIndex == 0,
-                        supportsBulkSelection: section.items.contains(where: \.isBulkSelectable)
+                        supportsBulkSelection: bulkSelectableCount > 0,
+                        bulkSelectableCount: bulkSelectableCount,
+                        individualOnlyCount: individualOnlyCount
                     )
                 )
             )
@@ -923,6 +939,7 @@ final class CleanerViewModel {
             displayedSections = []
             displayedRows = []
             maxDisplayedItemBytes = 0
+            rebuildSectionSelectionCache()
             if resetViewport { listViewportID &+= 1 }
             return
         }
@@ -949,6 +966,7 @@ final class CleanerViewModel {
             filteredBulkSelectableItems = cached.defaultBulkSelectableItems
             displayedSections = cached.defaultSections
             maxDisplayedItemBytes = cached.defaultMaxBytes
+            rebuildSectionSelectionCache()
 
             if collapsedSections == Self.defaultCollapsedSections {
                 displayedRows = cached.defaultFlatRows
@@ -971,6 +989,7 @@ final class CleanerViewModel {
             filteredBulkSelectableItems = currentScope.defaultBulkSelectableItems
             displayedSections = currentScope.defaultSections
             maxDisplayedItemBytes = currentScope.defaultMaxBytes
+            rebuildSectionSelectionCache()
             if collapsedSections == Self.defaultCollapsedSections {
                 displayedRows = currentScope.defaultFlatRows
                 if resetViewport { listViewportID &+= 1 }
@@ -1032,6 +1051,7 @@ final class CleanerViewModel {
         filteredBulkSelectableItems = bulkSelectable
         displayedSections = sections
         maxDisplayedItemBytes = maxBytes
+        rebuildSectionSelectionCache()
 
         rebuildDisplayedRows(resetViewport: resetViewport)
     }
@@ -1059,6 +1079,7 @@ final class CleanerViewModel {
             selectedNotRecommendedItems = []
             selectedNotRecommendedTotalBytes = 0
             groupedSelectedItems = []
+            rebuildSectionSelectionCache()
             return
         }
 
@@ -1101,6 +1122,52 @@ final class CleanerViewModel {
             SelectedClientGroup(id: clientID, clientName: val.name, items: val.items, totalBytes: val.bytes)
         }
         .sorted { $0.totalBytes > $1.totalBytes }
+        rebuildSectionSelectionCache()
+    }
+
+    private func rebuildSectionSelectionCache() {
+        guard !selectedItemIDs.isEmpty, !filteredBulkSelectableItems.isEmpty else {
+            if !fullySelectedBulkSections.isEmpty {
+                fullySelectedBulkSections = []
+            }
+            return
+        }
+
+        var hasRecommended = false
+        var allRecommendedSelected = true
+        var hasReview = false
+        var allReviewSelected = true
+
+        for item in filteredBulkSelectableItems {
+            switch item.recommendation {
+            case .recommended:
+                hasRecommended = true
+                if allRecommendedSelected && !selectedItemIDs.contains(item.id) {
+                    allRecommendedSelected = false
+                }
+            case .reviewSuggested:
+                hasReview = true
+                if allReviewSelected && !selectedItemIDs.contains(item.id) {
+                    allReviewSelected = false
+                }
+            case .notRecommended:
+                break
+            }
+            if hasRecommended && !allRecommendedSelected && hasReview && !allReviewSelected {
+                break
+            }
+        }
+
+        var next: Set<CleanupRecommendation> = []
+        if hasRecommended && allRecommendedSelected {
+            next.insert(.recommended)
+        }
+        if hasReview && allReviewSelected {
+            next.insert(.reviewSuggested)
+        }
+        if fullySelectedBulkSections != next {
+            fullySelectedBulkSections = next
+        }
     }
 
     private func rebuildHistoryCache() {
@@ -1311,6 +1378,11 @@ final class CleanerViewModel {
         selectedItemIDs = next
     }
 
+    /// 判断指定分组当前筛选可见的可批量勾选项是否已全部选中
+    func isSectionAllBulkSelected(_ recommendation: CleanupRecommendation) -> Bool {
+        fullySelectedBulkSections.contains(recommendation)
+    }
+
     func selectSection(_ recommendation: CleanupRecommendation) {
         guard recommendation.isCleanable else { return }
         var next = selectedItemIDs
@@ -1318,6 +1390,26 @@ final class CleanerViewModel {
             next.insert(item.id)
         }
         selectedItemIDs = next
+    }
+
+    /// 取消勾选指定分组当前筛选可见的全部条目
+    func deselectSection(_ recommendation: CleanupRecommendation) {
+        guard recommendation.isCleanable else { return }
+        var next = selectedItemIDs
+        for item in filteredItems where item.recommendation == recommendation {
+            next.remove(item.id)
+        }
+        selectedItemIDs = next
+    }
+
+    /// 一键切换指定分组的勾选状态：未全选时全选本组可批量项，已全选时取消本组当前可见条目
+    func toggleSectionSelection(_ recommendation: CleanupRecommendation) {
+        guard recommendation.isCleanable else { return }
+        if isSectionAllBulkSelected(recommendation) {
+            deselectSection(recommendation)
+        } else {
+            selectSection(recommendation)
+        }
     }
 
     func selectAllVisible() {

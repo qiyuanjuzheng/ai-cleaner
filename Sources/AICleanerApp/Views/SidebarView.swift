@@ -43,18 +43,6 @@ struct SidebarView: View {
                     }
 
                     SidebarClientTile(
-                        title: "项目会话",
-                        cleanableBytesText: "",
-                        hasProtectedOnly: false,
-                        icon: .symbol("folder.badge.clock"),
-                        tint: .teal,
-                        isSelected: viewModel.sidebarSelection == .projects,
-                        namespace: sidebarNamespace
-                    ) {
-                        select(.projects)
-                    }
-
-                    SidebarClientTile(
                         title: CleanupHistoryCopy.title,
                         cleanableBytesText: viewModel.totalHistoricalFreedBytesText,
                         hasProtectedOnly: false,
@@ -97,6 +85,18 @@ struct SidebarView: View {
                             : viewModel.report.map { "\($0.detectedBuiltInClientsCount)" } ?? "待扫描"
                     )
                     .padding(.top, 14)
+
+                    SidebarClientTile(
+                        title: "项目会话",
+                        cleanableBytesText: "",
+                        hasProtectedOnly: false,
+                        icon: .symbol("folder.badge.clock"),
+                        tint: .teal,
+                        isSelected: viewModel.sidebarSelection == .projects,
+                        namespace: sidebarNamespace
+                    ) {
+                        select(.projects)
+                    }
 
                     if viewModel.hasScanResults && !viewModel.isScanning && viewModel.builtInSidebarEntries.isEmpty {
                         Text("未检测到 AI 客户端")

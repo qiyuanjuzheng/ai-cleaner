@@ -34,12 +34,14 @@ public struct DirectorySizer: Sendable {
     public func inspect(
         url: URL,
         safetyGuard: SafetyGuard? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        descendantValidator: ((URL, URLResourceValues) -> String?)? = nil
     ) -> PathInspectionResult? {
         let keys: Set<URLResourceKey> = [
             .isDirectoryKey,
             .isRegularFileKey,
             .isSymbolicLinkKey,
+            .fileResourceTypeKey,
             .fileSizeKey,
             .totalFileSizeKey,
             .contentModificationDateKey
@@ -47,6 +49,18 @@ public struct DirectorySizer: Sendable {
 
         guard let rootValues = try? url.resourceValues(forKeys: keys) else {
             return nil
+        }
+
+        if safetyGuard != nil,
+           let rootType = rootValues.fileResourceType,
+           rootType == .socket || rootType == .namedPipe || rootType == .characterSpecial || rootType == .blockSpecial {
+            return PathInspectionResult(
+                sizeBytes: 0,
+                fileCount: 0,
+                modifiedAt: rootValues.contentModificationDate ?? Date(),
+                isDirectory: false,
+                protectedDescendantReason: "\(url.lastPathComponent)：特殊系统节点（Socket/FIFO/设备文件）不允许清理"
+            )
         }
 
         let isSymlink = rootValues.isSymbolicLink ?? false
@@ -85,12 +99,24 @@ public struct DirectorySizer: Sendable {
                 let childIsSymlink = values.isSymbolicLink ?? false
                 let childIsDir = (values.isDirectory ?? false) && !childIsSymlink
 
+                if safetyGuard != nil,
+                   let resourceType = values.fileResourceType,
+                   resourceType == .socket || resourceType == .namedPipe || resourceType == .characterSpecial || resourceType == .blockSpecial {
+                    protectedReason = "\(childURL.lastPathComponent)：特殊系统节点（Socket/FIFO/设备文件）不允许清理"
+                    break
+                }
+
                 if let safetyGuard {
                     let decision = safetyGuard.validateEntry(url: childURL, isDirectory: childIsDir)
                     if let reason = decision.blockReason {
                         protectedReason = "\(childURL.lastPathComponent)：\(reason)"
                         break
                     }
+                }
+
+                if let descendantValidator, let reason = descendantValidator(childURL, values) {
+                    protectedReason = reason
+                    break
                 }
 
                 if let modDate = values.contentModificationDate, modDate > latestModified {

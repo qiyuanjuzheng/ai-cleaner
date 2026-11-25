@@ -108,6 +108,33 @@ struct SidebarView: View {
                         }
                     }
 
+                    if !viewModel.tempSidebarEntries.isEmpty {
+                        sectionHeader(
+                            title: "系统临时目录",
+                            trailing: "\(viewModel.tempSidebarEntries.count)"
+                        )
+                        .padding(.top, 14)
+
+                        ForEach(viewModel.tempSidebarEntries) { entry in
+                            SidebarClientTile(
+                                title: entry.title,
+                                cleanableBytesText: entry.cleanableBytesText,
+                                hasProtectedOnly: false,
+                                icon: .symbol(entry.symbolName),
+                                tint: AppTheme.color(forAccentToken: entry.accentToken),
+                                isSelected: viewModel.sidebarSelection == .client(entry.id),
+                                namespace: sidebarNamespace
+                            ) {
+                                select(.client(entry.id))
+                            }
+                            .help(
+                                entry.profileKind == .unattributedTemp
+                                    ? "位于 /tmp 且无法自动确认来源的当前用户条目，仅支持逐条手动勾选"
+                                    : "位于系统临时目录的其他 AI 工具与 Agent 临时文件"
+                            )
+                        }
+                    }
+
                     HStack(spacing: 4) {
                         Text("自定义目录")
                             .font(.system(size: 11, weight: .semibold))

@@ -53,7 +53,7 @@ public struct TrashCleaner: Sendable {
         let deduplicated = deduplicateNestedItems(items)
 
         for item in deduplicated {
-            let url = URL(fileURLWithPath: item.url.path).standardizedFileURL
+            let url = SafetyGuard.normalizeTempPath(URL(fileURLWithPath: item.url.path))
             let isOverride = !item.isCleanable && allowNotRecommendedOverride
             if let reason = item.hardProtectionReason {
                 skippedProtected.append(CleanupFailure(item: item, reason: reason))
@@ -118,12 +118,14 @@ public struct TrashCleaner: Sendable {
 
     private func deduplicateNestedItems(_ items: [CleanableItem]) -> [CleanableItem] {
         // 路径更短的排在前，若后续路径位于已选父目录之下则跳过，避免二次 trashing 报错
-        let sorted = items.sorted { $0.url.standardizedFileURL.path.count < $1.url.standardizedFileURL.path.count }
+        let sorted = items.sorted {
+            SafetyGuard.normalizeTempPath($0.url).path.count < SafetyGuard.normalizeTempPath($1.url).path.count
+        }
         var kept: [CleanableItem] = []
         var keptPaths: [String] = []
 
         for item in sorted {
-            let path = item.url.standardizedFileURL.path
+            let path = SafetyGuard.normalizeTempPath(item.url).path
             let isNested = keptPaths.contains { parent in
                 path == parent || path.hasPrefix(parent + "/")
             }

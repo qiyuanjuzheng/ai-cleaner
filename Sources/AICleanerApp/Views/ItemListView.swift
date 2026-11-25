@@ -42,6 +42,12 @@ struct ItemListView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
 
+                if let banner = viewModel.scopeNoticeBanner {
+                    ScopeNoticeBannerView(banner: banner)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 10)
+                }
+
                 VirtualizedItemListView(viewModel: viewModel)
             }
         }
@@ -63,11 +69,16 @@ private struct HeroDashboardHeaderView: View {
 
     private var recommendedActionTooltip: String {
         guard let summary = viewModel.activeSummary else {
-            return "勾选全部客户端及自定义目录中的「建议清理」项"
+            return "勾选全部客户端、系统临时目录及自定义目录中的「建议清理」项"
         }
-        return summary.profile.isCustom
-            ? "勾选当前自定义目录中的「建议清理」项"
-            : "勾选当前客户端中的「建议清理」项"
+        switch summary.profile.kind {
+        case .customDirectory:
+            return "勾选当前自定义目录中的「建议清理」项"
+        case .otherAITemp, .unattributedTemp:
+            return "勾选当前分组中的「建议清理」项"
+        case .builtInClient:
+            return "勾选当前客户端中的「建议清理」项"
+        }
     }
 
     var body: some View {
@@ -704,9 +715,60 @@ private struct CleanSectionHeader: View, Equatable {
                 .padding(.vertical, 3)
                 .background(Capsule().fill(tint.opacity(0.11)))
                 .help("勾选本组中可批量选择的条目")
+            } else if header.recommendation == .reviewSuggested {
+                Text("仅逐条手选")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(tint)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(tint.opacity(0.11)))
+                    .help("本组条目需逐条手动确认勾选，所有批量勾选操作均会自动跳过")
             }
         }
         .padding(.horizontal, 4)
         .frame(height: 28)
+    }
+}
+
+private struct ScopeNoticeBannerView: View {
+    let banner: ScopeNoticeBanner
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tint = AppTheme.color(for: .reviewSuggested)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: banner.symbolName)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+                        .fill(tint.opacity(colorScheme == .dark ? 0.18 : 0.13))
+                )
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2.5) {
+                Text(banner.title)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(banner.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(tint.opacity(colorScheme == .dark ? 0.12 : 0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(tint.opacity(colorScheme == .dark ? 0.34 : 0.28), lineWidth: 0.8)
+        )
     }
 }

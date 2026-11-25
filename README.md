@@ -34,15 +34,22 @@ AI Cleaner 是一款 macOS 原生 SwiftUI 应用，可扫描 31 款 AI 客户端
 
 | 等级 | 常见条目 | 如何选择 |
 | --- | --- | --- |
-| 建议清理 | 缓存、日志、临时文件、更新包 | 「勾选建议清理项」作用于当前客户端或目录。空间总览中的按钮覆盖全部客户端和自定义目录。 |
-| 按需清理 | 聊天会话、任务产出、快照、可重建索引 | 超过 14 天未活跃的会话及归档会话须逐条勾选。建议清理、分组勾选、全选和反选都会跳过它们。 |
+| 建议清理 | 缓存、日志、超过 24 小时未修改的 AI 临时文件、更新包 | 「勾选建议清理项」作用于当前客户端或目录。空间总览中的按钮覆盖全部客户端、系统临时目录和自定义目录。 |
+| 按需清理 | 聊天会话、任务产出、快照、可重建索引、24 小时内修改的临时项、`/tmp` 未归属临时项 | 超过 14 天未活跃的会话、归档会话、24 小时内近期修改的临时项及 `/tmp 未归属临时项` 均须逐条手动勾选。建议清理、分组勾选、全选和反选都会跳过它们。 |
 | 不建议清理 | 凭据、主数据库、插件、模型权重 | 查看条目旁的保护原因。凭据和主库锁定。可覆盖的插件、模型权重等条目须通过两次风险确认。 |
 
 ## 扫描与保护
 
 - 扫描仅读取文件。非压缩 JSONL 会话的头部和尾部各读取最多 64 KB，用于提取标题、项目名和首条提问摘要。Codex 会话及压缩归档也可从本地会话索引读取标题。
-- 普通和强制清理均保护已知凭据、密钥、登录态目录、客户端主库及其 `-wal`、`-shm`、`-journal` 附属文件，例如 `auth.json`、`Cookies`、`opencode.db`、`thread_history_1.sqlite` 和 `state.vscdb`。移入前会重新检查目标和目录后代。`~/Library/Caches/` 下可重建的 URLCache `Cache.db` 及其附属文件可按缓存规则清理。
-- 系统和敏感目录、用户主目录、客户端根目录及会话总目录受保护。扫描目录时不会穿透符号链接。文件清理调用 macOS 的系统废纸篓接口。
+- **`/tmp` 分层扫描与仅手选边界**：
+  - **第一层（AI 特征精准归属）**：扫描规范化后的 `/private/tmp`（自动解析 `/tmp` 符号链接）与 macOS 用户临时目录（`DARWIN_USER_TEMP_DIR` / `NSTemporaryDirectory()`）中明确带有 AI 客户端或 Agent 命名特征的顶层条目（如 `claude-*`、`claude-desktop*`、`codex-*`、`.com.openai.codex.*`、`com.openai.sky.CUAService`、`opencode*`、`cursor-*`、`windsurf-*`、`com.lbjlaq.antigravity-tools`、`workbuddy-*`、`multica-task-*`、`pi-bash-*.log`、`t3code*`、`magpie-*` 等），优先归入对应已有客户端分组，未单独建组的归入「其他 AI 临时文件（/tmp）」并标注来源标签。超过 24 小时未修改且无活跃占用的条目归为「建议清理」；24 小时内有修改的条目降级为「按需清理（仅手选）」并显示「近期修改」提示。
+  - **第二层（`/tmp` 未归属临时项）**：仅扫描 `/private/tmp` 顶层未被第一层命中的当前用户非空普通文件/目录（不混入 `/var/folders/.../T/` 中的无关缓存，自动忽略 `.sboxcache_*` 等隐藏缓存与 0 字节占位），在侧边栏以独立分组「/tmp 未归属临时项」展示，全部强制归为「按需清理（仅手选）」。一键勾选建议清理、勾选本组、全选与反选均会跳过这些条目，只能核对路径后逐条手动勾选。
+- **活跃进程与通用安全防护**：
+  - `/tmp` 扫描严格限定为当前用户拥有（`uid == getuid()`），绝对跳过 `root` 及其他用户的条目；
+  - 绝对跳过 Unix Domain Socket（`*.sock`、`S_IFSOCK`）、FIFO、设备节点及特殊符号链接，不展示且在移入废纸篓前双重拦截；
+  - 自动跳过当前应用自身、匹配或包含当前运行环境 `TMPDIR` 的目录，以及包含 `.task_lock`、24 小时内近期锁文件或持有活跃 OS 文件锁的目录；
+  - 普通和强制清理均保护已知凭据、密钥、登录态目录、客户端主库及其 `-wal`、`-shm`、`-journal` 附属文件，例如 `auth.json`、`Cookies`、`opencode.db`、`thread_history_1.sqlite` 和 `state.vscdb`。移入前会重新检查目标和目录后代。`~/Library/Caches/` 下可重建的 URLCache `Cache.db` 及其附属文件可按缓存规则清理。
+  - 系统和敏感目录、`/tmp` 与 `/private/tmp` 根目录、用户主目录、客户端根目录及会话总目录受保护。扫描目录时不会穿透符号链接。所有清理统一调用 macOS 的系统废纸篓接口（`FileManager.trashItem`），绝不执行永久删除。
 
 ## 支持的客户端
 
@@ -73,8 +80,9 @@ swift run AICleanerApp
 open "dist/AI Cleaner.app"
 ```
 
-> 如需在临时沙箱中预览界面而不扫描真实主目录，可运行：
+> 如需在临时沙箱中预览界面而不扫描真实主目录或宿主机 `/tmp`，可运行：
 > `AI_CLEANER_HOME=/path/to/sandbox-home swift run AICleanerApp`
+> 如需同时挂载模拟的 `/tmp` 与用户临时目录，可附加 `AI_CLEANER_SYSTEM_TMP=/path/to/mock-tmp` 与 `AI_CLEANER_USER_TMP=/path/to/mock-user-tmp`。
 
 ## 后续发版流程
 
@@ -113,6 +121,7 @@ ai-cleaner/
 │   │   └── Services/
 │   │       ├── DirectorySizer.swift              # 只读目录体积统计
 │   │       ├── SessionMetadataReader.swift       # 只读会话标题、项目与首条提问摘要
+│   │       ├── TempDirectoryScanner.swift        # /tmp 与系统用户临时目录分层扫描与活跃保护
 │   │       ├── ScanEngine.swift                  # 并发扫描引擎与三档清理分级
 │   │       ├── CustomDirectoryStore.swift        # 自定义目录 JSON 持久化
 │   │       ├── CleanupHistoryStore.swift         # 移入废纸篓历史统计持久化与聚合

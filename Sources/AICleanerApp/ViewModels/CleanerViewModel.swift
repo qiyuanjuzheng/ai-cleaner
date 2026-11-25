@@ -65,16 +65,18 @@ struct PreparedItemPresentation: Sendable {
 
     static func make(for item: CleanableItem, homeDirectory: URL) -> PreparedItemPresentation {
         let title = item.preferredDisplayTitle
-        let detailText: String
-        if let projectName = item.sessionProjectName, item.sessionTitle != nil || title == "未命名会话" {
-            detailText = "\(projectName) · \(item.safetyNote)"
-        } else {
-            detailText = item.safetyNote
-        }
         let sizeText = CleanerFormatting.formatBytes(item.sizeBytes)
         let dateText = CleanerFormatting.formatDate(item.modifiedAt)
         let abbreviatedPath = CleanerFormatting.abbreviatePath(item.url, homeDirectory: homeDirectory)
-        let rowTooltip = "\(detailText)\n路径：\(abbreviatedPath)"
+        let detailText: String
+        if let projectName = item.sessionProjectName, item.sessionTitle != nil || title == "未命名会话" {
+            detailText = "\(projectName) · \(item.safetyNote)"
+        } else if item.sourceBadge != nil {
+            detailText = "\(abbreviatedPath) · \(item.safetyNote)"
+        } else {
+            detailText = item.safetyNote
+        }
+        let rowTooltip = "\(item.safetyNote)\n路径：\(abbreviatedPath)"
         let searchable = [
             title,
             item.sessionProjectName,
@@ -84,7 +86,9 @@ struct PreparedItemPresentation: Sendable {
             item.clientName,
             item.category.displayName,
             item.recommendation.displayName,
-            item.safetyNote
+            item.safetyNote,
+            item.sourceBadge,
+            item.isRecentlyModified ? "近期修改" : nil
         ]
         .compactMap { $0 }
         .joined(separator: "\u{1F}")
@@ -119,7 +123,16 @@ struct SidebarClientEntry: Identifiable, Equatable, Sendable {
     let cleanableBytesText: String
     let protectedBytes: Int64
     let accentToken: String
+    let symbolName: String
+    let profileKind: AIClientProfile.ProfileKind
     let customDirectoryID: UUID?
+}
+
+/// 分组顶部提示条模型（如 `/tmp 未归属临时项` 的仅手选边界说明）
+struct ScopeNoticeBanner: Equatable, Sendable {
+    let title: String
+    let message: String
+    let symbolName: String
 }
 
 /// 扁平虚拟化列表中的分组头行模型
@@ -195,6 +208,7 @@ final class CleanerViewModel {
         let activeSummary: ClientScanSummary?
         let headerTitle: String
         let headerSubtitle: String
+        let noticeBanner: ScopeNoticeBanner?
         let scopedCleanableItems: [CleanableItem]
         let scopedProtectedItems: [CleanableItem]
         let scopedItems: [CleanableItem]
@@ -215,8 +229,10 @@ final class CleanerViewModel {
     private struct PreparedReportBundle: Sendable {
         let report: ScanReport
         let builtInSummaries: [ClientScanSummary]
+        let tempSummaries: [ClientScanSummary]
         let customSummaries: [ClientScanSummary]
         let builtInSidebarEntries: [SidebarClientEntry]
+        let tempSidebarEntries: [SidebarClientEntry]
         let customSidebarEntries: [SidebarClientEntry]
         let reportTotalBytesText: String
         let reportScannedTimeText: String
@@ -338,8 +354,10 @@ final class CleanerViewModel {
     // MARK: - Memoized Derived Caches (O(1) Reads During SwiftUI Body Evaluation)
 
     private(set) var builtInSummaries: [ClientScanSummary] = []
+    private(set) var tempSummaries: [ClientScanSummary] = []
     private(set) var customSummaries: [ClientScanSummary] = []
     private(set) var builtInSidebarEntries: [SidebarClientEntry] = []
+    private(set) var tempSidebarEntries: [SidebarClientEntry] = []
     private(set) var customSidebarEntries: [SidebarClientEntry] = []
     private(set) var reportTotalBytesText: String = ""
     private(set) var reportScannedTimeText: String = ""
@@ -347,6 +365,7 @@ final class CleanerViewModel {
     private(set) var activeSummary: ClientScanSummary? = nil
     private(set) var headerTitleText: String = "空间总览"
     private(set) var headerSubtitleText: String = ""
+    private(set) var scopeNoticeBanner: ScopeNoticeBanner? = nil
 
     private(set) var scopedCleanableItems: [CleanableItem] = []
     private(set) var scopedProtectedItems: [CleanableItem] = []
@@ -395,11 +414,14 @@ final class CleanerViewModel {
     @ObservationIgnored nonisolated private static let defaultCollapsedSections: Set<CleanupRecommendation> = [.notRecommended]
     @ObservationIgnored private static let appearanceStorageKey = "aiCleaner.appearanceMode.v2"
     @ObservationIgnored private static let builtInClientTints: [String: Color] = {
-        Dictionary(
+        var map = Dictionary(
             uniqueKeysWithValues: BuiltInClientRules.allProfiles.map { profile in
                 (profile.id, AppTheme.color(forAccentToken: profile.accentToken))
             }
         )
+        map[TempDirectoryScanner.otherAITempClientID] = AppTheme.color(forAccentToken: "tempAI")
+        map[TempDirectoryScanner.unattributedTempClientID] = AppTheme.color(forAccentToken: "tempUnattributed")
+        return map
     }()
     @ObservationIgnored private var scanTask: Task<Void, Never>?
 
@@ -408,11 +430,13 @@ final class CleanerViewModel {
         customDirectoryStore: CustomDirectoryStore? = nil,
         historyStore: CleanupHistoryStore? = nil,
         excludedItemStore: ExcludedItemStore? = nil,
-        trashPerformer: any TrashPerforming = SystemTrashPerformer()
+        trashPerformer: any TrashPerforming = SystemTrashPerformer(),
+        scanEngine: ScanEngine? = nil
     ) {
-        let guardInstance = SafetyGuard(homeDirectory: homeDirectory)
+        let resolvedHome = scanEngine?.homeDirectory ?? homeDirectory
+        let guardInstance = scanEngine?.safetyGuard ?? SafetyGuard(homeDirectory: resolvedHome)
         self.safetyGuard = guardInstance
-        self.scanEngine = ScanEngine(homeDirectory: homeDirectory, safetyGuard: guardInstance)
+        self.scanEngine = scanEngine ?? ScanEngine(homeDirectory: resolvedHome, safetyGuard: guardInstance)
         self.trashCleaner = TrashCleaner(safetyGuard: guardInstance, performer: trashPerformer)
         self.customDirectoryStore = customDirectoryStore ?? CustomDirectoryStore(safetyGuard: guardInstance)
         self.historyStore = historyStore ?? CleanupHistoryStore()
@@ -481,8 +505,10 @@ final class CleanerViewModel {
         homeDirectory: URL
     ) -> PreparedReportBundle {
         var builtIn: [ClientScanSummary] = []
+        var temp: [ClientScanSummary] = []
         var custom: [ClientScanSummary] = []
         var builtInEntries: [SidebarClientEntry] = []
+        var tempEntries: [SidebarClientEntry] = []
         var customEntries: [SidebarClientEntry] = []
         var summaryMap: [String: ClientScanSummary] = [:]
         summaryMap.reserveCapacity(report.clientSummaries.count)
@@ -496,14 +522,20 @@ final class CleanerViewModel {
                 cleanableBytesText: summary.totalSizeBytes > 0 ? CleanerFormatting.formatBytes(summary.totalSizeBytes) : "",
                 protectedBytes: summary.protectedSizeBytes,
                 accentToken: summary.profile.accentToken,
+                symbolName: summary.profile.symbolName,
+                profileKind: summary.profile.kind,
                 customDirectoryID: summary.profile.customDirectoryID
             )
-            if summary.profile.isCustom {
-                custom.append(summary)
-                customEntries.append(entry)
-            } else {
+            switch summary.profile.kind {
+            case .builtInClient:
                 builtIn.append(summary)
                 builtInEntries.append(entry)
+            case .otherAITemp, .unattributedTemp:
+                temp.append(summary)
+                tempEntries.append(entry)
+            case .customDirectory:
+                custom.append(summary)
+                customEntries.append(entry)
             }
         }
 
@@ -553,8 +585,10 @@ final class CleanerViewModel {
         return PreparedReportBundle(
             report: report,
             builtInSummaries: builtIn,
+            tempSummaries: temp,
             customSummaries: custom,
             builtInSidebarEntries: builtInEntries,
+            tempSidebarEntries: tempEntries,
             customSidebarEntries: customEntries,
             reportTotalBytesText: report.totalSizeBytes > 0 ? CleanerFormatting.formatBytes(report.totalSizeBytes) : "",
             reportScannedTimeText: CleanerFormatting.formatTime(report.scannedAt),
@@ -617,15 +651,31 @@ final class CleanerViewModel {
         let headerTitle = summary?.profile.name ?? "空间总览"
         let headerSubtitle: String
         if let summary {
-            headerSubtitle = "扫描项共 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
+            if summary.profile.kind == .unattributedTemp {
+                headerSubtitle = "仅支持逐条手动勾选 · 扫描项共 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
+            } else {
+                headerSubtitle = "扫描项共 \(CleanerFormatting.formatBytes(summary.totalDiskFootprintBytes))"
+            }
         } else {
             headerSubtitle = "\(report.detectedBuiltInClientsCount) 个 AI 客户端 · 扫描项共 \(CleanerFormatting.formatBytes(report.totalDiskFootprintBytes))"
+        }
+
+        let noticeBanner: ScopeNoticeBanner?
+        if summary?.profile.kind == .unattributedTemp {
+            noticeBanner = ScopeNoticeBanner(
+                title: "仅支持逐条手动勾选",
+                message: "以下条目位于 /tmp（/private/tmp），无法自动确认是否由 AI 工具生成。为防止误删，一键勾选建议清理、勾选本组、全选与反选均会跳过这些条目，请核对路径后再逐条手动勾选。",
+                symbolName: "hand.point.up.left.fill"
+            )
+        } else {
+            noticeBanner = nil
         }
 
         return CachedScopeData(
             activeSummary: summary,
             headerTitle: headerTitle,
             headerSubtitle: headerSubtitle,
+            noticeBanner: noticeBanner,
             scopedCleanableItems: cleanable,
             scopedProtectedItems: protected,
             scopedItems: combined,
@@ -794,8 +844,10 @@ final class CleanerViewModel {
 
     private func applyPreparedReportBundle(_ bundle: PreparedReportBundle, resetViewport: Bool = true) {
         builtInSummaries = bundle.builtInSummaries
+        tempSummaries = bundle.tempSummaries
         customSummaries = bundle.customSummaries
         builtInSidebarEntries = bundle.builtInSidebarEntries
+        tempSidebarEntries = bundle.tempSidebarEntries
         customSidebarEntries = bundle.customSidebarEntries
         reportTotalBytesText = bundle.reportTotalBytesText
         reportScannedTimeText = bundle.reportScannedTimeText
@@ -812,8 +864,10 @@ final class CleanerViewModel {
 
     private func clearReportCaches() {
         builtInSummaries = []
+        tempSummaries = []
         customSummaries = []
         builtInSidebarEntries = []
+        tempSidebarEntries = []
         customSidebarEntries = []
         reportTotalBytesText = ""
         reportScannedTimeText = ""
@@ -827,6 +881,7 @@ final class CleanerViewModel {
         activeSummary = nil
         headerTitleText = "空间总览"
         headerSubtitleText = ""
+        scopeNoticeBanner = nil
         scopedCleanableItems = []
         scopedProtectedItems = []
         scopedItems = []
@@ -852,6 +907,7 @@ final class CleanerViewModel {
             activeSummary = nil
             headerTitleText = "空间总览"
             headerSubtitleText = ""
+            scopeNoticeBanner = nil
             scopedCleanableItems = []
             scopedProtectedItems = []
             scopedItems = []
@@ -875,6 +931,7 @@ final class CleanerViewModel {
         activeSummary = cached.activeSummary
         headerTitleText = cached.headerTitle
         headerSubtitleText = cached.headerSubtitle
+        scopeNoticeBanner = cached.noticeBanner
         scopedCleanableItems = cached.scopedCleanableItems
         scopedProtectedItems = cached.scopedProtectedItems
         scopedItems = cached.scopedItems

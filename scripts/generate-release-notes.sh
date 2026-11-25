@@ -3,9 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_URL="${RELEASE_REPO_URL:-https://github.com/${GITHUB_REPOSITORY:-qiyuanjuzheng/ai-cleaner}}"
+CHANGES_ONLY=false
+if [[ "${1:-}" == --changes-only ]]; then
+  CHANGES_ONLY=true
+  shift
+fi
 
 if [[ $# -ne 1 || ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "用法: $0 vX.Y.Z" >&2
+  echo "用法: $0 [--changes-only] vX.Y.Z" >&2
   exit 2
 fi
 
@@ -33,6 +38,10 @@ NOTES="$(awk -v tagged="[$TAG]" -v untagged="[$VERSION]" '
 if [[ ! "$NOTES" =~ [^[:space:]] ]]; then
   echo "错误: CHANGELOG.md 中缺少 ${TAG} 的版本说明。" >&2
   exit 1
+fi
+if [[ "$CHANGES_ONLY" == true ]]; then
+  printf '%s\n' "$NOTES"
+  exit 0
 fi
 
 # 标签尚未创建时，用当前提交预览说明。正式发布时比较标签所指向的提交。

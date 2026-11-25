@@ -7,6 +7,9 @@ on:
         description: Release tag (vX.Y.Z)
         required: true
         type: string
+    secrets:
+      SPARKLE_PRIVATE_ED_KEY:
+        required: true
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
@@ -69,18 +72,47 @@ jobs:
       - name: Test
         run: |
           swift test
-          if [[ -x ./scripts/test-release-pr.sh ]]; then
-            ./scripts/test-release-pr.sh
+          ./scripts/test-release-pr.sh
+
+      - name: Prepare update signing
+        id: signing
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_PRIVATE_ED_KEY || '' }}
+        run: |
+          signing_key="$SPARKLE_PRIVATE_ED_KEY"
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            signing_key="$(openssl rand -base64 32)"
+            echo "::add-mask::$signing_key"
+            printf 'SPARKLE_TEST_ED_KEY=%s\n' "$signing_key" >> "$GITHUB_ENV"
+          elif [[ -z "$signing_key" ]]; then
+            echo "::error::Configure the SPARKLE_PRIVATE_ED_KEY repository secret to sign releases."
+            exit 1
           fi
+          public_key="$(printf '%s\n' "$signing_key" | swift scripts/sparkle-public-key.swift)"
+          printf 'public_key=%s\n' "$public_key" >> "$GITHUB_OUTPUT"
 
       - name: Build and verify release assets
         env:
           TAG: ${{ steps.version.outputs.tag }}
-          APP_BUILD_NUMBER: ${{ github.run_number }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ steps.signing.outputs.public_key }}
+          SPARKLE_FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
         run: |
           ./scripts/build-release-assets.sh --tag "$TAG"
           (cd dist/release && shasum -a 256 -c SHA256SUMS.txt)
           ./scripts/generate-release-notes.sh "$TAG" > dist/release/release-notes.md
+
+      - name: Sign ZIP and generate appcast
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ github.event_name != 'pull_request' && secrets.SPARKLE_PRIVATE_ED_KEY || '' }}
+        run: |
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            export SPARKLE_PRIVATE_ED_KEY="$SPARKLE_TEST_ED_KEY"
+          fi
+          bash scripts/generate-update-feed.sh "$TAG" "$REPOSITORY"
 
       - name: Upload release build
         if: github.event_name != 'pull_request'
@@ -112,10 +144,16 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           shasum -a 256 -c SHA256SUMS.txt
-          assets=("AI-Cleaner-${TAG}-macOS.dmg" "AI-Cleaner-${TAG}-macOS.zip" SHA256SUMS.txt)
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --clobber
-            gh release edit "$TAG" --title "AI Cleaner $TAG" --notes-file release-notes.md --draft=false
+          test -s appcast.xml
+          assets=("AI-Cleaner-${TAG}-macOS.dmg" "AI-Cleaner-${TAG}-macOS.zip" SHA256SUMS.txt appcast.xml)
+          if release=$(gh release view "$TAG" --json assets,isDraft 2>/dev/null); then
+            if jq -e '.isDraft' <<< "$release" >/dev/null; then
+              gh release upload "$TAG" "${assets[@]}" --clobber
+              gh release edit "$TAG" --title "AI Cleaner $TAG" --notes-file release-notes.md --draft=false
+            elif ! jq -e 'any(.assets[]; .name == "appcast.xml")' <<< "$release" >/dev/null; then
+              echo "::error::This tag is already published without an appcast. Publish a new version."
+              exit 1
+            fi
           else
             gh release create "$TAG" "${assets[@]}" --verify-tag --title "AI Cleaner $TAG" --notes-file release-notes.md
           fi

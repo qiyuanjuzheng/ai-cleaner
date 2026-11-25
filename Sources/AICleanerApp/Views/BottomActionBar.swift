@@ -7,6 +7,7 @@ struct BottomActionBar: View {
     var initialCelebrationBurstActive: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showingCleanupDetails = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -166,6 +167,15 @@ struct BottomActionBar: View {
                 }
             }
 
+            if result.hasFailures {
+                Button("查看详情") { showingCleanupDetails = true }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .popover(isPresented: $showingCleanupDetails, arrowEdge: .top) {
+                        cleanupFailureDetails(result)
+                    }
+            }
+
             Button {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                     viewModel.dismissCleanupBanner()
@@ -205,4 +215,26 @@ struct BottomActionBar: View {
         )
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.36 : 0.12), radius: 16, y: 6)
     }
+
+    private func cleanupFailureDetails(_ result: CleanupResult) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("未移入废纸篓的条目")
+                    .font(.headline)
+                ForEach(result.skippedProtectedItems + result.failedItems) { failure in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(failure.item.preferredDisplayTitle)
+                            .font(.callout.weight(.medium))
+                        Text(failure.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(14)
+        }
+        .frame(width: 360, height: 244)
+    }
+
 }

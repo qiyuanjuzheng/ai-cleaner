@@ -41,7 +41,10 @@ public struct TrashCleaner: Sendable {
     ///   仅在用户通过双重风险提醒并显式确认覆盖后才应传入 `true`，此时仍会校验目标及其后代的硬保护规则。
     public func trash(
         items: [CleanableItem],
-        allowNotRecommendedOverride: Bool = false
+        allowNotRecommendedOverride: Bool = false,
+        projectCatalog: ProjectSessionCatalog? = nil,
+        projectProtectionStore: ProjectProtectionStore? = nil,
+        verifyProjectSelection: Bool = false
     ) -> CleanupResult {
         let fileManager = FileManager.default
         var trashed: [TrashedItemRecord] = []
@@ -49,11 +52,19 @@ public struct TrashCleaner: Sendable {
         var failed: [CleanupFailure] = []
         var trashedBytes: Int64 = 0
 
-        // 按路径去重，若同时包含父目录与子项则按父目录优先避免重复处理
-        let deduplicated = deduplicateNestedItems(items)
+        let catalog = projectCatalog ?? ProjectSessionCatalog(items: items)
+        var checkedProjectPaths: Set<String> = []
+        var projectProtection = catalog.protection(for: checkedProjectPaths)
+        let sorted = items.sorted {
+            SafetyGuard.normalizeTempPath($0.url).path.count < SafetyGuard.normalizeTempPath($1.url).path.count
+        }
+        var trashedPaths: Set<String> = []
 
-        for item in deduplicated {
+        for item in sorted {
             let url = SafetyGuard.normalizeTempPath(URL(fileURLWithPath: item.url.path))
+            if trashedPaths.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) {
+                continue
+            }
             let isOverride = !item.isCleanable && allowNotRecommendedOverride
             if let reason = item.hardProtectionReason {
                 skippedProtected.append(CleanupFailure(item: item, reason: reason))
@@ -93,7 +104,38 @@ public struct TrashCleaner: Sendable {
             }
 
             do {
+                let currentProjectPaths = try projectProtectionStore?.load() ?? []
+                if currentProjectPaths != checkedProjectPaths {
+                    projectProtection = catalog.protection(for: currentProjectPaths)
+                    checkedProjectPaths = currentProjectPaths
+                }
+            } catch {
+                failed.append(CleanupFailure(item: item, reason: "无法读取项目保护设置，请检查设置后重试"))
+                continue
+            }
+            if projectProtection.blocks(item) {
+                skippedProtected.append(CleanupFailure(item: item, reason: "此条目属于受保护的项目，或包含该项目的数据"))
+                continue
+            }
+            if verifyProjectSelection && catalog.wouldRemoveWorkspace(item) {
+                skippedProtected.append(CleanupFailure(item: item, reason: "此条目是项目工作区，或包含项目工作区"))
+                continue
+            }
+
+            if verifyProjectSelection {
+                guard let snapshot = item.cleanupSnapshot, snapshot.modifiedAt != nil else {
+                    failed.append(CleanupFailure(item: item, reason: "扫描时无法验证条目的文件身份或修改时间，请重新扫描"))
+                    continue
+                }
+                if let reason = snapshot.changeReason(at: url) {
+                    failed.append(CleanupFailure(item: item, reason: reason))
+                    continue
+                }
+            }
+
+            do {
                 let resultingURL = try performer.trashItem(at: url)
+                trashedPaths.insert(url.path)
                 let record = TrashedItemRecord(item: item, resultingTrashURL: resultingURL, trashedBytes: liveSize)
                 trashed.append(record)
                 trashedBytes += record.trashedBytes
@@ -114,26 +156,5 @@ public struct TrashCleaner: Sendable {
             freedBytes: trashedBytes,
             completedAt: Date()
         )
-    }
-
-    private func deduplicateNestedItems(_ items: [CleanableItem]) -> [CleanableItem] {
-        // 路径更短的排在前，若后续路径位于已选父目录之下则跳过，避免二次 trashing 报错
-        let sorted = items.sorted {
-            SafetyGuard.normalizeTempPath($0.url).path.count < SafetyGuard.normalizeTempPath($1.url).path.count
-        }
-        var kept: [CleanableItem] = []
-        var keptPaths: [String] = []
-
-        for item in sorted {
-            let path = SafetyGuard.normalizeTempPath(item.url).path
-            let isNested = keptPaths.contains { parent in
-                path == parent || path.hasPrefix(parent + "/")
-            }
-            if !isNested {
-                kept.append(item)
-                keptPaths.append(path)
-            }
-        }
-        return kept
     }
 }

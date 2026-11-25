@@ -33,13 +33,25 @@ struct SidebarView: View {
                     SidebarClientTile(
                         title: "空间总览",
                         cleanableBytesText: viewModel.reportTotalBytesText,
-                        hasProtectedOnly: (viewModel.report?.totalSizeBytes ?? 0) == 0 && (viewModel.report?.protectedSizeBytes ?? 0) > 0,
+                        hasProtectedOnly: viewModel.reportHasProtectedOnly,
                         icon: .symbol("sparkles.rectangle.stack.fill"),
                         tint: Color(red: 0.16, green: 0.80, blue: 0.60),
                         isSelected: viewModel.sidebarSelection == .allClients,
                         namespace: sidebarNamespace
                     ) {
                         select(.allClients)
+                    }
+
+                    SidebarClientTile(
+                        title: "项目会话",
+                        cleanableBytesText: "",
+                        hasProtectedOnly: false,
+                        icon: .symbol("folder.badge.clock"),
+                        tint: .teal,
+                        isSelected: viewModel.sidebarSelection == .projects,
+                        namespace: sidebarNamespace
+                    ) {
+                        select(.projects)
                     }
 
                     SidebarClientTile(

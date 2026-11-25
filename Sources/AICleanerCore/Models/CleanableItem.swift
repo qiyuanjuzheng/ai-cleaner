@@ -10,6 +10,10 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
     public let displayName: String
     public let sessionTitle: String?
     public let sessionProjectName: String?
+    public let exactSessionID: String?
+    public let projectEvidence: SessionProjectEvidence?
+    public let isSessionArtifact: Bool
+    public let cleanupSnapshot: FileCleanupSnapshot?
     /// 磁盘上的实际文件或目录名
     public let fileName: String
     public let url: URL
@@ -71,7 +75,11 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         sessionTitle: String? = nil,
         sessionProjectName: String? = nil,
         sourceBadge: String? = nil,
-        isRecentlyModified: Bool = false
+        isRecentlyModified: Bool = false,
+        exactSessionID: String? = nil,
+        projectEvidence: SessionProjectEvidence? = nil,
+        isSessionArtifact: Bool = false,
+        cleanupSnapshot: FileCleanupSnapshot? = nil
     ) {
         let standardized = url.standardizedFileURL
         self.id = "\(clientID)::\(standardized.path)"
@@ -81,6 +89,10 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         self.displayName = displayName
         self.sessionTitle = sessionTitle
         self.sessionProjectName = sessionProjectName
+        self.exactSessionID = exactSessionID
+        self.projectEvidence = projectEvidence
+        self.isSessionArtifact = isSessionArtifact
+        self.cleanupSnapshot = cleanupSnapshot
         self.fileName = fileName
         self.url = standardized
         self.category = category
@@ -108,6 +120,19 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         self.modifiedAt = modifiedAt
         self.isDirectory = isDirectory
         self.isCustom = isCustom
+    }
+
+    func applyingProjectProtection() -> Self {
+        let reason = "此条目属于受保护的项目，或包含该项目的数据"
+        return CleanableItem(
+            clientID: clientID, clientName: clientName, ruleID: ruleID, displayName: displayName,
+            fileName: fileName, url: url, category: category, recommendation: recommendation, safetyNote: reason,
+            sizeBytes: sizeBytes, fileCount: fileCount, modifiedAt: modifiedAt, isDirectory: isDirectory,
+            isCustom: isCustom, hardProtectionReason: reason, requiresIndividualSelection: requiresIndividualSelection,
+            sessionTitle: sessionTitle, sessionProjectName: sessionProjectName, sourceBadge: sourceBadge,
+            isRecentlyModified: isRecentlyModified, exactSessionID: exactSessionID, projectEvidence: projectEvidence,
+            isSessionArtifact: isSessionArtifact, cleanupSnapshot: cleanupSnapshot
+        )
     }
 }
 
@@ -195,6 +220,8 @@ public struct ClientScanSummary: Identifiable, Hashable, Sendable {
 public struct ScanReport: Sendable {
     public let scannedAt: Date
     public let clientSummaries: [ClientScanSummary]
+    /// Includes project candidates hidden by the exclusion list, for parent-directory protection.
+    public let projectItems: [CleanableItem]
     public let totalBuiltInProfilesCount: Int
     public let detectedBuiltInClientsCount: Int
     public let skippedProtectedCount: Int
@@ -230,10 +257,13 @@ public struct ScanReport: Sendable {
         clientSummaries: [ClientScanSummary],
         totalBuiltInProfilesCount: Int,
         detectedBuiltInClientsCount: Int,
-        skippedProtectedCount: Int = 0
+        skippedProtectedCount: Int = 0,
+        projectItems: [CleanableItem]? = nil
     ) {
         self.scannedAt = scannedAt
         self.clientSummaries = clientSummaries
+        self.projectItems = projectItems ?? clientSummaries.flatMap(\.allDisplayedItems)
+            .filter { $0.category == .sessions || $0.isSessionArtifact }
         self.totalBuiltInProfilesCount = totalBuiltInProfilesCount
         self.detectedBuiltInClientsCount = detectedBuiltInClientsCount
         self.skippedProtectedCount = skippedProtectedCount
@@ -288,7 +318,8 @@ public struct ScanReport: Sendable {
         guard !trashedItems.isEmpty else { return self }
         let matcher = TrashedItemMatcher(items: trashedItems)
         var resolvedDirCache: [String: String] = [:]
-        return rebuilding { !matcher.matches($0, resolvedDirCache: &resolvedDirCache) }
+        let remainingProjectItems = projectItems.filter { !matcher.matches($0, resolvedDirCache: &resolvedDirCache) }
+        return rebuilding(projectItems: remainingProjectItems) { !matcher.matches($0, resolvedDirCache: &resolvedDirCache) }
     }
 
     /// 便捷重载：直接传入已移入废纸篓记录数组原位扣减扫描报告
@@ -296,7 +327,32 @@ public struct ScanReport: Sendable {
         removing(trashedItems: trashedRecords.map(\.item))
     }
 
-    private func rebuilding(keeping shouldKeep: (CleanableItem) -> Bool) -> ScanReport {
+    public func applyingProjectProtection(_ protection: ProjectLocationMatcher) -> ScanReport {
+        let summaries = clientSummaries.map { summary in
+            var cleanable: [CleanableItem] = []
+            var locked = summary.protectedItems.map { protection.blocks($0) ? $0.applyingProjectProtection() : $0 }
+            for item in summary.items {
+                if protection.blocks(item) {
+                    locked.append(item.applyingProjectProtection())
+                } else {
+                    cleanable.append(item)
+                }
+            }
+            return ClientScanSummary(
+                profile: summary.profile, items: cleanable, protectedItems: locked,
+                skippedProtectedCount: summary.skippedProtectedCount
+            )
+        }
+        return ScanReport(
+            scannedAt: scannedAt, clientSummaries: summaries, totalBuiltInProfilesCount: totalBuiltInProfilesCount,
+            detectedBuiltInClientsCount: detectedBuiltInClientsCount, skippedProtectedCount: skippedProtectedCount,
+            projectItems: projectItems
+        )
+    }
+
+    private func rebuilding(
+        projectItems remainingProjectItems: [CleanableItem]? = nil, keeping shouldKeep: (CleanableItem) -> Bool
+    ) -> ScanReport {
         var builtIn: [ClientScanSummary] = []
         var tempGroups: [ClientScanSummary] = []
         var custom: [ClientScanSummary] = []
@@ -348,7 +404,8 @@ public struct ScanReport: Sendable {
             clientSummaries: builtIn + tempGroups + custom,
             totalBuiltInProfilesCount: totalBuiltInProfilesCount,
             detectedBuiltInClientsCount: builtIn.count,
-            skippedProtectedCount: skippedProtectedCount
+            skippedProtectedCount: skippedProtectedCount,
+            projectItems: remainingProjectItems ?? projectItems
         )
     }
 
@@ -444,7 +501,8 @@ public struct ScanReport: Sendable {
             clientSummaries: builtIn + tempGroups + sortedCustom,
             totalBuiltInProfilesCount: totalBuiltInProfilesCount,
             detectedBuiltInClientsCount: builtIn.count,
-            skippedProtectedCount: skippedProtectedCount
+            skippedProtectedCount: skippedProtectedCount,
+            projectItems: projectItems
         )
     }
 

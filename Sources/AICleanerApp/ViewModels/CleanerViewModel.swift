@@ -8,13 +8,14 @@ enum SidebarSelection: Hashable, Sendable {
     case allClients
     case history
     case excluded
+    case projects
     case client(String)
 
     var isListScope: Bool {
         switch self {
         case .allClients, .client:
             return true
-        case .history, .excluded:
+        case .history, .excluded, .projects:
             return false
         }
     }
@@ -194,6 +195,8 @@ final class CleanerViewModel {
     private let customDirectoryStore: CustomDirectoryStore
     private let historyStore: CleanupHistoryStore
     private let excludedItemStore: ExcludedItemStore
+    private let projectProtectionStore: ProjectProtectionStore
+    private let now: @Sendable () -> Date
     private let safetyGuard: SafetyGuard
 
     // MARK: - Nested Display & Cache Types
@@ -237,12 +240,14 @@ final class CleanerViewModel {
 
     private struct PreparedReportBundle: Sendable {
         let report: ScanReport
+        let projectCatalog: ProjectSessionCatalog
         let builtInSummaries: [ClientScanSummary]
         let tempSummaries: [ClientScanSummary]
         let customSummaries: [ClientScanSummary]
         let builtInSidebarEntries: [SidebarClientEntry]
         let tempSidebarEntries: [SidebarClientEntry]
         let customSidebarEntries: [SidebarClientEntry]
+        let reportHasProtectedOnly: Bool
         let reportTotalBytesText: String
         let reportScannedTimeText: String
         let clientSummaryByID: [String: ClientScanSummary]
@@ -258,7 +263,8 @@ final class CleanerViewModel {
             if let report {
                 let bundle = Self.buildPreparedReportBundle(
                     from: report,
-                    homeDirectory: scanEngine.homeDirectory
+                    homeDirectory: scanEngine.homeDirectory,
+                    protectedProjects: protectedProjectPaths
                 )
                 applyPreparedReportBundle(bundle)
             } else {
@@ -285,6 +291,16 @@ final class CleanerViewModel {
     var sidebarSelection: SidebarSelection = .allClients {
         didSet {
             guard !suppressCacheRebuild, oldValue != sidebarSelection else { return }
+            if oldValue == .projects || sidebarSelection == .projects {
+                pendingRiskItemToSelect = nil
+                showingTrashConfirmation = false
+                projectSelectedItemIDs.removeAll()
+                if sidebarSelection == .projects {
+                    refreshProjectVisibility()
+                } else {
+                    rebuildSelectionCache()
+                }
+            }
             if !sidebarSelection.isListScope {
                 if sidebarSelection == .excluded {
                     refreshExcludedItemStatuses()
@@ -298,6 +314,41 @@ final class CleanerViewModel {
             activeListScopeSelection = sidebarSelection
             applyScope(for: sidebarSelection, resetViewport: true)
         }
+    }
+
+    private(set) var projectGroups: [SessionProject] = []
+    private(set) var visibleProjectSessions: [CleanableItem] = []
+    private(set) var protectedProjectPaths: Set<String> = []
+
+    var selectedProjectID: SessionProjectID? {
+        didSet {
+            guard oldValue != selectedProjectID else { return }
+            projectSelectedItemIDs.removeAll()
+            if sidebarSelection == .projects {
+                pendingRiskItemToSelect = nil
+                showingTrashConfirmation = false
+            }
+            refreshProjectVisibility()
+        }
+    }
+
+    var projectAgeFilter: ItemAgeFilter = .all {
+        didSet {
+            guard oldValue != projectAgeFilter else { return }
+            refreshProjectVisibility()
+        }
+    }
+
+    private(set) var projectAgeCutoff: Date?
+
+    var projectBulkSelectableSessions: [CleanableItem] {
+        guard selectedProjectID != .unidentified else { return [] }
+        return visibleProjectSessions.filter(\.isBulkSelectable)
+    }
+
+    private var projectSelectedItemIDs: Set<String> = []
+    private var activeSelectedItemIDs: Set<String> {
+        sidebarSelection == .projects ? projectSelectedItemIDs : selectedItemIDs
     }
 
     var searchText: String = "" {
@@ -369,6 +420,7 @@ final class CleanerViewModel {
     private(set) var builtInSidebarEntries: [SidebarClientEntry] = []
     private(set) var tempSidebarEntries: [SidebarClientEntry] = []
     private(set) var customSidebarEntries: [SidebarClientEntry] = []
+    private(set) var reportHasProtectedOnly = false
     private(set) var reportTotalBytesText: String = ""
     private(set) var reportScannedTimeText: String = ""
 
@@ -423,6 +475,8 @@ final class CleanerViewModel {
 
     // MARK: - Internal Non-Observed Indexes
 
+    private var projectCatalog = ProjectSessionCatalog()
+    @ObservationIgnored private var projectVisibleItemIDs: Set<String> = []
     @ObservationIgnored private var allDisplayedItemsByID: [String: CleanableItem] = [:]
     @ObservationIgnored private var clientSummaryByID: [String: ClientScanSummary] = [:]
     @ObservationIgnored private var presentationByID: [String: PreparedItemPresentation] = [:]
@@ -451,16 +505,23 @@ final class CleanerViewModel {
         historyStore: CleanupHistoryStore? = nil,
         excludedItemStore: ExcludedItemStore? = nil,
         trashPerformer: any TrashPerforming = SystemTrashPerformer(),
-        scanEngine: (any ScanPerforming)? = nil
+        scanEngine: (any ScanPerforming)? = nil,
+        projectProtectionStore: ProjectProtectionStore? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         let resolvedHome = scanEngine?.homeDirectory ?? homeDirectory
         let guardInstance = scanEngine?.safetyGuard ?? SafetyGuard(homeDirectory: resolvedHome)
         self.safetyGuard = guardInstance
+        self.now = now
         self.scanEngine = scanEngine ?? ScanEngine(homeDirectory: resolvedHome, safetyGuard: guardInstance)
         self.trashCleaner = TrashCleaner(safetyGuard: guardInstance, performer: trashPerformer)
         self.customDirectoryStore = customDirectoryStore ?? CustomDirectoryStore(safetyGuard: guardInstance)
         self.historyStore = historyStore ?? CleanupHistoryStore()
         self.excludedItemStore = excludedItemStore ?? ExcludedItemStore()
+        self.projectProtectionStore = projectProtectionStore ?? ProjectProtectionStore(
+            storageURL: self.excludedItemStore.storageURL.deletingLastPathComponent()
+                .appendingPathComponent("protected-projects.json")
+        )
 
         self.suppressCacheRebuild = true
         self.customDirectories = self.customDirectoryStore.load()
@@ -473,6 +534,11 @@ final class CleanerViewModel {
             self.appearanceMode = .light
         }
         self.suppressCacheRebuild = false
+        do {
+            protectedProjectPaths = try self.projectProtectionStore.load()
+        } catch {
+            errorBannerMessage = "无法读取项目保护设置：\(error.localizedDescription)"
+        }
 
         rebuildHistoryCache()
         rebuildExcludedItemsCache()
@@ -521,9 +587,14 @@ final class CleanerViewModel {
     // MARK: - Off-Main-Thread Report & Scope Precomputation
 
     private nonisolated static func buildPreparedReportBundle(
-        from report: ScanReport,
-        homeDirectory: URL
+        from sourceReport: ScanReport,
+        homeDirectory: URL,
+        protectedProjects: Set<String>
     ) -> PreparedReportBundle {
+        let projectCatalog = ProjectSessionCatalog(items: sourceReport.projectItems)
+        let report = protectedProjects.isEmpty
+            ? sourceReport
+            : sourceReport.applyingProjectProtection(projectCatalog.protection(for: protectedProjects))
         var builtIn: [ClientScanSummary] = []
         var temp: [ClientScanSummary] = []
         var custom: [ClientScanSummary] = []
@@ -603,13 +674,15 @@ final class CleanerViewModel {
         }
 
         return PreparedReportBundle(
-            report: report,
+            report: sourceReport,
+            projectCatalog: projectCatalog,
             builtInSummaries: builtIn,
             tempSummaries: temp,
             customSummaries: custom,
             builtInSidebarEntries: builtInEntries,
             tempSidebarEntries: tempEntries,
             customSidebarEntries: customEntries,
+            reportHasProtectedOnly: report.totalSizeBytes == 0 && report.protectedSizeBytes > 0,
             reportTotalBytesText: report.totalSizeBytes > 0 ? CleanerFormatting.formatBytes(report.totalSizeBytes) : "",
             reportScannedTimeText: CleanerFormatting.formatTime(report.scannedAt),
             clientSummaryByID: summaryMap,
@@ -893,12 +966,29 @@ final class CleanerViewModel {
         builtInSidebarEntries = bundle.builtInSidebarEntries
         tempSidebarEntries = bundle.tempSidebarEntries
         customSidebarEntries = bundle.customSidebarEntries
+        reportHasProtectedOnly = bundle.reportHasProtectedOnly
         reportTotalBytesText = bundle.reportTotalBytesText
         reportScannedTimeText = bundle.reportScannedTimeText
         clientSummaryByID = bundle.clientSummaryByID
+        projectSelectedItemIDs = projectSelectedItemIDs.filter { id in
+            guard let previous = allDisplayedItemsByID[id], let current = bundle.allDisplayedItemsByID[id] else {
+                return false
+            }
+            return previous.cleanupSnapshot == current.cleanupSnapshot
+        }
         allDisplayedItemsByID = bundle.allDisplayedItemsByID
         presentationByID = bundle.presentationByID
         scopeCache = bundle.scopeCache
+        projectCatalog = bundle.projectCatalog
+
+        let selectableIDs = Set(allDisplayedItemsByID.values.lazy.filter { $0.hardProtectionReason == nil }.map(\.id))
+        if !selectedItemIDs.isSubset(of: selectableIDs) {
+            selectedItemIDs.formIntersection(selectableIDs)
+        }
+        if let pendingRiskItemToSelect, !selectableIDs.contains(pendingRiskItemToSelect.id) {
+            self.pendingRiskItemToSelect = nil
+        }
+        rebuildProjectGroups()
 
         let targetScope: SidebarSelection = sidebarSelection.isListScope ? sidebarSelection : activeListScopeSelection
         activeListScopeSelection = targetScope
@@ -913,12 +1003,18 @@ final class CleanerViewModel {
         builtInSidebarEntries = []
         tempSidebarEntries = []
         customSidebarEntries = []
+        reportHasProtectedOnly = false
         reportTotalBytesText = ""
         reportScannedTimeText = ""
         clientSummaryByID = [:]
         allDisplayedItemsByID = [:]
         presentationByID = [:]
         scopeCache = [:]
+        projectCatalog = ProjectSessionCatalog()
+        projectGroups = []
+        selectedProjectID = nil
+        projectSelectedItemIDs.removeAll()
+        refreshProjectVisibility()
         activeListScopeSelection = .allClients
         hasAppliedCurrentScope = false
 
@@ -943,6 +1039,78 @@ final class CleanerViewModel {
         maxDisplayedItemBytes = 0
         listViewportID &+= 1
         rebuildSelectionCache()
+    }
+
+    private func rebuildProjectGroups() {
+        var groups = projectCatalog.projects.compactMap { project -> SessionProject? in
+            let sessions = project.sessions.compactMap { allDisplayedItemsByID[$0.id] }
+            guard !sessions.isEmpty || isProjectProtected(project.id) else { return nil }
+            return SessionProject(id: project.id, sessions: sessions)
+        }
+        let visiblePaths = Set(groups.compactMap(\.id.workspacePath))
+        for path in protectedProjectPaths.subtracting(visiblePaths).sorted() {
+            groups.append(SessionProject(id: .workspace(path), sessions: []))
+        }
+        projectGroups = groups
+        let nextProjectID = groups.contains { $0.id == selectedProjectID } ? selectedProjectID : groups.first?.id
+        if nextProjectID == selectedProjectID {
+            refreshProjectVisibility()
+        } else {
+            selectedProjectID = nextProjectID
+        }
+    }
+
+    private func refreshProjectVisibility() {
+        let sessions = projectGroups.first { $0.id == selectedProjectID }?.sessions ?? []
+        let cutoff = projectAgeFilter.cutoffDate(relativeTo: now())
+        projectAgeCutoff = cutoff
+        if let cutoff {
+            visibleProjectSessions = sessions.filter { item in
+                guard let modifiedAt = item.cleanupSnapshot?.modifiedAt else { return false }
+                return modifiedAt < cutoff
+            }
+        } else {
+            visibleProjectSessions = sessions
+        }
+        let items = visibleProjectSessions.flatMap { [$0] + projectArtifacts(for: $0) }
+        projectVisibleItemIDs = Set(items.map(\.id))
+        projectSelectedItemIDs.formIntersection(items.lazy.filter { $0.hardProtectionReason == nil }.map(\.id))
+        if sidebarSelection == .projects {
+            if let pendingRiskItemToSelect, !projectVisibleItemIDs.contains(pendingRiskItemToSelect.id) {
+                self.pendingRiskItemToSelect = nil
+            }
+            rebuildSelectionCache()
+        }
+    }
+
+    func projectArtifacts(for session: CleanableItem) -> [CleanableItem] {
+        projectCatalog.artifacts(for: session).compactMap { allDisplayedItemsByID[$0.id] }
+    }
+
+    func isProjectProtected(_ project: SessionProjectID) -> Bool {
+        project.workspacePath.map { protectedProjectPaths.contains($0) } ?? false
+    }
+
+    func setProjectProtection(_ enabled: Bool, for project: SessionProjectID) {
+        guard let path = project.workspacePath, !isCleaning else { return }
+        do {
+            var paths = try projectProtectionStore.load()
+            if enabled {
+                paths.insert(path)
+            } else {
+                paths.remove(path)
+            }
+            try projectProtectionStore.save(paths)
+            protectedProjectPaths = paths
+            if let report {
+                let bundle = Self.buildPreparedReportBundle(
+                    from: report, homeDirectory: scanEngine.homeDirectory, protectedProjects: paths
+                )
+                applyPreparedReportBundle(bundle, resetViewport: false)
+            }
+        } catch {
+            errorBannerMessage = "更新项目保护失败：\(error.localizedDescription)"
+        }
     }
 
     private func applyScope(for selection: SidebarSelection, resetViewport: Bool) {
@@ -1103,7 +1271,8 @@ final class CleanerViewModel {
 
     private func rebuildSelectionCache() {
         selectionRevision &+= 1
-        guard !selectedItemIDs.isEmpty else {
+        let activeIDs = activeSelectedItemIDs
+        guard !activeIDs.isEmpty else {
             selectedItems = []
             selectedTotalBytes = 0
             selectedNotRecommendedItems = []
@@ -1113,7 +1282,8 @@ final class CleanerViewModel {
             return
         }
 
-        let resolved = selectedItemIDs.compactMap { allDisplayedItemsByID[$0] }
+        let resolved = activeIDs.compactMap { allDisplayedItemsByID[$0] }
+            .filter { $0.hardProtectionReason == nil }
             .sorted { lhs, rhs in
                 if lhs.recommendation == .notRecommended && rhs.recommendation != .notRecommended {
                     return true
@@ -1238,7 +1408,7 @@ final class CleanerViewModel {
 
     /// 由用户主动触发扫描（从待扫描首页、工具栏或菜单启动）
     func startScan() {
-        if !sidebarSelection.isListScope {
+        if !sidebarSelection.isListScope && sidebarSelection != .projects {
             sidebarSelection = .allClients
         }
         rescan()
@@ -1284,6 +1454,14 @@ final class CleanerViewModel {
         let customDirs = customDirectories
         let excludedSnapshot = excludedItems
         let homeDir = scanEngine.homeDirectory
+        let protectedSnapshot: Set<String>
+        do {
+            protectedSnapshot = try projectProtectionStore.load()
+            protectedProjectPaths = protectedSnapshot
+        } catch {
+            protectedSnapshot = protectedProjectPaths
+            errorBannerMessage = "无法读取项目保护设置：\(error.localizedDescription)"
+        }
 
         scanTask = Task {
             let bundle = await Task.detached(priority: .userInitiated) {
@@ -1292,30 +1470,27 @@ final class CleanerViewModel {
                     excludedItems: excludedSnapshot,
                     now: nil
                 )
-                return Self.buildPreparedReportBundle(from: newReport, homeDirectory: homeDir)
+                return Self.buildPreparedReportBundle(
+                    from: newReport, homeDirectory: homeDir, protectedProjects: protectedSnapshot
+                )
             }.value
 
             guard !Task.isCancelled else { return }
 
             let finalBundle: PreparedReportBundle
-            if self.excludedItems == excludedSnapshot {
+            if self.excludedItems == excludedSnapshot && self.protectedProjectPaths == protectedSnapshot {
                 finalBundle = bundle
             } else {
                 let refiltered = bundle.report.filtering(excludedItems: self.excludedItems)
-                finalBundle = Self.buildPreparedReportBundle(from: refiltered, homeDirectory: homeDir)
+                finalBundle = Self.buildPreparedReportBundle(
+                    from: refiltered, homeDirectory: homeDir, protectedProjects: self.protectedProjectPaths
+                )
             }
 
-            let selectableIDs = Set(finalBundle.allDisplayedItemsByID.values.lazy
-                .filter { $0.hardProtectionReason == nil }.map(\.id))
             self.sessionExcludedSnapshots.removeAll()
             self.suppressCacheRebuild = true
             self.report = finalBundle.report
             self.isScanning = false
-            self.selectedItemIDs.formIntersection(selectableIDs)
-            if let pending = self.pendingRiskItemToSelect, !selectableIDs.contains(pending.id) {
-                self.pendingRiskItemToSelect = nil
-            }
-
             if case let .client(clientID) = self.sidebarSelection,
                finalBundle.clientSummaryByID[clientID] == nil {
                 self.sidebarSelection = .allClients
@@ -1369,24 +1544,33 @@ final class CleanerViewModel {
     }
 
     func toggleSelection(for item: CleanableItem) {
-        if selectedItemIDs.contains(item.id) {
-            selectedItemIDs.remove(item.id)
-            return
-        }
-        guard item.hardProtectionReason == nil else { return }
-        if item.isCleanable {
-            selectedItemIDs.insert(item.id)
+        guard let current = allDisplayedItemsByID[item.id],
+              current.hardProtectionReason == nil,
+              sidebarSelection != .projects || projectVisibleItemIDs.contains(item.id) else { return }
+        let selected = isSelected(item)
+        if selected || current.isCleanable {
+            updateSelection(for: current.id, selected: !selected)
         } else {
-            // 「不建议清理」项绝不静默勾选，弹出单条风险提醒确认后再允许加入清单
-            pendingRiskItemToSelect = item
+            pendingRiskItemToSelect = current
         }
     }
 
     func confirmRiskItemSelection(_ item: CleanableItem) {
         defer { pendingRiskItemToSelect = nil }
-        guard let current = allDisplayedItemsByID[item.id],
-              current.hardProtectionReason == nil, !current.isCleanable else { return }
-        selectedItemIDs.insert(item.id)
+        guard pendingRiskItemToSelect?.id == item.id,
+              let current = allDisplayedItemsByID[item.id],
+              current.hardProtectionReason == nil, !current.isCleanable,
+              sidebarSelection != .projects || projectVisibleItemIDs.contains(item.id) else { return }
+        updateSelection(for: item.id, selected: true)
+    }
+
+    private func updateSelection(for id: String, selected: Bool) {
+        if sidebarSelection == .projects {
+            if selected { projectSelectedItemIDs.insert(id) } else { projectSelectedItemIDs.remove(id) }
+            rebuildSelectionCache()
+        } else {
+            if selected { selectedItemIDs.insert(id) } else { selectedItemIDs.remove(id) }
+        }
     }
 
     func cancelRiskItemSelection() {
@@ -1394,15 +1578,16 @@ final class CleanerViewModel {
     }
 
     func isSelected(_ item: CleanableItem) -> Bool {
-        selectedItemIDs.contains(item.id)
+        isSelected(itemID: item.id)
     }
 
     func isSelected(itemID: String) -> Bool {
-        selectedItemIDs.contains(itemID)
+        activeSelectedItemIDs.contains(itemID)
     }
 
     /// 一键勾选当前视图下的全部「建议清理」项
     func selectRecommendedInScope() {
+        guard sidebarSelection.isListScope else { return }
         var next = selectedItemIDs
         for item in scopedRecommendedItems where item.isBulkSelectable {
             next.insert(item.id)
@@ -1445,6 +1630,11 @@ final class CleanerViewModel {
     }
 
     func selectAllVisible() {
+        if sidebarSelection == .projects {
+            projectSelectedItemIDs.formUnion(projectBulkSelectableSessions.map(\.id))
+            rebuildSelectionCache()
+            return
+        }
         var next = selectedItemIDs
         for item in filteredBulkSelectableItems {
             next.insert(item.id)
@@ -1453,6 +1643,7 @@ final class CleanerViewModel {
     }
 
     func invertVisibleSelection() {
+        guard sidebarSelection.isListScope else { return }
         var next = selectedItemIDs
         for item in filteredBulkSelectableItems {
             if next.contains(item.id) {
@@ -1473,7 +1664,12 @@ final class CleanerViewModel {
     }
 
     func clearAllSelection() {
-        selectedItemIDs.removeAll()
+        if sidebarSelection == .projects {
+            projectSelectedItemIDs.removeAll()
+            rebuildSelectionCache()
+        } else {
+            selectedItemIDs.removeAll()
+        }
     }
 
     func abbreviatedPath(for item: CleanableItem) -> String {
@@ -1609,19 +1805,13 @@ final class CleanerViewModel {
     private func applyUpdatedReportInPlace(_ updatedReport: ScanReport) {
         let bundle = Self.buildPreparedReportBundle(
             from: updatedReport,
-            homeDirectory: scanEngine.homeDirectory
+            homeDirectory: scanEngine.homeDirectory,
+            protectedProjects: protectedProjectPaths
         )
-        let selectableIDs = Set(bundle.allDisplayedItemsByID.values.lazy
-            .filter { $0.hardProtectionReason == nil }.map(\.id))
 
         let previousScope = activeListScopeSelection
         suppressCacheRebuild = true
         self.report = bundle.report
-        self.selectedItemIDs.formIntersection(selectableIDs)
-        if let pending = self.pendingRiskItemToSelect, !selectableIDs.contains(pending.id) {
-            self.pendingRiskItemToSelect = nil
-        }
-
         if case let .client(clientID) = self.sidebarSelection,
            bundle.clientSummaryByID[clientID] == nil {
             self.sidebarSelection = .allClients
@@ -1697,7 +1887,7 @@ final class CleanerViewModel {
 
     func confirmAndTrashSelectedItems(acknowledgedNotRecommendedRisk: Bool = false) {
         let targets = selectedItems
-        guard !targets.isEmpty, !isCleaning else { return }
+        guard !targets.isEmpty, !isCleaning, !isScanning else { return }
         if hasSelectedNotRecommendedItems && !acknowledgedNotRecommendedRisk {
             return
         }
@@ -1706,10 +1896,17 @@ final class CleanerViewModel {
         errorBannerMessage = nil
         let cleaner = trashCleaner
         let allowOverride = acknowledgedNotRecommendedRisk && hasSelectedNotRecommendedItems
+        let projectCatalog = projectCatalog
+        let protectionStore = projectProtectionStore
+        let verifyProjectSelection = sidebarSelection == .projects
 
         Task {
             let result = await Task.detached(priority: .userInitiated) {
-                cleaner.trash(items: targets, allowNotRecommendedOverride: allowOverride)
+                cleaner.trash(
+                    items: targets, allowNotRecommendedOverride: allowOverride,
+                    projectCatalog: projectCatalog, projectProtectionStore: protectionStore,
+                    verifyProjectSelection: verifyProjectSelection
+                )
             }.value
 
             let trashedItems = result.trashedItems.map(\.item)

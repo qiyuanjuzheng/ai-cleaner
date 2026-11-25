@@ -282,7 +282,7 @@ public enum BuiltInClientRules {
                 displayName: "会话文件撤销快照 (file-history)",
                 path: ".claude/file-history",
                 category: .temporary,
-                mode: .directory,
+                mode: .children,
                 recommendation: .reviewSuggested,
                 explanation: "用于回滚会话中的文件修改。确认无需回滚后可勾选。"
             ),

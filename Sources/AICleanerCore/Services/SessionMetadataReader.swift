@@ -56,6 +56,8 @@ struct SessionRecord: Equatable, Sendable {
 
 /// 单款 AI 客户端在一次扫描周期内维护的会话元数据索引（合并只读索引文件、只读数据库与本轮扫描解析出的会话）
 struct ClientSessionIndex: Sendable {
+    private var exactProjects: [String: SessionProjectEvidence] = [:]
+    private var scannedProjects: [String: SessionProjectEvidence] = [:]
     private(set) var bySessionID: [String: SessionRecord] = [:]
     private(set) var byWorkspacePath: [String: SessionRecord] = [:]
     private(set) var byWorkspaceFolderName: [String: SessionRecord] = [:]
@@ -65,8 +67,15 @@ struct ClientSessionIndex: Sendable {
         workspacePath: String? = nil,
         folderName: String? = nil,
         record: SessionRecord,
-        preferExisting: Bool = true
+        preferExisting: Bool = true,
+        isExactID: Bool = true,
+        projectConflict: Bool = false
     ) {
+        if isExactID, let key = sessionID.map(Self.exactKey),
+           let evidence = projectConflict ? .conflict
+                : SessionProjectEvidence.workspacePath(record.workspacePath).map(SessionProjectEvidence.exactIndex) {
+            exactProjects[key] = SessionProjectEvidence.merging(exactProjects[key], evidence)
+        }
         guard !record.isEmpty else { return }
 
         if let rawID = sessionID?.trimmingCharacters(in: .whitespacesAndNewlines), !rawID.isEmpty {
@@ -86,6 +95,25 @@ struct ClientSessionIndex: Sendable {
 
         if let rawFolder = folderName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawFolder.isEmpty {
             mergeEntry(key: rawFolder.lowercased(), into: &byWorkspaceFolderName, record: record, preferExisting: preferExisting)
+        }
+    }
+
+    static func exactKey(_ id: String) -> String {
+        UUID(uuidString: id)?.uuidString.lowercased() ?? id
+    }
+
+    func exactProject(sessionID: String, includingScanned: Bool = false) -> SessionProjectEvidence? {
+        let key = Self.exactKey(sessionID)
+        return SessionProjectEvidence.merging(exactProjects[key], includingScanned ? scannedProjects[key] : nil)
+    }
+
+    mutating func registerScannedSession(_ metadata: SessionItemMetadata) {
+        if let record = metadata.resolvedRecord {
+            register(sessionID: metadata.resolvedSessionID, workspacePath: record.workspacePath,
+                     record: record, isExactID: false)
+        }
+        if !metadata.isSessionArtifact, let id = metadata.exactSessionID, let evidence = metadata.projectEvidence {
+            scannedProjects[id] = SessionProjectEvidence.merging(scannedProjects[id], evidence)
         }
     }
 
@@ -132,6 +160,30 @@ struct SessionItemMetadata {
     var safetyNoteOverride: String? = nil
     var resolvedRecord: SessionRecord? = nil
     var resolvedSessionID: String? = nil
+    var exactSessionID: String? = nil
+    var projectEvidence: SessionProjectEvidence? = nil
+    var isSessionArtifact = false
+
+    func applyingOwnership(
+        namedID: String?, reportedID: String? = nil, workspacePath: String? = nil,
+        index: ClientSessionIndex, isArtifact: Bool = false
+    ) -> Self {
+        var result = self
+        result.isSessionArtifact = isArtifact
+        let named = namedID.map(ClientSessionIndex.exactKey)
+        let reported = reportedID.map(ClientSessionIndex.exactKey)
+        if let named, let reported, named != reported {
+            result.projectEvidence = .conflict
+            return result
+        }
+        let exact = named ?? reported
+        result.exactSessionID = exact
+        let direct = SessionProjectEvidence.workspacePath(workspacePath).map(SessionProjectEvidence.reported)
+        let indexed = exact.flatMap { index.exactProject(sessionID: $0, includingScanned: isArtifact) }
+        result.projectEvidence = SessionProjectEvidence.merging(direct, indexed)
+        return result
+    }
+
 }
 
 /// 面向各 AI 客户端本地聊天会话与关联产物的轻量只读摘要解析器：
@@ -214,9 +266,11 @@ public struct SessionMetadataReader: Sendable {
         let lowerName = entryName.lowercased()
         let isRollbackLog = !isDirectory && lowerName.hasSuffix(".file-rollback.ndjson")
         let sessionID = Self.extractSessionIdentifier(from: entryName, isDirectory: isDirectory)
+        let namedID = Self.exactSessionIdentifier(from: entryName, isDirectory: isDirectory)
 
         var preview = SessionPreview()
         var isPrimarySessionDir = false
+        var hasSiblingSession = false
 
         if !isDirectory && Self.isJSONLOrCompressedJSONL(lowerName) {
             preview = readJSONLPreview(from: itemURL)
@@ -239,6 +293,7 @@ public struct SessionMetadataReader: Sendable {
                     .appendingPathComponent(entryName + ".jsonl")
                 if fileManager.fileExists(atPath: siblingJSONL.path) {
                     preview = readJSONLPreview(from: siblingJSONL)
+                    hasSiblingSession = true
                 }
             }
         }
@@ -267,91 +322,32 @@ public struct SessionMetadataReader: Sendable {
         }
 
         let shortID = Self.extractShortIdentifier(from: effectiveSessionID ?? itemURL.deletingPathExtension().lastPathComponent)
-
-        if isRollbackLog {
-            let suffix = "（文件回滚记录）"
-            if let title = rawTitle {
-                let displayName = [projectLabel, title + suffix].compactMap { $0 }.joined(separator: " · ")
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: title + suffix,
-                    projectName: projectLabel,
-                    resolvedRecord: record,
-                    resolvedSessionID: effectiveSessionID
-                )
-            }
-            if let snippet = bestSnippet {
-                let displayName = [projectLabel, snippet + suffix].compactMap { $0 }.joined(separator: " · ")
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: nil,
-                    projectName: projectLabel,
-                    resolvedRecord: record,
-                    resolvedSessionID: effectiveSessionID
-                )
-            }
-            let displayName = [projectLabel, "文件回滚记录 (\(shortID))"].compactMap { $0 }.joined(separator: " · ")
-            return SessionItemMetadata(
-                displayName: displayName,
-                title: nil,
-                projectName: projectLabel,
-                resolvedRecord: record,
-                resolvedSessionID: effectiveSessionID
-            )
-        }
-
         let isCompanionDir = isDirectory && !isPrimarySessionDir
-        if isCompanionDir {
-            let suffix = "（子代理/产物）"
-            if let title = rawTitle {
-                let displayName = [projectLabel, title + suffix].compactMap { $0 }.joined(separator: " · ")
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: title + suffix,
-                    projectName: projectLabel,
-                    resolvedRecord: record,
-                    resolvedSessionID: effectiveSessionID
-                )
-            }
-            if let snippet = bestSnippet {
-                let displayName = [projectLabel, snippet + suffix].compactMap { $0 }.joined(separator: " · ")
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: nil,
-                    projectName: projectLabel,
-                    resolvedRecord: record,
-                    resolvedSessionID: effectiveSessionID
-                )
-            }
-            let displayName = [projectLabel, "会话子代理/产物 (\(shortID))"].compactMap { $0 }.joined(separator: " · ")
-            return SessionItemMetadata(
-                displayName: displayName,
-                title: nil,
-                projectName: projectLabel,
-                resolvedRecord: record,
-                resolvedSessionID: effectiveSessionID
-            )
+        let isCompanion = isRollbackLog || isCompanionDir
+        let suffix = isRollbackLog ? "（文件回滚记录）" : "（子代理/产物）"
+        let fallback = isRollbackLog ? "文件回滚记录" : isCompanionDir ? "会话子代理/产物" : "会话记录"
+        let label: String
+        if isCompanion, let lead = rawTitle ?? bestSnippet {
+            label = lead + suffix
+        } else {
+            label = bestSnippet ?? "\(fallback) (\(shortID))"
         }
-
-        // 主会话文件或主会话目录（如 DeepSeek Harness）
-        if let snippet = bestSnippet {
-            let displayName = [projectLabel, snippet].compactMap { $0 }.joined(separator: " · ")
-            return SessionItemMetadata(
-                displayName: displayName,
-                title: rawTitle,
-                projectName: projectLabel,
-                resolvedRecord: record,
-                resolvedSessionID: effectiveSessionID
-            )
-        }
-
-        let displayName = [projectLabel, "会话记录 (\(shortID))"].compactMap { $0 }.joined(separator: " · ")
-        return SessionItemMetadata(
-            displayName: displayName,
-            title: rawTitle,
+        let display = SessionItemMetadata(
+            displayName: [projectLabel, label].compactMap { $0 }.joined(separator: " · "),
+            title: isCompanion ? rawTitle.map { $0 + suffix } : rawTitle,
             projectName: projectLabel,
             resolvedRecord: record,
             resolvedSessionID: effectiveSessionID
+        )
+        if isCompanion && namedID == nil {
+            var displayOnly = display
+            displayOnly.isSessionArtifact = isRollbackLog
+            return displayOnly
+        }
+        let indexedProject = namedID.flatMap { sessionIndex.exactProject(sessionID: $0, includingScanned: true) }
+        return display.applyingOwnership(
+            namedID: namedID, reportedID: preview.sessionID, workspacePath: preview.workspacePath, index: sessionIndex,
+            isArtifact: isRollbackLog || (isCompanionDir && (hasSiblingSession || indexedProject != nil))
         )
     }
 
@@ -374,10 +370,7 @@ public struct SessionMetadataReader: Sendable {
         let indexed = sessionIDString.flatMap { sessionIndex.lookup(sessionID: $0) }
 
         let preview: SessionPreview
-        if isCompressed && indexed?.title != nil && indexed?.projectName != nil {
-            // 静态索引（session_index.jsonl / state_*.sqlite）已同时命中标题与项目名时跳过压缩块解压，避免扫描阻塞
-            preview = SessionPreview()
-        } else if Self.isJSONLOrCompressedJSONL(lowerName) {
+        if Self.isJSONLOrCompressedJSONL(lowerName) {
             preview = readJSONLPreview(from: fileURL)
         } else {
             preview = SessionPreview()
@@ -416,7 +409,8 @@ public struct SessionMetadataReader: Sendable {
             projectName: resolvedProject,
             resolvedRecord: record,
             resolvedSessionID: sessionIDString ?? preview.sessionID
-        )
+        ).applyingOwnership(namedID: sessionIDString, reportedID: preview.sessionID,
+                            workspacePath: preview.workspacePath, index: sessionIndex)
     }
 
     /// 为扁平会话目录（一级子项）构造友好名称
@@ -469,6 +463,9 @@ public struct SessionMetadataReader: Sendable {
                 projectName: projectName,
                 resolvedRecord: record,
                 resolvedSessionID: sessionID
+            ).applyingOwnership(
+                namedID: Self.exactSessionIdentifier(from: name, isDirectory: false),
+                reportedID: preview.sessionID, workspacePath: preview.workspacePath, index: sessionIndex
             )
         }
 
@@ -481,29 +478,13 @@ public struct SessionMetadataReader: Sendable {
             let title = preview.title ?? indexed?.title
             let snippet = preview.summary ?? preview.promptSnippet ?? indexed?.summary ?? indexed?.promptSnippet
 
-            if let title {
-                let displayName = [projectName, title].compactMap { $0 }.joined(separator: " · ")
-                let record = SessionRecord(title: title, projectName: projectName, promptSnippet: snippet, workspacePath: preview.workspacePath)
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: title,
-                    projectName: projectName,
-                    resolvedRecord: record,
-                    resolvedSessionID: sessionID
-                )
-            }
-            if let snippet {
-                let displayName = [projectName, snippet].compactMap { $0 }.joined(separator: " · ")
-                let record = SessionRecord(projectName: projectName, promptSnippet: snippet, workspacePath: preview.workspacePath)
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: nil,
-                    projectName: projectName,
-                    resolvedRecord: record,
-                    resolvedSessionID: sessionID
-                )
-            }
-            return SessionItemMetadata(displayName: name)
+            let record = SessionRecord(title: title, projectName: projectName, promptSnippet: snippet,
+                                       workspacePath: preview.workspacePath ?? indexed?.workspacePath)
+            let displayName = (title ?? snippet).map { [projectName, $0].compactMap { $0 }.joined(separator: " · ") } ?? name
+            return SessionItemMetadata(displayName: displayName, title: title, projectName: projectName,
+                                       resolvedRecord: record, resolvedSessionID: sessionID)
+                .applyingOwnership(namedID: Self.exactSessionIdentifier(from: name, isDirectory: false),
+                                   reportedID: preview.sessionID, workspacePath: preview.workspacePath, index: sessionIndex)
         }
 
         // 4. Windsurf Cascade 二进制会话（.pb）：避免仅显示裸 UUID
@@ -551,6 +532,25 @@ public struct SessionMetadataReader: Sendable {
 
     // MARK: - Session-Associated Non-Session Artifacts (.temporary / .logs)
 
+    static let exclusiveArtifactRuleIDs: Set<String> = [
+        "codex-generated-images", "workbuddy-workspace-sessions", "claude-code-file-history", "claude-code-debug"
+    ]
+
+    func exactArtifactOwnership(
+        for metadata: SessionItemMetadata, at url: URL, isDirectory: Bool,
+        rule: ScanRule, index: ClientSessionIndex
+    ) -> SessionItemMetadata {
+        guard Self.exclusiveArtifactRuleIDs.contains(rule.id) else { return metadata }
+        if rule.id == "claude-code-debug" {
+            guard !isDirectory, url.pathExtension.lowercased() == "txt" else { return metadata }
+        } else if !isDirectory {
+            return metadata
+        }
+        let stem = Self.stripKnownSessionExtensions(from: url.lastPathComponent, isDirectory: isDirectory)
+        guard UUID(uuidString: stem) != nil else { return metadata }
+        return metadata.applyingOwnership(namedID: stem, index: index, isArtifact: true)
+    }
+
     /// 为以会话 UUID / ID 命名的关联产物（如 `.codex/generated_images/<uuid>`、`.workbuddy/workspace/sessions/<uuid>`、
     /// `.claude/debug/<uuid>.txt`、`.gemini/tmp/<dir>`、`.local/share/opencode/log/<file>` 等）反查所属会话标题与项目名。
     func sessionArtifactMetadata(
@@ -579,7 +579,7 @@ public struct SessionMetadataReader: Sendable {
                 sessionIndex: sessionIndex
             )
 
-        case "workbuddy-workspace-sessions":
+        case "workbuddy-workspace-sessions", "claude-code-file-history":
             let countText = fileCount > 0 ? "\(fileCount) 个文件" : nil
             return buildLinkedArtifactMetadata(
                 itemURL: itemURL,
@@ -1028,11 +1028,12 @@ public struct SessionMetadataReader: Sendable {
 
         let payload = json["payload"] as? [String: Any]
         if sessionID == nil {
+            let type = json["type"] as? String
             let rawID = (json["sessionId"] as? String)
                 ?? (json["session_id"] as? String)
                 ?? (payload?["session_id"] as? String)
-                ?? (payload?["id"] as? String)
-                ?? ((json["type"] as? String) == "session" ? (json["id"] as? String) : nil)
+                ?? (type == "session_meta" ? (payload?["id"] as? String) : nil)
+                ?? (type == "session" ? (json["id"] as? String) : nil)
             if let rawID = Self.nonBlank(rawID) {
                 sessionID = rawID
             }
@@ -1241,7 +1242,7 @@ public struct SessionMetadataReader: Sendable {
                             projectName: projectName,
                             workspacePath: link.cwd ?? resolvedParent.workspacePath
                         )
-                        index.register(sessionID: link.childID, record: record, preferExisting: true)
+                        index.register(sessionID: link.childID, record: record, isExactID: false)
                     }
                 }
             }
@@ -1314,7 +1315,7 @@ public struct SessionMetadataReader: Sendable {
                 guard let sessionID = Self.nonBlank(entry["sessionId"]) else { continue }
                 let summary = Self.nonBlank(entry["summary"])
                 let firstPrompt = (entry["firstPrompt"] as? String).flatMap { Self.sanitizePromptSnippet($0) }
-                let projectPath = Self.nonBlank(entry["projectPath"])
+                let projectPath = Self.nonBlank(entry["projectPath"]) ?? Self.nonBlank(root["originalPath"])
                 let projectName = projectPath.flatMap { Self.projectName(fromPath: $0) } ?? fallbackProject
                 let record = SessionRecord(
                     title: nil,
@@ -1393,7 +1394,7 @@ public struct SessionMetadataReader: Sendable {
                         promptSnippet: preview,
                         workspacePath: workspaceInfo.path
                     )
-                    index.register(sessionID: convID, record: record, preferExisting: true)
+                    index.register(sessionID: convID, record: record, projectConflict: workspaceInfo.conflict)
                 }
 
                 // FTS 表作为标题/工作区/首条提问补充（尤其适用于 antigravity-cli）
@@ -1446,11 +1447,11 @@ public struct SessionMetadataReader: Sendable {
                 let record = SessionRecord(
                     title: title,
                     projectName: projectName,
-                    workspacePath: dirPath
+                    workspacePath: Self.nonBlank(row[2])
                 )
                 index.register(sessionID: id, workspacePath: dirPath, record: record, preferExisting: true)
                 if let slug = Self.nonBlank(row[4]) {
-                    index.register(sessionID: slug, record: record, preferExisting: true)
+                    index.register(sessionID: slug, record: record, isExactID: false)
                 }
             }
         }
@@ -1478,16 +1479,18 @@ public struct SessionMetadataReader: Sendable {
                 let record = SessionRecord(
                     title: title,
                     projectName: projectName,
-                    workspacePath: workspacePath ?? rootPath
+                    workspacePath: rootPath ?? workspacePath
                 )
                 if let taskID {
                     index.register(sessionID: taskID, record: record, preferExisting: true)
                     if let uuid = Self.extractEmbeddedUUID(from: taskID) {
-                        index.register(sessionID: uuid, record: record, preferExisting: true)
+                        if ClientSessionIndex.exactKey(taskID) != uuid {
+                            index.register(sessionID: uuid, record: record, isExactID: false)
+                        }
                     }
                 }
                 if let workspaceKey {
-                    index.register(sessionID: workspaceKey, record: record, preferExisting: true)
+                    index.register(sessionID: workspaceKey, record: record, isExactID: false)
                 }
                 if let workspacePath {
                     index.register(workspacePath: workspacePath, record: record, preferExisting: true)
@@ -1523,84 +1526,65 @@ public struct SessionMetadataReader: Sendable {
         let name = dirURL.lastPathComponent
         let candidateID = Self.extractSessionIdentifier(from: name, isDirectory: true)
 
-        // 1. 优先命中客户端会话索引（Antigravity brain、WorkBuddy ~/WorkBuddy、ZCode、OpenCode 等）
-        if let candidateID, let indexed = sessionIndex.lookup(sessionID: candidateID) {
-            if let title = indexed.bestTitle {
-                let displayName = [indexed.projectName, title].compactMap { $0 }.joined(separator: " · ")
-                return SessionItemMetadata(
-                    displayName: displayName,
-                    title: indexed.title ?? title,
-                    projectName: indexed.projectName,
-                    resolvedRecord: indexed,
-                    resolvedSessionID: candidateID
-                )
-            }
-            if let projectName = indexed.projectName {
-                let shortID = Self.extractShortIdentifier(from: candidateID)
-                let label = (clientID == "gemini-antigravity") ? "会话工作区" : "会话目录"
-                return SessionItemMetadata(
-                    displayName: "\(projectName) · \(label) (\(shortID))",
-                    title: nil,
-                    projectName: projectName,
-                    resolvedRecord: indexed,
-                    resolvedSessionID: candidateID
-                )
-            }
-        }
-
-        // 2. 按工作区完整路径/目录名匹配（例如 ~/WorkBuddy/2026-11-18-11-20-11、~/.zcode/workspace/draft-...）
-        if let indexed = sessionIndex.lookup(workspaceURL: dirURL) {
-            if let title = indexed.bestTitle {
-                return SessionItemMetadata(
-                    displayName: "\(name) · \(title)",
-                    title: indexed.title ?? title,
-                    projectName: indexed.projectName ?? name,
-                    resolvedRecord: indexed,
-                    resolvedSessionID: candidateID
-                )
-            }
-        }
-
-        // 3. 按客户端检查目录内部结构化元数据（严格有界只读）
-        switch clientID {
-        case "copilot":
-            if let meta = readCopilotSessionDirectory(dirURL, fileManager: fileManager) {
-                return meta
-            }
-        case "jan":
-            if let meta = readJanThreadDirectory(dirURL, fileManager: fileManager) {
-                return meta
-            }
-        case "opencode":
-            if let meta = readOpenCodeSessionDirectory(dirURL, sessionIndex: sessionIndex, fileManager: fileManager) {
-                return meta
-            }
-        case "claude-desktop":
-            if let meta = readClaudeDesktopSessionDirectory(dirURL, fileManager: fileManager) {
-                return meta
-            }
-        case "cursor":
-            if ruleID == "cursor-chats",
-               let meta = readCursorChatDirectory(dirURL, fileManager: fileManager) {
-                return meta
-            }
-        case "codex":
-            if ruleID == "codex-multica-sessions",
-               let meta = readCodexMulticaSessionDirectory(dirURL, sessionIndex: sessionIndex, fileManager: fileManager) {
-                return meta
-            }
-        case "gemini-antigravity":
-            if Self.isUUIDNamedEntry(name, isDirectory: true) {
-                let shortID = Self.extractShortIdentifier(from: name)
-                return SessionItemMetadata(
-                    displayName: "会话工作区 (\(shortID))",
-                    safetyNoteOverride: "未找到关联会话（可能已删除或归档）· 单次对话产生的本地产物与草稿目录。"
-                )
-            }
+        let namedID = Self.exactSessionIdentifier(from: name, isDirectory: true)
+        let direct: SessionItemMetadata?
+        switch (clientID, ruleID) {
+        case ("copilot", _):
+            direct = readCopilotSessionDirectory(dirURL, fileManager: fileManager)
+        case ("jan", _):
+            direct = readJanThreadDirectory(dirURL, fileManager: fileManager)
+        case ("opencode", _):
+            direct = readOpenCodeSessionDirectory(dirURL, sessionIndex: sessionIndex, fileManager: fileManager)
+        case ("claude-desktop", _):
+            direct = readClaudeDesktopSessionDirectory(dirURL, fileManager: fileManager)
+        case ("cursor", "cursor-chats"):
+            direct = readCursorChatDirectory(dirURL, fileManager: fileManager)
+        case ("codex", "codex-multica-sessions"):
+            direct = readCodexMulticaSessionDirectory(dirURL, sessionIndex: sessionIndex, fileManager: fileManager)
         default:
-            break
+            direct = nil
+        }
+        if let candidateID, let indexed = sessionIndex.lookup(sessionID: candidateID) {
+            let label = clientID == "gemini-antigravity" ? "会话工作区" : "会话目录"
+            let description = indexed.bestTitle ?? "\(label) (\(Self.extractShortIdentifier(from: candidateID)))"
+            return SessionItemMetadata(
+                displayName: [indexed.projectName, description].compactMap { $0 }.joined(separator: " · "),
+                title: indexed.bestTitle, projectName: indexed.projectName,
+                resolvedRecord: indexed, resolvedSessionID: candidateID
+            ).applyingOwnership(
+                namedID: namedID, reportedID: direct?.resolvedSessionID,
+                workspacePath: direct?.resolvedRecord?.workspacePath, index: sessionIndex
+            )
         }
 
+        // The legacy workspace/folder lookup supplies display text only.
+        if let indexed = sessionIndex.lookup(workspaceURL: dirURL), let title = indexed.bestTitle {
+            return SessionItemMetadata(
+                displayName: "\(name) · \(title)", title: indexed.title ?? title, projectName: indexed.projectName ?? name,
+                resolvedRecord: indexed, resolvedSessionID: candidateID
+            ).applyingOwnership(
+                namedID: namedID, reportedID: direct?.resolvedSessionID,
+                workspacePath: direct?.resolvedRecord?.workspacePath, index: sessionIndex
+            )
+        }
+
+        if let direct {
+            return direct.applyingOwnership(
+                namedID: namedID, reportedID: direct.resolvedSessionID,
+                workspacePath: direct.resolvedRecord?.workspacePath, index: sessionIndex
+            )
+        }
+
+        if clientID == "gemini-antigravity", Self.isUUIDNamedEntry(name, isDirectory: true) {
+            return SessionItemMetadata(
+                displayName: "会话工作区 (\(Self.extractShortIdentifier(from: name)))",
+                safetyNoteOverride: "未找到关联会话（可能已删除或归档）· 单次对话产生的本地产物与草稿目录。"
+            ).applyingOwnership(namedID: namedID, index: sessionIndex)
+        }
+
+        if let namedID {
+            return SessionItemMetadata(displayName: name).applyingOwnership(namedID: namedID, index: sessionIndex)
+        }
         return nil
     }
 
@@ -1648,7 +1632,7 @@ public struct SessionMetadataReader: Sendable {
             title: title,
             projectName: projectName,
             resolvedRecord: record,
-            resolvedSessionID: Self.extractSessionIdentifier(from: dirURL.lastPathComponent, isDirectory: true)
+            resolvedSessionID: nil
         )
     }
 
@@ -1695,6 +1679,21 @@ public struct SessionMetadataReader: Sendable {
         let jsonFiles = children.filter { $0.pathExtension.lowercased() == "json" }
         guard !jsonFiles.isEmpty else { return nil }
 
+        if jsonFiles.count == 1, let file = jsonFiles.first {
+            let preview = readJSONSessionMetadata(from: file)
+            let indexed = preview.sessionID.flatMap { sessionIndex.lookup(sessionID: $0) }
+            let title = preview.title ?? indexed?.bestTitle
+            let projectName = preview.projectName ?? indexed?.projectName
+            guard title != nil || projectName != nil || preview.sessionID != nil else { return nil }
+            let displayName = [projectName, title].compactMap { $0 }.joined(separator: " · ")
+            return SessionItemMetadata(
+                displayName: displayName.isEmpty ? dirURL.lastPathComponent : displayName,
+                title: title, projectName: projectName,
+                resolvedRecord: SessionRecord(title: title, projectName: projectName, workspacePath: preview.workspacePath),
+                resolvedSessionID: preview.sessionID
+            )
+        }
+
         var latestTitle: String?
         var projectName: String?
         for file in jsonFiles.prefix(8) {
@@ -1708,13 +1707,6 @@ public struct SessionMetadataReader: Sendable {
         }
 
         guard projectName != nil || latestTitle != nil else { return nil }
-        if jsonFiles.count == 1, let latestTitle {
-            return SessionItemMetadata(
-                displayName: [projectName, latestTitle].compactMap { $0 }.joined(separator: " · "),
-                title: latestTitle,
-                projectName: projectName
-            )
-        }
         let summaryPart = latestTitle.map { "\($0) 等 \(jsonFiles.count) 条会话" } ?? "\(jsonFiles.count) 条会话"
         let displayName = [projectName, summaryPart].compactMap { $0 }.joined(separator: " · ")
         return SessionItemMetadata(displayName: displayName, title: latestTitle, projectName: projectName)
@@ -1729,29 +1721,22 @@ public struct SessionMetadataReader: Sendable {
             fileManager: fileManager
         )
         for file in candidates {
-            let ext = file.pathExtension.lowercased()
-            if ext == "jsonl" {
-                let preview = readJSONLPreview(from: file)
-                if let best = preview.title ?? preview.summary ?? preview.promptSnippet {
-                    return SessionItemMetadata(
-                        displayName: [preview.projectName, best].compactMap { $0 }.joined(separator: " · "),
-                        title: preview.title,
-                        projectName: preview.projectName,
-                        resolvedRecord: SessionRecord(title: preview.title, projectName: preview.projectName, promptSnippet: preview.promptSnippet),
-                        resolvedSessionID: preview.sessionID ?? Self.extractSessionIdentifier(from: dirURL.lastPathComponent, isDirectory: true)
-                    )
-                }
-            } else {
-                let preview = readJSONSessionMetadata(from: file)
-                if let best = preview.title ?? preview.summary ?? preview.promptSnippet {
-                    return SessionItemMetadata(
-                        displayName: [preview.projectName, best].compactMap { $0 }.joined(separator: " · "),
-                        title: preview.title,
-                        projectName: preview.projectName,
-                        resolvedRecord: SessionRecord(title: preview.title, projectName: preview.projectName, promptSnippet: preview.promptSnippet),
-                        resolvedSessionID: preview.sessionID ?? Self.extractSessionIdentifier(from: dirURL.lastPathComponent, isDirectory: true)
-                    )
-                }
+            let preview = file.pathExtension.lowercased() == "jsonl"
+                ? readJSONLPreview(from: file)
+                : readJSONSessionMetadata(from: file)
+            if let best = preview.title ?? preview.summary ?? preview.promptSnippet ?? preview.projectName {
+                let title = preview.title
+                let projectName = preview.projectName
+                let label = (preview.title ?? preview.summary ?? preview.promptSnippet)
+                    .map { [projectName, $0].compactMap { $0 }.joined(separator: " · ") } ?? best
+                return SessionItemMetadata(
+                    displayName: label, title: title, projectName: projectName,
+                    resolvedRecord: SessionRecord(
+                        title: title, projectName: projectName, promptSnippet: preview.promptSnippet,
+                        workspacePath: candidates.count == 1 ? preview.workspacePath : nil
+                    ),
+                    resolvedSessionID: candidates.count == 1 ? preview.sessionID : nil
+                )
             }
         }
         return nil
@@ -1784,14 +1769,13 @@ public struct SessionMetadataReader: Sendable {
                 guard name != nil || project != nil else { return nil }
                 return SessionRecord(title: name, projectName: project, workspacePath: cwd)
             }) ?? nil {
-                if let title = record.bestTitle {
-                    return SessionItemMetadata(
-                        displayName: [record.projectName, title].compactMap { $0 }.joined(separator: " · "),
-                        title: title,
-                        projectName: record.projectName,
-                        resolvedRecord: record
-                    )
-                }
+                let title = record.bestTitle
+                return SessionItemMetadata(
+                    displayName: [record.projectName, title ?? dirURL.lastPathComponent].compactMap { $0 }.joined(separator: " · "),
+                    title: title,
+                    projectName: record.projectName,
+                    resolvedRecord: record
+                )
             }
         }
         return nil
@@ -1917,11 +1901,8 @@ public struct SessionMetadataReader: Sendable {
             }
         }
 
-        let cwd = Self.nonBlank(json["directory"])
-            ?? Self.nonBlank(json["cwd"])
-            ?? Self.nonBlank(json["projectPath"])
-            ?? Self.nonBlank(json["path"])
-        let projectName = cwd.flatMap { Self.projectName(fromPath: $0) }
+        let cwd = Self.declaredWorkspacePath(json) ?? Self.nonBlank(json["directory"])
+        let projectName = (cwd ?? Self.nonBlank(json["path"])).flatMap { Self.projectName(fromPath: $0) }
 
         return SessionPreview(
             projectName: projectName,
@@ -2102,6 +2083,17 @@ public struct SessionMetadataReader: Sendable {
         return UUID(uuidString: stem) != nil
     }
 
+    private static func exactSessionIdentifier(from name: String, isDirectory: Bool) -> String? {
+        let stem = stripKnownSessionExtensions(from: name, isDirectory: isDirectory)
+        if UUID(uuidString: stem) != nil { return stem }
+        if stem.hasPrefix("rollout-") { return parseCodexRolloutName(name).id?.uuidString }
+        if stem.hasPrefix("session-"), UUID(uuidString: String(stem.dropFirst(8))) != nil {
+            return String(stem.dropFirst(8))
+        }
+        if stem.hasPrefix("ses_") || stem.hasPrefix("sess_") { return stem }
+        return nil
+    }
+
     static func extractSessionIdentifier(from name: String, isDirectory: Bool) -> String? {
         let stem = stripKnownSessionExtensions(from: name, isDirectory: isDirectory)
         if UUID(uuidString: stem) != nil {
@@ -2211,22 +2203,16 @@ public struct SessionMetadataReader: Sendable {
         return Data(bytes)
     }
 
+    private static func declaredWorkspacePath(_ json: [String: Any]?) -> String? {
+        nonBlank(json?["workspaceRoot"]) ?? nonBlank(json?["projectPath"]) ?? nonBlank(json?["cwd"])
+    }
+
     private static func extractCWD(from json: [String: Any]) -> String? {
-        if let direct = nonBlank(json["cwd"]) {
-            return direct
-        }
-        if let payload = json["payload"] as? [String: Any], let cwd = nonBlank(payload["cwd"]) {
-            return cwd
-        }
-        if let data = json["data"] as? [String: Any] {
-            if let cwd = nonBlank(data["cwd"]) {
-                return cwd
-            }
-            if let context = data["context"] as? [String: Any], let cwd = nonBlank(context["cwd"]) {
-                return cwd
-            }
-        }
-        return nil
+        let data = json["data"] as? [String: Any]
+        return declaredWorkspacePath(json)
+            ?? declaredWorkspacePath(json["payload"] as? [String: Any])
+            ?? declaredWorkspacePath(data)
+            ?? declaredWorkspacePath(data?["context"] as? [String: Any])
     }
 
     private static func projectName(fromPath path: String) -> String? {
@@ -2254,8 +2240,8 @@ public struct SessionMetadataReader: Sendable {
         return trimmed
     }
 
-    private static func parseWorkspaceURIs(_ raw: String?) -> (projectName: String?, path: String?) {
-        guard let raw = nonBlank(raw) else { return (nil, nil) }
+    private static func parseWorkspaceURIs(_ raw: String?) -> (projectName: String?, path: String?, conflict: Bool) {
+        guard let raw = nonBlank(raw) else { return (nil, nil, false) }
         var uriStrings: [String] = []
         if raw.hasPrefix("["),
            let data = raw.data(using: .utf8),
@@ -2267,6 +2253,7 @@ public struct SessionMetadataReader: Sendable {
 
         let paths: [String] = uriStrings.compactMap { uri in
             if let url = URL(string: uri), url.isFileURL {
+                guard url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
                 return url.path
             }
             if uri.hasPrefix("/") {
@@ -2276,15 +2263,16 @@ public struct SessionMetadataReader: Sendable {
         }
 
         // 优先选择真实项目路径，跳过系统临时桥接目录
-        let preferred = paths.first { path in
+        let projectPaths = paths.filter { path in
             !path.hasPrefix("/private/var/folders/")
                 && !path.hasPrefix("/var/folders/")
                 && !path.hasPrefix("/tmp/")
                 && !path.hasPrefix("/private/tmp/")
-        } ?? paths.first
-
-        guard let preferred else { return (nil, nil) }
-        return (projectName(fromPath: preferred), preferred)
+        }
+        guard let preferred = projectPaths.first ?? paths.first else { return (nil, nil, false) }
+        let plausible = projectPaths.isEmpty ? paths : projectPaths
+        let distinctPaths = Set(plausible.compactMap(SessionProjectEvidence.workspacePath))
+        return (projectName(fromPath: preferred), preferred, distinctPaths.count > 1)
     }
 
     /// 从常见编码后的项目目录名提取简短可读名称：

@@ -57,7 +57,7 @@ struct ContentView: View {
                         .overlay(alignment: .bottom) { Divider() }
                     }
 
-                    // 列表页、历史趋势页与已排除页使用 ZStack 保活切换，彻底消除切页时重建 ScrollView 与 Swift Charts 的卡顿
+                    // 列表页、清理记录页与已排除页使用 ZStack 保活切换，彻底消除切页时重建 ScrollView 与 Swift Charts 的卡顿
                     ZStack {
                         ItemListView(viewModel: viewModel, isVisible: isListPage)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -83,12 +83,13 @@ struct ContentView: View {
                     }
                 }
 
-                // 智能悬浮操作岛（仅在清理列表视图、勾选或清理完成时轻盈浮现）
-                if isListPage {
-                    BottomActionBar(viewModel: viewModel)
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 18)
-                }
+                // 智能悬浮操作岛（与列表页一同保活，切去清理记录/已排除再返回时不重建、不重播旧提示动效）
+                BottomActionBar(viewModel: viewModel, isVisible: isListPage)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 18)
+                    .opacity(isListPage ? 1 : 0)
+                    .allowsHitTesting(isListPage)
+                    .accessibilityHidden(!isListPage)
             }
         }
         .environment(\.isWindowVisibleOnScreen, isWindowVisibleOnScreen)

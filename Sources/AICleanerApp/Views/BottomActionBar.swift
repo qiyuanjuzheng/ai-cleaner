@@ -3,6 +3,8 @@ import SwiftUI
 
 struct BottomActionBar: View {
     @Bindable var viewModel: CleanerViewModel
+    var isVisible: Bool = true
+    var initialCelebrationBurstActive: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -124,77 +126,83 @@ struct BottomActionBar: View {
         let isPureSuccess = !result.hasFailures && result.trashedCount > 0
         let tint = isPureSuccess ? AppTheme.color(for: .recommended) : AppTheme.color(for: .reviewSuggested)
 
-        return ZStack {
-            HStack(spacing: 10) {
-                Image(systemName: isPureSuccess ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(tint)
+        return HStack(spacing: 10) {
+            Image(systemName: isPureSuccess ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(tint)
 
-                VStack(alignment: .leading, spacing: 1.5) {
-                    if result.trashedCount > 0 {
-                        HStack(spacing: 5) {
-                            Text("已移入废纸篓")
-                                .font(.callout.weight(.medium))
-                            Text(CleanerFormatting.formatBytes(result.freedBytes))
-                                .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
-                                .foregroundStyle(tint)
-                            Text("（\(result.trashedCount) 项）")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Button("查看趋势") {
-                                viewModel.dismissCleanupBanner()
-                                viewModel.sidebarSelection = .history
-                            }
-                            .buttonStyle(.link)
-                            .font(.caption.weight(.semibold))
-                        }
-                    } else {
-                        Text("未移入废纸篓")
+            VStack(alignment: .leading, spacing: 1.5) {
+                if result.trashedCount > 0 {
+                    HStack(spacing: 5) {
+                        Text("已移入废纸篓")
                             .font(.callout.weight(.medium))
-                    }
-
-                    if !result.skippedProtectedItems.isEmpty {
-                        Text("已跳过 \(result.skippedProtectedItems.count) 项受保护条目")
-                            .font(.caption2)
+                        Text(CleanerFormatting.formatBytes(result.freedBytes))
+                            .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                            .foregroundStyle(tint)
+                        Text("（\(result.trashedCount) 项）")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                        Button(CleanupHistoryCopy.openActionTitle) {
+                            viewModel.dismissCleanupBanner()
+                            viewModel.sidebarSelection = .history
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption.weight(.semibold))
                     }
-                    if let failure = result.failedItems.first {
-                        Text("移入失败 \(result.failedItems.count) 项。\(failure.reason)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                } else {
+                    Text("未移入废纸篓")
+                        .font(.callout.weight(.medium))
                 }
 
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                        viewModel.dismissCleanupBanner()
-                    }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
+                if !result.skippedProtectedItems.isEmpty {
+                    Text("已跳过 \(result.skippedProtectedItems.count) 项受保护条目")
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .padding(5)
-                        .background(Circle().fill(Color.primary.opacity(0.08)))
                 }
-                .buttonStyle(.plain)
-                .help("关闭提示")
+                if let failure = result.failedItems.first {
+                    Text("移入失败 \(result.failedItems.count) 项。\(failure.reason)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(AppTheme.glassElevatedFill(for: colorScheme))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .strokeBorder(AppTheme.specularRimGradient(for: colorScheme, accent: tint), lineWidth: 0.95)
-            )
-            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.36 : 0.12), radius: 16, y: 6)
 
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    viewModel.dismissCleanupBanner()
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(5)
+                    .background(Circle().fill(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .help("关闭提示")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule(style: .continuous)
+                .fill(AppTheme.glassElevatedFill(for: colorScheme))
+        )
+        .overlay {
             if isPureSuccess {
-                SparkleBurstOverlay(triggerID: viewModel.cleanupCelebrationID)
-                    .clipShape(Capsule(style: .continuous))
+                SparkleBurstOverlay(
+                    triggerID: viewModel.cleanupCelebrationID,
+                    isVisible: isVisible,
+                    initialBurstActive: initialCelebrationBurstActive,
+                    consumeTrigger: { id in
+                        viewModel.consumeCleanupCelebration(for: id)
+                    }
+                )
+                .clipShape(Capsule(style: .continuous))
             }
         }
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(AppTheme.specularRimGradient(for: colorScheme, accent: tint), lineWidth: 0.95)
+        )
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.36 : 0.12), radius: 16, y: 6)
     }
 }

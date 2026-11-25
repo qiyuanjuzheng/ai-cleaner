@@ -43,7 +43,7 @@ struct SidebarView: View {
                     }
 
                     SidebarClientTile(
-                        title: "移入废纸篓趋势",
+                        title: CleanupHistoryCopy.title,
                         cleanableBytesText: viewModel.totalHistoricalFreedBytesText,
                         hasProtectedOnly: false,
                         icon: .symbol("chart.line.uptrend.xyaxis"),

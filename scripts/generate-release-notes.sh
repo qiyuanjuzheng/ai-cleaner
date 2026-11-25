@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-REPO_URL="https://github.com/qiyuanjuzheng/ai-cleaner"
+REPO_URL="${RELEASE_REPO_URL:-https://github.com/${GITHUB_REPOSITORY:-qiyuanjuzheng/ai-cleaner}}"
 
 if [[ $# -ne 1 || ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "用法: $0 vX.Y.Z" >&2
@@ -20,7 +20,16 @@ NOTES="$(awk -v tagged="[$TAG]" -v untagged="[$VERSION]" '
     next
   }
   found { print }
-' CHANGELOG.md)"
+' CHANGELOG.md | awk '
+  { lines[NR] = $0 }
+  END {
+    start = 1
+    while (start <= NR && lines[start] ~ /^[[:space:]]*$/) start++
+    end = NR
+    while (end >= start && lines[end] ~ /^[[:space:]]*$/) end--
+    for (i = start; i <= end; i++) print lines[i]
+  }
+')"
 if [[ ! "$NOTES" =~ [^[:space:]] ]]; then
   echo "错误: CHANGELOG.md 中缺少 ${TAG} 的版本说明。" >&2
   exit 1
@@ -44,16 +53,59 @@ PREVIOUS_TAG="$(git tag --merged "$TARGET" --sort=-version:refname | awk -v curr
 ')"
 
 if [[ -z "$PREVIOUS_TAG" ]]; then
-  printf '## 首版核心功能\n'
+  printf '## 首版核心功能\n\n'
 else
-  printf '## 版本变化\n'
+  printf '## 版本变化\n\n'
 fi
 printf '%s\n' "$NOTES"
 
 if [[ -n "$PREVIOUS_TAG" ]]; then
   printf '\n## 与上一版本（`%s`）的区别\n\n' "$PREVIOUS_TAG"
-  git log --format='- %s (`%h`)' "refs/tags/${PREVIOUS_TAG}..${TARGET}" --
-  printf '\n[查看完整对比](%s/compare/%s...%s)\n' "$REPO_URL" "$PREVIOUS_TAG" "$TAG"
+  COMMIT_LIST="$(git log --first-parent --format='%h%x1f%s%x1f%b%x1e' "refs/tags/${PREVIOUS_TAG}..${TARGET}" -- | awk '
+    BEGIN { RS = "\036"; FS = "\037" }
+    {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+      if ($1 == "") next
+      sha = $1
+      subj = $2
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", subj)
+      body = $3
+      if (subj ~ /^[Cc][Hh][Oo][Rr][Ee]\(release\):/ ||
+          subj ~ /^Merge pull request #[0-9]+ from [^ ]+\/release-pr\// ||
+          subj ~ /^Merge branch '\''release-pr\// ||
+          index(body, "Release-PR: true") > 0) {
+        next
+      }
+      title = subj
+      if (subj ~ /^Merge pull request #[0-9]+ from /) {
+        pr = subj
+        sub(/^Merge pull request #/, "", pr)
+        sub(/ from .*/, "", pr)
+        n = split(body, lines, "\n")
+        pr_title = ""
+        for (i = 1; i <= n; i++) {
+          line = lines[i]
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+          if (line != "" && line !~ /^#/ && line !~ /^(Co-authored-by|Signed-off-by|Reviewed-by):/) {
+            pr_title = line
+            break
+          }
+        }
+        if (pr_title != "") {
+          if (index(pr_title, "(#" pr ")") > 0) {
+            title = pr_title
+          } else {
+            title = pr_title " (#" pr ")"
+          }
+        }
+      }
+      printf "- %s (`%s`)\n", title, sha
+    }
+  ')"
+  if [[ -n "$COMMIT_LIST" ]]; then
+    printf '%s\n\n' "$COMMIT_LIST"
+  fi
+  printf '[查看完整对比](%s/compare/%s...%s)\n' "$REPO_URL" "$PREVIOUS_TAG" "$TAG"
 fi
 
 DOWNLOAD_URL="${REPO_URL}/releases/download/${TAG}"

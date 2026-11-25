@@ -1,0 +1,182 @@
+name: Release PR automation
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ai-cleaner-release-pr-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    name: Manage Release PR or create tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_tag: ${{ steps.detect.outputs.release_tag }}
+      pr_number: ${{ steps.detect.outputs.pr_number }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      - name: Detect Release PR merge
+        id: detect
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          pr_json="$(mktemp)"
+          merged_pr_json="$(mktemp)"
+          trap 'rm -f "$pr_json" "$merged_pr_json"' EXIT
+
+          if ! gh api "repos/${GH_REPO}/commits/${HEAD_SHA}/pulls" > "$pr_json" 2>/dev/null; then
+            printf '[]\n' > "$pr_json"
+          fi
+          if ! gh pr list \
+            --state merged \
+            --head release-pr/main \
+            --base main \
+            --json number,title,state,mergedAt,mergeCommit,headRefName,labels \
+            --limit 5 > "$merged_pr_json" 2>/dev/null; then
+            printf '[]\n' > "$merged_pr_json"
+          fi
+
+          ./scripts/release-pr.sh detect \
+            --head "$HEAD_SHA" \
+            --base "$BEFORE_SHA" \
+            --release-branch release-pr/main \
+            --pr-json "$pr_json" \
+            --merged-pr-json "$merged_pr_json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Create release tag and clean up Release PR branch
+        if: steps.detect.outputs.is_release_merge == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.release_tag }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          ./scripts/release-pr.sh create-tag \
+            --tag "$TAG" \
+            --target "$HEAD_SHA" \
+            --remote origin \
+            --push
+
+          if git ls-remote --exit-code --heads origin release-pr/main >/dev/null 2>&1; then
+            git push origin --delete release-pr/main || true
+          fi
+
+      - name: Sync Release PR
+        if: steps.detect.outputs.is_release_merge != 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin release-pr/main >/dev/null 2>&1; then
+            git fetch origin +refs/heads/release-pr/main:refs/remotes/origin/release-pr/main
+          fi
+
+          open_pr_json="$(gh pr list --state open --head release-pr/main --base main --json number,title,url --limit 1)"
+          open_pr_number="$(jq -r '.[0].number // empty' <<< "$open_pr_json")"
+          open_pr_title="$(jq -r '.[0].title // empty' <<< "$open_pr_json")"
+          has_open_pr="false"
+          if [[ -n "$open_pr_number" ]]; then
+            has_open_pr="true"
+          fi
+
+          plan_file="$(mktemp)"
+          body_file="$(mktemp)"
+          trap 'rm -f "$plan_file" "$body_file"' EXIT
+
+          ./scripts/release-pr.sh prepare-branch \
+            --base-ref "$HEAD_SHA" \
+            --release-branch release-pr/main \
+            --remote origin \
+            --has-open-pr "$has_open_pr" \
+            --output-pr-body "$body_file" \
+            --output-json "$plan_file" \
+            --push
+
+          action="$(jq -r '.action' "$plan_file")"
+          pr_title="$(jq -r '.pr_title' "$plan_file")"
+          next_tag="$(jq -r '.next_tag' "$plan_file")"
+          reason="$(jq -r '.reason' "$plan_file")"
+
+          echo "Release PR 决策: action=${action}, next_tag=${next_tag:-none}, reason=${reason}"
+          if [[ "$action" != "create_or_update" ]]; then
+            exit 0
+          fi
+
+          gh label create "release-pr" \
+            --description "由自动化工作流维护的发版 PR" \
+            --color "0E8A16" \
+            --force >/dev/null 2>&1 || true
+
+          if [[ -n "$open_pr_number" ]]; then
+            edit_args=(--body-file "$body_file")
+            if [[ "$open_pr_title" == chore\(release\):* ]]; then
+              edit_args+=(--title "$pr_title")
+            fi
+            gh pr edit "$open_pr_number" "${edit_args[@]}"
+            gh pr edit "$open_pr_number" --add-label "release-pr" >/dev/null 2>&1 || true
+            echo "已更新现有 Release PR #${open_pr_number} (${next_tag})"
+          else
+            if ! pr_out="$(gh pr create \
+              --base main \
+              --head release-pr/main \
+              --title "$pr_title" \
+              --body-file "$body_file" 2>&1)"; then
+              if grep -qi "not permitted to create or approve pull requests" <<< "$pr_out"; then
+                echo "::error::无法创建 Release PR：请在 GitHub 仓库开启 Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests。"
+              fi
+              echo "$pr_out" >&2
+              exit 1
+            fi
+            gh pr edit "$pr_out" --add-label "release-pr" >/dev/null 2>&1 || true
+            echo "已创建 Release PR (${next_tag}): ${pr_out}"
+          fi
+
+  publish:
+    name: Build and publish macOS release
+    needs: release-pr
+    if: needs.release-pr.outputs.release_tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-pr.outputs.release_tag }}
+
+  finalize:
+    name: Comment on merged Release PR
+    needs: [release-pr, publish]
+    if: needs.release-pr.outputs.release_tag != '' && needs.release-pr.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post release link on Release PR
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.release-pr.outputs.pr_number }}
+          TAG: ${{ needs.release-pr.outputs.release_tag }}
+        run: |
+          release_url="https://github.com/${GH_REPO}/releases/tag/${TAG}"
+          gh pr comment "$PR_NUMBER" --body "已自动创建标签 \`${TAG}\` 并完成 macOS Universal 安装包构建与发布：${release_url}" || true

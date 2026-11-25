@@ -86,11 +86,38 @@ open "dist/AI Cleaner.app"
 
 ## 后续发版流程
 
-1. 在 `CHANGELOG.md` 添加 `## [vX.Y.Z] - YYYY-MM-DD`，记录本版变化，并将变更合入 `main`。
-2. 在更新后的 `main` 上运行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"`，再运行 `git push origin vX.Y.Z`。
-3. GitHub Actions 将运行测试，生成 Universal DMG、ZIP、SHA-256 校验文件和包含上一版本差异的说明，再上传到对应 GitHub Release。需要补发时，可在 `Build and publish AI Cleaner` 工作流中手动选择已有标签。
+仓库采用 **Release PR 自动发版（方案 B）**：日常合入 `main` 时仅轻量累计更新日志，成员审阅并合并 Release PR 后，在同一条 GitHub Actions 流水线中自动打标签、构建 macOS Universal 安装包并发布 GitHub Release。
 
-在本地可运行 `./scripts/build-release-assets.sh --tag vX.Y.Z`，产物位于 `dist/release/`。`./scripts/package-app.sh` 默认构建 Universal 发布版，`--debug` 默认使用本机架构。可用 `--arch` 指定架构，用 `--version` 和 `--build` 或 `APP_VERSION` 和 `APP_BUILD_NUMBER` 设置版本及构建号。`CODESIGN_IDENTITY` 可指定签名身份。
+### 首次启用前必须开启的仓库权限
+
+在 GitHub 仓库中确认开启以下选项，否则工作流无法自动创建 Release PR：
+
+- **Settings → Actions → General → Workflow permissions → 勾选 `Allow GitHub Actions to create and approve pull requests`**
+
+### 日常发版流程（Release PR）
+
+1. **正常合并功能或修复 PR 到 `main`**：`Release PR automation` 工作流（`.github/workflows/release-pr.yml`）会自动扫描自上一个 `vX.Y.Z` 标签以来的未发布改动，在固定分支 `release-pr/main` 上创建或原地更新唯一的 Release PR（标题形如 `chore(release): 发布 v0.2.0`），并累计更新 `CHANGELOG.md`。此阶段**不会**运行耗时的 macOS 编译打包任务。
+2. **审阅与可选微调**：合并前可直接在该 Release PR 中编辑 `CHANGELOG.md` 润色中文说明或调整目标版本号。若期间 `main` 继续合入新 PR，工作流会保留你此前对 `CHANGELOG.md` 的手动编辑，并仅增量追加新提交。
+3. **合并 Release PR 触发一条龙发布**：在 GitHub 上点击合并该 Release PR 后，工作流自动读取 `CHANGELOG.md` 中最终确认的 `vX.Y.Z` 版本号，在当前 `main` 提交上幂等创建带注释的 `vX.Y.Z` 标签，并直接通过 `workflow_call` 调用 `.github/workflows/release.yml` 运行 `swift test`、构建 Universal `.dmg` / `.zip` 与 `SHA256SUMS.txt`、生成含上一版本对比链接的中文说明，最后创建/更新 GitHub Release 并回帖 Release 链接。官网（`site/`）通过 GitHub Releases API 动态读取最新版，无需手动改动硬编码版本号。
+
+### 版本号递增规则、手动覆盖与跳过
+
+- **自动推算规则**（兼容 Conventional Commits 与中文 / `AICL-XX` 标题，避免非标准提交静默漏触发）：
+  - **主版本（Major，`vX+1.0.0`）**：提交含 `feat!:` / `fix!:`、`BREAKING CHANGE:`、`破坏性变更` / `不兼容变更`，或显式标记 `[release:major]`。
+  - **次版本（Minor，`vX.Y+1.0`）**：提交含 `feat:`，或（去除 `AICL-XX` 任务前缀后）以 `新增`、`支持`、`添加`、`增加`、`引入`、`接入`、`实现`、`提供`、`上线`、`add`、`support`、`introduce`、`implement`、`enable` 开头，或显式标记 `[release:minor]`。
+  - **修订版本（Patch，`vX.Y.Z+1`）**：`fix:` / `修复` / `恢复` 等修复类提交，以及其余所有应用/构建脚本变更均默认纳入并至少递增 Patch（也可通过 `[release:patch]` 显式指定）。
+- **手动覆盖版本号**：
+  - 方式一（推荐）：直接编辑 Release PR 中的 `CHANGELOG.md` 顶部版本标题（例如将 `## [v0.2.0] - YYYY-MM-DD` 改为 `## [v0.1.1] - YYYY-MM-DD` 或 `## [v1.0.0] - YYYY-MM-DD`），合并后将以该最终版本号打标并发布。
+  - 方式二：在提交或 PR 标题/正文中加入 `[release:major]`、`[release:minor]` 或 `[release:patch]`。
+- **跳过自动发版（噪音过滤）**：
+  - 仅修改 `site/`、`docs/`、`.github/`、根目录 `*.md`、`LICENSE*`、`.gitignore` 或 Release PR 自身辅助脚本的提交会自动跳过，不触发空发客户端版本。
+  - 如需让某次代码提交也不触发或纳入 Release PR，在提交或 PR 标题/正文中加入 `[skip release]` 即可。
+
+### 手动兜底发版与本地打包
+
+- **手动打标签发版**：在已包含对应 `CHANGELOG.md` 章节的 `main` 提交上执行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"` 并 `git push origin vX.Y.Z`，将直接触发 `Build and publish AI Cleaner`（`.github/workflows/release.yml`）完成测试、打包与发布。
+- **手动补发已有标签**：在 GitHub Actions 的 `Build and publish AI Cleaner` 工作流中点击 **Run workflow**（`workflow_dispatch`），输入已有 `vX.Y.Z` 标签即可重新构建并幂等更新 Release 附件。
+- **本地构建安装包**：运行 `./scripts/build-release-assets.sh --tag vX.Y.Z`，产物位于 `dist/release/`。`./scripts/package-app.sh` 默认构建 Universal 发布版并自动读取 `CHANGELOG.md` 最新版本号，`--debug` 默认使用本机架构。可用 `--arch` 指定架构，用 `--version` 和 `--build` 或 `APP_VERSION` 和 `APP_BUILD_NUMBER` 设置版本及构建号；`CODESIGN_IDENTITY` 可指定签名身份。
 
 ---
 
@@ -109,8 +136,10 @@ open "dist/AI Cleaner.app"
 ai-cleaner/
 ├── Package.swift
 ├── README.md
+├── .github/workflows/                            # GitHub Pages、Release PR 自动化与 macOS 打包发布工作流
+├── CHANGELOG.md                                  # 简体中文版本变更日志（Release PR 自动维护）
 ├── docs/screenshots/                             # macOS 应用界面截图
-├── scripts/package-app.sh                        # 打包 dist/AI Cleaner.app 脚本
+├── scripts/                                      # 本地打包、发布产物构建、发布说明与 Release PR 脚本
 ├── Sources/
 │   ├── AICleanerCore/
 │   │   ├── Models/                               # CleanupRecommendation / ScanCategory / ScanRule / CleanableItem / CleanupHistoryRecord

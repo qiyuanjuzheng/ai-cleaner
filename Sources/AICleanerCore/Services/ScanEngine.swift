@@ -249,15 +249,19 @@ public struct ScanEngine: ScanPerforming, Sendable {
         var seenCleanablePaths: Set<String> = []
         var seenProtectedPaths: Set<String> = []
         var skippedProtectedCount = 0
-        var codexTitles: [UUID: String] = [:]
-        if profile.id == "codex" {
-            let indexURL = homeDirectory.appendingPathComponent(".codex/session_index.jsonl")
-            if safetyGuard.validateBuiltInContainer(indexURL).isAllowed {
-                codexTitles = sessionReader.readCodexTitles(from: indexURL)
-            }
-        }
+        var sessionIndex = profile.isCustom
+            ? ClientSessionIndex()
+            : sessionReader.loadClientSessionIndex(
+                clientID: profile.id,
+                homeDirectory: homeDirectory,
+                safetyGuard: safetyGuard,
+                fileManager: fileManager
+            )
 
-        for rule in profile.rules {
+        // 优先扫描会话规则，使本轮扫描解析出的会话标题与项目名可立即反哺给图片缓存、回滚快照、调试日志等关联产物规则
+        let orderedRules = Self.prioritizedRulesForSessionAssociation(profile.rules)
+
+        for rule in orderedRules {
             if Task.isCancelled { break }
             let targetURL = rule.resolveURL(homeDirectory: homeDirectory)
             var isDir: ObjCBool = false
@@ -461,7 +465,28 @@ public struct ScanEngine: ScanPerforming, Sendable {
                         metadata = sessionReader.flatSessionMetadata(
                             itemURL: childURL,
                             isDirectory: inspection.isDirectory,
-                            codexTitles: codexTitles
+                            clientID: profile.id,
+                            ruleID: rule.id,
+                            sessionIndex: sessionIndex,
+                            fileManager: fileManager
+                        )
+                        if let record = metadata.resolvedRecord {
+                            sessionIndex.register(
+                                sessionID: metadata.resolvedSessionID,
+                                workspacePath: record.workspacePath,
+                                record: record,
+                                preferExisting: true
+                            )
+                        }
+                    } else if !profile.isCustom {
+                        metadata = sessionReader.sessionArtifactMetadata(
+                            itemURL: childURL,
+                            isDirectory: inspection.isDirectory,
+                            clientID: profile.id,
+                            rule: rule,
+                            fileCount: inspection.fileCount,
+                            sessionIndex: sessionIndex,
+                            fileManager: fileManager
                         )
                     } else {
                         metadata = SessionItemMetadata(displayName: childURL.lastPathComponent)
@@ -484,7 +509,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             url: childURL,
                             category: rule.category,
                             recommendation: recommendation,
-                            safetyNote: note,
+                            safetyNote: metadata.safetyNoteOverride ?? note,
                             sizeBytes: inspection.sizeBytes,
                             fileCount: inspection.fileCount,
                             modifiedAt: inspection.modifiedAt,
@@ -520,12 +545,20 @@ public struct ScanEngine: ScanPerforming, Sendable {
                         continue
                     }
 
-                    guard let sessionEntries = try? fileManager.contentsOfDirectory(
+                    guard let rawSessionEntries = try? fileManager.contentsOfDirectory(
                         at: projectDirURL,
                         includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                         options: []
                     ) else {
                         continue
+                    }
+
+                    // 优先解析主会话文件（.jsonl/.zst），再解析同级子代理目录与 .file-rollback.ndjson，确保索引命中
+                    let sessionEntries = rawSessionEntries.sorted { lhs, rhs in
+                        let lhsPrimary = SessionMetadataReader.isJSONLOrCompressedJSONL(lhs.lastPathComponent.lowercased())
+                        let rhsPrimary = SessionMetadataReader.isJSONLOrCompressedJSONL(rhs.lastPathComponent.lowercased())
+                        if lhsPrimary != rhsPrimary { return lhsPrimary }
+                        return lhs.lastPathComponent < rhs.lastPathComponent
                     }
 
                     let projectFolderName = projectDirURL.lastPathComponent
@@ -565,8 +598,17 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             itemURL: sessionURL,
                             projectFolderName: projectFolderName,
                             isDirectory: inspection.isDirectory,
+                            sessionIndex: sessionIndex,
                             fileManager: fileManager
                         )
+                        if let record = metadata.resolvedRecord {
+                            sessionIndex.register(
+                                sessionID: metadata.resolvedSessionID,
+                                workspacePath: record.workspacePath,
+                                record: record,
+                                preferExisting: true
+                            )
+                        }
 
                         let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                             rule: rule,
@@ -585,7 +627,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                                 url: sessionURL,
                                 category: rule.category,
                                 recommendation: recommendation,
-                                safetyNote: note,
+                                safetyNote: metadata.safetyNoteOverride ?? note,
                                 sizeBytes: inspection.sizeBytes,
                                 fileCount: inspection.fileCount,
                                 modifiedAt: inspection.modifiedAt,
@@ -663,8 +705,19 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     let metadata = sessionReader.flatSessionMetadata(
                         itemURL: fileURL,
                         isDirectory: false,
-                        codexTitles: codexTitles
+                        clientID: profile.id,
+                        ruleID: rule.id,
+                        sessionIndex: sessionIndex,
+                        fileManager: fileManager
                     )
+                    if let record = metadata.resolvedRecord {
+                        sessionIndex.register(
+                            sessionID: metadata.resolvedSessionID,
+                            workspacePath: record.workspacePath,
+                            record: record,
+                            preferExisting: true
+                        )
+                    }
 
                     let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                         rule: rule,
@@ -683,7 +736,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             url: fileURL,
                             category: rule.category,
                             recommendation: recommendation,
-                            safetyNote: note,
+                            safetyNote: metadata.safetyNoteOverride ?? note,
                             sizeBytes: inspection.sizeBytes,
                             fileCount: 1,
                             modifiedAt: inspection.modifiedAt,
@@ -720,6 +773,32 @@ public struct ScanEngine: ScanPerforming, Sendable {
         )
     }
 
+    /// 按依赖顺序排列扫描规则：主会话（projectSessions / recursiveFiles）-> 其他会话 -> 关联产物与常规规则
+    private static func prioritizedRulesForSessionAssociation(_ rules: [ScanRule]) -> [ScanRule] {
+        func priority(_ rule: ScanRule) -> Int {
+            guard rule.recommendation != .notRecommended else { return 4 }
+            if rule.category == .sessions {
+                switch rule.mode {
+                case .projectSessions, .recursiveFiles:
+                    return 0
+                case .children:
+                    return 1
+                case .directory:
+                    return 2
+                }
+            }
+            return 3
+        }
+        return rules.enumerated()
+            .sorted { lhs, rhs in
+                let lp = priority(lhs.element)
+                let rp = priority(rhs.element)
+                if lp != rp { return lp < rp }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+
     /// 旧会话和归档会话统一归入「按需清理」，支持在分组头一键全选/取消本组或逐条勾选。
     private func resolveRecommendation(
         rule: ScanRule,
@@ -731,7 +810,8 @@ public struct ScanEngine: ScanPerforming, Sendable {
             return (rule.recommendation, rule.explanation, false)
         }
 
-        if rule.isSessionArchive == true || url.pathExtension.lowercased() == "zst" {
+        let ext = url.pathExtension.lowercased()
+        if rule.isSessionArchive == true || ext == "zst" || ext == "zstd" {
             return (.reviewSuggested, "已归档的历史会话，确认无需保留后可勾选清理。", false)
         }
 

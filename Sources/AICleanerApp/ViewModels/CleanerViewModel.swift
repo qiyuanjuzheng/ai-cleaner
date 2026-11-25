@@ -79,6 +79,7 @@ struct PreparedItemPresentation: Sendable {
         let rowTooltip = "\(item.safetyNote)\n路径：\(abbreviatedPath)"
         let searchable = [
             title,
+            item.sessionTitle,
             item.sessionProjectName,
             item.displayName,
             item.fileName,
@@ -1033,6 +1034,7 @@ final class CleanerViewModel {
                     return presentation.searchableLowercased.contains(lowerQuery)
                 }
                 return item.preferredDisplayTitle.localizedCaseInsensitiveContains(lowerQuery)
+                    || item.sessionTitle?.localizedCaseInsensitiveContains(lowerQuery) == true
                     || item.sessionProjectName?.localizedCaseInsensitiveContains(lowerQuery) == true
                     || item.displayName.localizedCaseInsensitiveContains(lowerQuery)
                     || item.fileName.localizedCaseInsensitiveContains(lowerQuery)

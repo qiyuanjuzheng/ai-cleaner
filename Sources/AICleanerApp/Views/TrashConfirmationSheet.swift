@@ -127,7 +127,7 @@ struct TrashConfirmationSheet: View {
 
                                         VStack(alignment: .leading, spacing: 2) {
                                             HStack(spacing: 6) {
-                                                Text(item.displayName)
+                                                Text(item.preferredDisplayTitle)
                                                     .font(.callout.weight(isRisk ? .semibold : .regular))
                                                     .foregroundStyle(isRisk ? riskColor : .primary)
                                                     .lineLimit(1)

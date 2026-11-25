@@ -1,0 +1,110 @@
+name: Build and publish AI Cleaner
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z)
+        required: true
+        type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - CHANGELOG.md
+      - Package.swift
+      - Sources/**
+      - Tests/**
+      - scripts/**
+
+permissions: {}
+
+concurrency:
+  group: ai-cleaner-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and package macOS release
+    runs-on: macos-15
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Resolve release version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          tag="$REQUESTED_TAG"
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            tag="$(awk '/^## \[v?[0-9]+\.[0-9]+\.[0-9]+\]/ {gsub(/[][]/, "", $2); sub(/^v/, "", $2); print "v" $2; exit}' CHANGELOG.md)"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a release version in vX.Y.Z format" >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: swift test
+
+      - name: Build and verify release assets
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          APP_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          ./scripts/build-release-assets.sh --tag "$TAG"
+          (cd dist/release && shasum -a 256 -c SHA256SUMS.txt)
+          ./scripts/generate-release-notes.sh "$TAG" > dist/release/release-notes.md
+
+      - name: Upload release build
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-release
+          path: dist/release/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-release
+
+      - name: Create or update release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          shasum -a 256 -c SHA256SUMS.txt
+          assets=("AI-Cleaner-${TAG}-macOS.dmg" "AI-Cleaner-${TAG}-macOS.zip" SHA256SUMS.txt)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "AI Cleaner $TAG" --notes-file release-notes.md --draft=false
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "AI Cleaner $TAG" --notes-file release-notes.md
+          fi

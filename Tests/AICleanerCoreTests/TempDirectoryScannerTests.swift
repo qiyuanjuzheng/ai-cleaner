@@ -543,6 +543,7 @@ final class TempDirectoryScannerTests: XCTestCase {
         defer { close(fd) }
 
         var addr = sockaddr_un()
+        addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
         addr.sun_family = sa_family_t(AF_UNIX)
         let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
 
@@ -552,6 +553,11 @@ final class TempDirectoryScannerTests: XCTestCase {
         } else {
             bindURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("s\(String(UUID().uuidString.prefix(8)))")
+        }
+        defer {
+            if bindURL != socketURL {
+                try? FileManager.default.removeItem(at: bindURL)
+            }
         }
 
         let pathBytes = Array(bindURL.path.utf8)

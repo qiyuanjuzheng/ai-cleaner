@@ -659,14 +659,22 @@ final class CleanerViewModelTests: XCTestCase {
         model.invertVisibleSelection()
         XCTAssertTrue(model.selectedItemIDs.isEmpty)
 
-        // 4. 在 Light / Dark 模式下验证真实 SwiftUI 主界面布局（含未归属提示条与来源/近期修改徽标）
+        // 4. 在 Light / Dark 模式下验证侧栏「系统临时目录」分组与列表页（含未归属提示条、仅逐条手选徽标、来源与近期修改标签）布局
+        // 注：直接挂载纯 SwiftUI 子视图而非无窗口 NavigationSplitView（ContentView），避免 macOS 15 离屏 NSHostingView 返回 (0, 0) fittingSize
         for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
-            let host = NSHostingView(rootView: ContentView(viewModel: model))
-            host.appearance = NSAppearance(named: appearanceName)
-            host.frame = NSRect(x: 0, y: 0, width: 1180, height: 760)
-            host.layoutSubtreeIfNeeded()
-            XCTAssertGreaterThan(host.fittingSize.width, 0)
-            XCTAssertGreaterThan(host.fittingSize.height, 0)
+            let sidebarHost = NSHostingView(rootView: SidebarView(viewModel: model))
+            sidebarHost.appearance = NSAppearance(named: appearanceName)
+            sidebarHost.frame = NSRect(x: 0, y: 0, width: 252, height: 760)
+            sidebarHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(sidebarHost.fittingSize.width, 0)
+            XCTAssertGreaterThan(sidebarHost.fittingSize.height, 0)
+
+            let listHost = NSHostingView(rootView: ItemListView(viewModel: model, isVisible: true))
+            listHost.appearance = NSAppearance(named: appearanceName)
+            listHost.frame = NSRect(x: 0, y: 0, width: 928, height: 760)
+            listHost.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(listHost.fittingSize.width, 0)
+            XCTAssertGreaterThan(listHost.fittingSize.height, 0)
         }
 
         // 5. 逐条手动勾选未归属项 + 近期修改 AI 项，执行移入废纸篓闭环并验证重扫结果

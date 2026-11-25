@@ -482,10 +482,11 @@ private struct ItemControlBarView: View {
     }
 }
 
-// MARK: - 3. 单层扁平虚拟化列表（零嵌套 ForEach、切换标签跳过千级条目 diff 并瞬时回到顶部）
+// MARK: - 3. 原生 AppKit NSTableView 虚拟化列表（真正 Cell 对象池复用、零每行重型修饰符）
 
 private struct VirtualizedItemListView: View {
     let viewModel: CleanerViewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if viewModel.displayedRows.isEmpty {
@@ -526,24 +527,15 @@ private struct VirtualizedItemListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(viewModel.displayedRows) { row in
-                        switch row {
-                        case let .sectionHeader(header):
-                            CleanSectionHeaderContainer(header: header, viewModel: viewModel)
-                                .padding(.top, header.isFirstSection ? 2 : 14)
-                                .padding(.bottom, 6)
-
-                        case let .item(itemRow):
-                            ItemRowContainer(row: itemRow, viewModel: viewModel)
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 88)
-            }
-            .id(viewModel.listViewportID)
+            VirtualizedItemTableView(
+                rows: viewModel.displayedRows,
+                rowsRevision: viewModel.displayedRowsRevision,
+                selectionRevision: viewModel.selectionRevision,
+                viewportID: viewModel.listViewportID,
+                colorScheme: colorScheme,
+                viewModel: viewModel
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -660,138 +652,6 @@ private struct AnimatableHairlineCanvas: View, Animatable {
                 cursorX += segW + spacing
             }
         }
-    }
-}
-
-// MARK: - 无框极简分组标题（容器隔离状态 + Equatable 渲染，零抖动切换全选/取消本组）
-
-private struct CleanSectionHeaderContainer: View {
-    let header: SectionHeaderRow
-    let viewModel: CleanerViewModel
-
-    var body: some View {
-        CleanSectionHeader(
-            header: header,
-            isAllBulkSelected: header.supportsBulkSelection
-                && viewModel.isSectionAllBulkSelected(header.recommendation),
-            viewModel: viewModel
-        )
-        .equatable()
-    }
-}
-
-private struct CleanSectionHeader: View, Equatable {
-    let header: SectionHeaderRow
-    let isAllBulkSelected: Bool
-    let viewModel: CleanerViewModel
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    nonisolated static func == (lhs: CleanSectionHeader, rhs: CleanSectionHeader) -> Bool {
-        lhs.header == rhs.header
-            && lhs.isAllBulkSelected == rhs.isAllBulkSelected
-            && lhs.viewModel === rhs.viewModel
-    }
-
-    private var bulkActionTitle: String {
-        isAllBulkSelected ? "取消本组" : "全选本组"
-    }
-
-    private var bulkActionTooltip: String {
-        if isAllBulkSelected {
-            return "取消勾选本组当前可见条目"
-        }
-        if header.individualOnlyCount > 0 {
-            return "全选本组当前可见的 \(header.bulkSelectableCount) 条可批量项（自动跳过 \(header.individualOnlyCount) 条近期修改或 /tmp 仅手选项）"
-        }
-        return "全选本组当前可见的 \(header.bulkSelectableCount) 条条目"
-    }
-
-    private var tint: Color {
-        AppTheme.color(for: header.recommendation)
-    }
-
-    private var bulkForegroundColor: Color {
-        isAllBulkSelected ? .secondary : tint
-    }
-
-    private var bulkBackgroundColor: Color {
-        if isAllBulkSelected {
-            return Color.primary.opacity(colorScheme == .dark ? 0.11 : 0.065)
-        }
-        return tint.opacity(colorScheme == .dark ? 0.16 : 0.11)
-    }
-
-    private var bulkBorderColor: Color {
-        if isAllBulkSelected {
-            return Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.12)
-        }
-        return tint.opacity(colorScheme == .dark ? 0.28 : 0.18)
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button {
-                viewModel.toggleSectionCollapsed(header.recommendation)
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(header.isCollapsed ? -90 : 0))
-                        .frame(width: 11)
-
-                    Circle()
-                        .fill(tint)
-                        .frame(width: 7, height: 7)
-
-                    Text(header.recommendation.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    Text("\(header.itemCount) 项 · \(header.totalBytesText)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 8)
-
-            if header.supportsBulkSelection {
-                bulkActionButton
-            } else if header.recommendation == .reviewSuggested {
-                Text("仅逐条手选")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(tint)
-                    .padding(.horizontal, 8)
-                    .frame(height: 22)
-                    .background(Capsule(style: .continuous).fill(tint.opacity(0.11)))
-                    .help("本组条目需逐条手动确认勾选，所有批量勾选操作均会自动跳过")
-            }
-        }
-        .padding(.horizontal, 4)
-        .frame(height: 28)
-    }
-
-    private var bulkActionButton: some View {
-        Button {
-            viewModel.toggleSectionSelection(header.recommendation)
-        } label: {
-            Text(bulkActionTitle)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
-                .foregroundStyle(bulkForegroundColor)
-                .padding(.horizontal, 9)
-                .frame(minWidth: 66, minHeight: 22, maxHeight: 22)
-                .background(Capsule(style: .continuous).fill(bulkBackgroundColor))
-                .overlay(Capsule(style: .continuous).strokeBorder(bulkBorderColor, lineWidth: 0.7))
-                .contentShape(Capsule(style: .continuous))
-        }
-        .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.96))
-        .accessibilityLabel("\(bulkActionTitle)：\(header.recommendation.displayName)")
-        .help(bulkActionTooltip)
     }
 }
 

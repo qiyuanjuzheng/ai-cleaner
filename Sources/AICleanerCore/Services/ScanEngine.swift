@@ -31,9 +31,13 @@ public struct ScanEngine: Sendable {
         self.staleSessionDays = staleSessionDays
     }
 
-    /// 执行全量只读扫描
-    public func scan(customDirectories: [CustomScanDirectory] = []) -> ScanReport {
+    /// 执行全量只读扫描（自动跳过用户已排除条目及其目录子树）
+    public func scan(
+        customDirectories: [CustomScanDirectory] = [],
+        excludedItems: [ExcludedItemRecord] = []
+    ) -> ScanReport {
         let referenceNow = Date()
+        let excludedMatcher = ExcludedItemMatcher(records: excludedItems)
         let resultsLock = OSAllocatedUnfairLock(
             initialState: [ClientScanSummary?](repeating: nil, count: builtInProfiles.count)
         )
@@ -43,7 +47,12 @@ public struct ScanEngine: Sendable {
         DispatchQueue.concurrentPerform(iterations: profiles.count) { index in
             if Task.isCancelled { return }
             let localFM = FileManager()
-            let summary = scanProfile(profiles[index], referenceNow: referenceNow, fileManager: localFM)
+            let summary = scanProfile(
+                profiles[index],
+                referenceNow: referenceNow,
+                excludedMatcher: excludedMatcher,
+                fileManager: localFM
+            )
             resultsLock.withLock { state in
                 state[index] = summary
             }
@@ -78,7 +87,12 @@ public struct ScanEngine: Sendable {
         for customDirectory in customDirectories {
             if Task.isCancelled { break }
             let profile = customDirectory.toClientProfile()
-            let result = scanProfile(profile, referenceNow: referenceNow, fileManager: customFM)
+            let result = scanProfile(
+                profile,
+                referenceNow: referenceNow,
+                excludedMatcher: excludedMatcher,
+                fileManager: customFM
+            )
             totalSkippedProtected += result.skippedProtectedCount
             summaries.append(result)
         }
@@ -97,6 +111,7 @@ public struct ScanEngine: Sendable {
     private func scanProfile(
         _ profile: AIClientProfile,
         referenceNow: Date,
+        excludedMatcher: ExcludedItemMatcher,
         fileManager: FileManager
     ) -> ClientScanSummary {
         var discoveredItems: [CleanableItem] = []
@@ -117,6 +132,10 @@ public struct ScanEngine: Sendable {
             let targetURL = rule.resolveURL(homeDirectory: homeDirectory)
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: targetURL.path, isDirectory: &isDir) else {
+                continue
+            }
+
+            if excludedMatcher.isExcluded(targetURL) {
                 continue
             }
 
@@ -279,6 +298,7 @@ public struct ScanEngine: Sendable {
                 for childURL in children {
                     if Task.isCancelled { break }
                     if childURL.lastPathComponent == ".DS_Store" { continue }
+                    if excludedMatcher.isExcluded(childURL) { continue }
 
                     let childCheck = safetyGuard.validateTarget(childURL, fileManager: fileManager)
                     guard childCheck.isAllowed else {
@@ -364,6 +384,7 @@ public struct ScanEngine: Sendable {
 
                 for projectDirURL in projectDirs {
                     if Task.isCancelled { break }
+                    if excludedMatcher.isExcluded(projectDirURL) { continue }
                     let values = try? projectDirURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                     guard (values?.isDirectory ?? false) && !(values?.isSymbolicLink ?? false) else {
                         continue
@@ -382,6 +403,7 @@ public struct ScanEngine: Sendable {
                         if Task.isCancelled { break }
                         let entryName = sessionURL.lastPathComponent
                         if entryName == ".DS_Store" { continue }
+                        if excludedMatcher.isExcluded(sessionURL) { continue }
 
                         let entryCheck = safetyGuard.validateTarget(sessionURL, fileManager: fileManager)
                         guard entryCheck.isAllowed else {
@@ -469,10 +491,17 @@ public struct ScanEngine: Sendable {
                     if Task.isCancelled { break }
 
                     let values = try? fileURL.resourceValues(forKeys: Set(keys))
-                    if (values?.isSymbolicLink ?? false) || (values?.isDirectory ?? false) {
+                    if values?.isSymbolicLink ?? false {
+                        continue
+                    }
+                    if values?.isDirectory ?? false {
+                        if excludedMatcher.isExcluded(fileURL) {
+                            enumerator.skipDescendants()
+                        }
                         continue
                     }
                     guard values?.isRegularFile == true else { continue }
+                    if excludedMatcher.isExcluded(fileURL) { continue }
 
                     let fileName = fileURL.lastPathComponent
                     if fileName == ".DS_Store" { continue }

@@ -33,6 +33,20 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         isCleanable && !requiresIndividualSelection
     }
 
+    /// 面向界面与排除记录的统一首选标题：会话条目优先使用保存的会话标题，避免退化为裸 UUID 文件名
+    public var preferredDisplayTitle: String {
+        guard category == .sessions else { return displayName }
+        if let sessionTitle, !sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return sessionTitle
+        }
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileStem = isDirectory ? fileName : url.deletingPathExtension().lastPathComponent
+        if name.isEmpty || (name == fileName && UUID(uuidString: fileStem) != nil) {
+            return "未命名会话"
+        }
+        return name
+    }
+
     public init(
         clientID: String,
         clientName: String,
@@ -245,5 +259,151 @@ public struct ScanReport: Sendable {
         self.totalRecommendedCount = recCount
         self.totalReviewSuggestedCount = revCount
         self.totalProtectedItemCount = proCount
+    }
+
+    /// 返回按排除清单过滤后的新扫描报告，并实时重算所有客户端分组与全局统计汇总。
+    /// 与 `ScanEngine` 约定保持一致：内置客户端若已无任何展示条目则从列表移除，自定义目录分组保留。
+    public func filtering(excluding matcher: ExcludedItemMatcher) -> ScanReport {
+        guard !matcher.isEmpty else { return self }
+
+        var builtIn: [ClientScanSummary] = []
+        var custom: [ClientScanSummary] = []
+
+        for summary in clientSummaries {
+            let filteredItems = summary.items.filter { !matcher.isExcluded($0.url) }
+            let filteredProtected = summary.protectedItems.filter { !matcher.isExcluded($0.url) }
+
+            if summary.profile.isCustom {
+                custom.append(
+                    ClientScanSummary(
+                        profile: summary.profile,
+                        items: filteredItems,
+                        protectedItems: filteredProtected,
+                        skippedProtectedCount: summary.skippedProtectedCount
+                    )
+                )
+            } else if !filteredItems.isEmpty || !filteredProtected.isEmpty {
+                builtIn.append(
+                    ClientScanSummary(
+                        profile: summary.profile,
+                        items: filteredItems,
+                        protectedItems: filteredProtected,
+                        skippedProtectedCount: summary.skippedProtectedCount
+                    )
+                )
+            }
+        }
+
+        builtIn.sort(by: Self.compareBuiltInSummaries)
+
+        return ScanReport(
+            scannedAt: scannedAt,
+            clientSummaries: builtIn + custom,
+            totalBuiltInProfilesCount: totalBuiltInProfilesCount,
+            detectedBuiltInClientsCount: builtIn.count,
+            skippedProtectedCount: skippedProtectedCount
+        )
+    }
+
+    /// 便捷重载：直接传入已排除记录数组过滤扫描报告
+    public func filtering(excludedItems: [ExcludedItemRecord]) -> ScanReport {
+        filtering(excluding: ExcludedItemMatcher(records: excludedItems))
+    }
+
+    /// 将同一次扫描会话中曾被临时排除的条目快照无闪烁合并回报告（自动跳过仍被排除或已重复存在的条目）
+    public func mergingRestoredItems(
+        _ entries: [(item: CleanableItem, profile: AIClientProfile, isProtected: Bool)],
+        excluding matcher: ExcludedItemMatcher
+    ) -> ScanReport {
+        guard !entries.isEmpty else { return self }
+
+        var byProfileID: [String: (profile: AIClientProfile, items: [CleanableItem], protectedItems: [CleanableItem], skipped: Int, order: Int)] = [:]
+        var nextOrder = 0
+        for summary in clientSummaries {
+            byProfileID[summary.id] = (
+                profile: summary.profile,
+                items: summary.items,
+                protectedItems: summary.protectedItems,
+                skipped: summary.skippedProtectedCount,
+                order: nextOrder
+            )
+            nextOrder += 1
+        }
+
+        var didInsert = false
+        for entry in entries {
+            guard !matcher.isExcluded(entry.item.url) else { continue }
+            var bucket = byProfileID[entry.profile.id] ?? (
+                profile: entry.profile,
+                items: [],
+                protectedItems: [],
+                skipped: 0,
+                order: nextOrder
+            )
+            if byProfileID[entry.profile.id] == nil {
+                nextOrder += 1
+            }
+
+            if entry.isProtected {
+                if !bucket.protectedItems.contains(where: { $0.id == entry.item.id }) {
+                    bucket.protectedItems.append(entry.item)
+                    didInsert = true
+                }
+            } else {
+                if !bucket.items.contains(where: { $0.id == entry.item.id }) {
+                    bucket.items.append(entry.item)
+                    didInsert = true
+                }
+            }
+            byProfileID[entry.profile.id] = bucket
+        }
+
+        guard didInsert else { return self }
+
+        var builtIn: [ClientScanSummary] = []
+        var custom: [(order: Int, summary: ClientScanSummary)] = []
+
+        for bucket in byProfileID.values {
+            let sortedItems = bucket.items.sorted { lhs, rhs in
+                if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes > rhs.sizeBytes }
+                return lhs.modifiedAt > rhs.modifiedAt
+            }
+            let sortedProtected = bucket.protectedItems.sorted { lhs, rhs in
+                if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes > rhs.sizeBytes }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+            let summary = ClientScanSummary(
+                profile: bucket.profile,
+                items: sortedItems,
+                protectedItems: sortedProtected,
+                skippedProtectedCount: bucket.skipped
+            )
+            if bucket.profile.isCustom {
+                custom.append((bucket.order, summary))
+            } else if !summary.items.isEmpty || !summary.protectedItems.isEmpty {
+                builtIn.append(summary)
+            }
+        }
+
+        builtIn.sort(by: Self.compareBuiltInSummaries)
+        let sortedCustom = custom.sorted { $0.order < $1.order }.map(\.summary)
+
+        return ScanReport(
+            scannedAt: scannedAt,
+            clientSummaries: builtIn + sortedCustom,
+            totalBuiltInProfilesCount: totalBuiltInProfilesCount,
+            detectedBuiltInClientsCount: builtIn.count,
+            skippedProtectedCount: skippedProtectedCount
+        )
+    }
+
+    private static func compareBuiltInSummaries(_ lhs: ClientScanSummary, _ rhs: ClientScanSummary) -> Bool {
+        if lhs.totalSizeBytes != rhs.totalSizeBytes {
+            return lhs.totalSizeBytes > rhs.totalSizeBytes
+        }
+        if lhs.protectedSizeBytes != rhs.protectedSizeBytes {
+            return lhs.protectedSizeBytes > rhs.protectedSizeBytes
+        }
+        return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
     }
 }

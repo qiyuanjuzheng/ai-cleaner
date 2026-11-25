@@ -491,11 +491,24 @@ private struct VirtualizedItemListView: View {
             } else {
                 ContentUnavailableView {
                     Label("未找到可清理条目", systemImage: "checkmark.seal.fill")
-                } actions: {
-                    Button("重新扫描") {
-                        viewModel.rescan()
+                } description: {
+                    if !viewModel.excludedItems.isEmpty {
+                        Text("当前有 \(viewModel.excludedItems.count) 项在已排除列表中被自动跳过。")
                     }
-                    .buttonStyle(.bordered)
+                } actions: {
+                    HStack(spacing: 10) {
+                        Button("重新扫描") {
+                            viewModel.rescan()
+                        }
+                        .buttonStyle(.bordered)
+
+                        if !viewModel.excludedItems.isEmpty {
+                            Button("查看已排除（\(viewModel.excludedItems.count)）") {
+                                viewModel.sidebarSelection = .excluded
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

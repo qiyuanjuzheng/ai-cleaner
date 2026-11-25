@@ -268,6 +268,14 @@ struct ItemRowView: View, Equatable {
             }
 
             Button {
+                viewModel.excludeItem(item)
+            } label: {
+                Label("排除此条目（不再显示）", systemImage: "eye.slash")
+            }
+
+            Divider()
+
+            Button {
                 viewModel.revealInFinder(item)
             } label: {
                 Label("在 Finder 中显示", systemImage: "folder")

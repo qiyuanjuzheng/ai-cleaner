@@ -58,6 +58,26 @@ struct SidebarView: View {
                     }
                     .help("累计已移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.totalHistoricalFreedBytes))")
 
+                    SidebarClientTile(
+                        title: "已排除",
+                        cleanableBytesText: viewModel.excludedItemCountText,
+                        hasProtectedOnly: false,
+                        icon: .symbol("eye.slash.fill"),
+                        tint: AppTheme.excludedAccentColor,
+                        isSelected: viewModel.sidebarSelection == .excluded,
+                        namespace: sidebarNamespace,
+                        emphasizeBytesTint: viewModel.excludedItems.isEmpty
+                            ? nil
+                            : AppTheme.excludedAccentColor
+                    ) {
+                        select(.excluded)
+                    }
+                    .help(
+                        viewModel.excludedItems.isEmpty
+                            ? "查看已排除的清理条目"
+                            : "已排除 \(viewModel.excludedItems.count) 项，扫描时将自动跳过"
+                    )
+
                     sectionHeader(
                         title: "AI 客户端",
                         trailing: viewModel.isScanning

@@ -2,6 +2,13 @@
 
 AI Cleaner 是一款 macOS 原生 SwiftUI 应用，可扫描 31 款 AI 客户端的会话、缓存、日志和临时文件。
 
+## 下载安装
+
+1. 从 GitHub Releases 下载最新版的 `AI-Cleaner-<版本>-macOS.dmg`，打开磁盘映像，将 **AI Cleaner.app** 拖入「应用程序」。也可以解压同版本的 ZIP 后移入「应用程序」。[下载最新版](https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest)
+2. 安装包支持 macOS 14.0（Sonoma）或更新版本，适用于 Apple Silicon 和 Intel Mac。安装包采用 ad-hoc 签名，尚未经过 Apple 公证。若首次打开被拦截，确认来源和校验和后，前往「系统设置 → 隐私与安全性 → 仍要打开」。也可运行 `xattr -cr "/Applications/AI Cleaner.app"` 后再次打开应用。
+
+版本页面提供 `SHA256SUMS.txt`。将两个安装包和校验文件放在同一目录，运行 `shasum -a 256 -c SHA256SUMS.txt`。
+
 ## 界面截图
 
 ### 扫描结果
@@ -42,7 +49,7 @@ AI Cleaner 是一款 macOS 原生 SwiftUI 应用，可扫描 31 款 AI 客户端
 - **国内客户端**　WorkBuddy（腾讯 WorkBuddy / CodeBuddy）、豆包工作伙伴 / 豆包（Doubao / DoubaoWork）、WorkDaddy、DeepSeek Harness、Trae / Trae CN、Qoder、通义灵码（Lingma）、ZCode / 智谱清言（ChatGLM）、阶跃星辰（StepFun）、Kimi、腾讯元宝。
 - **其他客户端**　Claude Code、Codex、Cursor、Windsurf、Claude Desktop、ChatGPT Desktop、OpenCode、Pi、Gemini / Antigravity、Kiro、GitHub Copilot、Multica、Cherry Studio、AnythingLLM、T3 Code、Ollama、LM Studio、Chatbox、Jan、Zed。
 
-## 环境要求
+## 源码构建环境
 
 - **操作系统**：macOS 14.0 (Sonoma) 或更高版本
 - **工具链**：Swift 6.0+ / Xcode 16+
@@ -68,6 +75,14 @@ open "dist/AI Cleaner.app"
 
 > 如需在临时沙箱中预览界面而不扫描真实主目录，可运行：
 > `AI_CLEANER_HOME=/path/to/sandbox-home swift run AICleanerApp`
+
+## 后续发版流程
+
+1. 在 `CHANGELOG.md` 添加 `## [vX.Y.Z] - YYYY-MM-DD`，记录本版变化，并将变更合入 `main`。
+2. 在更新后的 `main` 上运行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"`，再运行 `git push origin vX.Y.Z`。
+3. GitHub Actions 将运行测试，生成 Universal DMG、ZIP、SHA-256 校验文件和包含上一版本差异的说明，再上传到对应 GitHub Release。需要补发时，可在 `Build and publish AI Cleaner` 工作流中手动选择已有标签。
+
+在本地可运行 `./scripts/build-release-assets.sh --tag vX.Y.Z`，产物位于 `dist/release/`。`./scripts/package-app.sh` 默认构建 Universal 发布版，`--debug` 默认使用本机架构。可用 `--arch` 指定架构，用 `--version` 和 `--build` 或 `APP_VERSION` 和 `APP_BUILD_NUMBER` 设置版本及构建号。`CODESIGN_IDENTITY` 可指定签名身份。
 
 ---
 

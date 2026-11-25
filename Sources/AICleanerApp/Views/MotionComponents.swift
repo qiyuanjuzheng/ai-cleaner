@@ -322,25 +322,43 @@ struct ScanReadyHeroView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
 
     @State private var isOrbHovered: Bool = false
     @State private var isOrbPressed: Bool = false
     @State private var isHistoryHovered: Bool = false
     @State private var sheenProgress: CGFloat = -1.25
+    @State private var motionClock = PausableAnimationClock()
 
-    private var shouldAnimate: Bool {
-        isVisible && !reduceMotion && controlActiveState != .inactive
+    private var playbackPolicy: AnimationPlaybackPolicy {
+        AnimationPlaybackPolicy(
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isPageVisible: isVisible,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    nonisolated static func allowsPointerCursor(
+        isPageVisible: Bool,
+        isWindowVisibleOnScreen: Bool,
+        isWindowActive: Bool
+    ) -> Bool {
+        isPageVisible && isWindowVisibleOnScreen && isWindowActive
     }
 
     private var allowsPointerCursor: Bool {
-        isVisible && controlActiveState != .inactive
+        Self.allowsPointerCursor(
+            isPageVisible: isVisible,
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isWindowActive: controlActiveState != .inactive
+        )
     }
 
     var body: some View {
         VStack(spacing: 12) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !shouldAnimate)) { timeline in
-                let elapsed = shouldAnimate ? timeline.date.timeIntervalSinceReferenceDate : 0.0
-                let motion = ScanReadyHeroMotion.evaluate(elapsed: elapsed, isAnimating: shouldAnimate)
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: playbackPolicy.isPaused)) { timeline in
+                let elapsed = reduceMotion ? 0.0 : motionClock.elapsed(at: timeline.date)
+                let motion = ScanReadyHeroMotion.evaluate(elapsed: elapsed, isAnimating: !reduceMotion)
                 let isDark = colorScheme == .dark
                 let rippleFactor = isOrbHovered ? 0.55 : 1.0
                 let rippleBaseAlpha = (isDark ? 0.44 : 0.34) * rippleFactor
@@ -372,8 +390,8 @@ struct ScanReadyHeroView: View {
                         .animation(reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.76), value: isOrbPressed)
                         .allowsHitTesting(false)
 
-                    // 2. 克制的脉冲波纹提示（减弱动态效果时关闭）
-                    if shouldAnimate {
+                    // 2. 克制的脉冲波纹提示（减弱动态效果时关闭；窗口不可见或切页时由 TimelineView 暂停定格）
+                    if !reduceMotion {
                         pulseRippleCircle(
                             scale: motion.primaryRippleScale,
                             opacity: motion.primaryRippleOpacity * rippleBaseAlpha
@@ -508,6 +526,12 @@ struct ScanReadyHeroView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            motionClock.setPaused(playbackPolicy.isPaused)
+        }
+        .onChange(of: playbackPolicy.isPaused) { _, isPaused in
+            motionClock.setPaused(isPaused)
+        }
         .onChange(of: isVisible) { _, visible in
             if !visible {
                 isOrbHovered = false
@@ -547,21 +571,26 @@ struct OrbitalScannerHero: View {
     var onCancel: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
     @State private var hasAppeared: Bool = false
+    @State private var motionClock = PausableAnimationClock()
 
-    private var shouldAnimate: Bool {
-        isVisible && !reduceMotion && controlActiveState != .inactive
+    private var playbackPolicy: AnimationPlaybackPolicy {
+        AnimationPlaybackPolicy(
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isPageVisible: isVisible,
+            reduceMotion: reduceMotion
+        )
     }
 
     var body: some View {
         VStack(spacing: 12) {
-            TimelineView(.animation(paused: !shouldAnimate)) { timeline in
-                let elapsed = shouldAnimate ? timeline.date.timeIntervalSinceReferenceDate : 0.0
+            TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
+                let elapsed = reduceMotion ? 0.0 : motionClock.elapsed(at: timeline.date)
                 let sweepAngle = Angle.degrees((elapsed * 120).truncatingRemainder(dividingBy: 360))
                 let outerRotation = Angle.degrees((elapsed * 24).truncatingRemainder(dividingBy: 360))
                 let innerRotation = Angle.degrees((-elapsed * 40).truncatingRemainder(dividingBy: 360))
-                let pulse = shouldAnimate ? (0.95 + 0.06 * sin(elapsed * 2.8)) : 1.0
+                let pulse = reduceMotion ? 1.0 : (0.95 + 0.06 * sin(elapsed * 2.8))
 
                 ZStack {
                     Circle()
@@ -660,6 +689,7 @@ struct OrbitalScannerHero: View {
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
+            motionClock.setPaused(playbackPolicy.isPaused)
             guard !reduceMotion else {
                 hasAppeared = true
                 return
@@ -667,6 +697,9 @@ struct OrbitalScannerHero: View {
             withAnimation(.spring(response: 0.30, dampingFraction: 0.80)) {
                 hasAppeared = true
             }
+        }
+        .onChange(of: playbackPolicy.isPaused) { _, isPaused in
+            motionClock.setPaused(isPaused)
         }
     }
 }
@@ -679,11 +712,22 @@ struct StorageRingGauge: View {
     let protectedBytes: Int64
     let highlightedTier: CleanupRecommendation?
     var isScanning: Bool = false
+    var isVisible: Bool = true
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
     @State private var appeared: Bool = false
+    @State private var motionClock = PausableAnimationClock()
+
+    private var scanRingPlaybackPolicy: AnimationPlaybackPolicy {
+        AnimationPlaybackPolicy(
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isPageVisible: isVisible,
+            isFeatureActive: isScanning,
+            reduceMotion: reduceMotion
+        )
+    }
 
     private struct RingMetrics: Equatable {
         let recommended: Int64
@@ -780,9 +824,9 @@ struct StorageRingGauge: View {
                 }
             }
 
-            if isScanning && !reduceMotion && controlActiveState != .inactive {
-                TimelineView(.animation) { timeline in
-                    let angle = (timeline.date.timeIntervalSinceReferenceDate * 220).truncatingRemainder(dividingBy: 360)
+            if isScanning && !reduceMotion {
+                TimelineView(.animation(paused: scanRingPlaybackPolicy.isPaused)) { timeline in
+                    let angle = (motionClock.elapsed(at: timeline.date) * 220).truncatingRemainder(dividingBy: 360)
                     Circle()
                         .trim(from: 0, to: 0.22)
                         .stroke(
@@ -828,6 +872,10 @@ struct StorageRingGauge: View {
         )
         .onAppear {
             appeared = true
+            motionClock.setPaused(scanRingPlaybackPolicy.isPaused)
+        }
+        .onChange(of: scanRingPlaybackPolicy.isPaused) { _, isPaused in
+            motionClock.setPaused(isPaused)
         }
     }
 
@@ -871,8 +919,17 @@ struct StorageRingGauge: View {
 struct SparkleBurstOverlay: View {
     let triggerID: UUID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
     @State private var startDate: Date = Date()
     @State private var isBurstActive: Bool = true
+
+    private var playbackPolicy: AnimationPlaybackPolicy {
+        AnimationPlaybackPolicy(
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isFeatureActive: isBurstActive,
+            reduceMotion: reduceMotion
+        )
+    }
 
     private struct Particle {
         let angle: Double
@@ -901,7 +958,7 @@ struct SparkleBurstOverlay: View {
     var body: some View {
         Group {
             if !reduceMotion && isBurstActive {
-                TimelineView(.animation(paused: !isBurstActive)) { timeline in
+                TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
                     let elapsed = timeline.date.timeIntervalSince(startDate)
                     if elapsed < 1.35 {
                         Canvas { context, size in
@@ -1000,14 +1057,25 @@ struct AnimatedCheckbox: View {
 
 struct BrandLogoEmblem: View {
     var isScanning: Bool = false
+    var isVisible: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
+    @State private var motionClock = PausableAnimationClock()
+
+    private var playbackPolicy: AnimationPlaybackPolicy {
+        AnimationPlaybackPolicy(
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isPageVisible: isVisible,
+            isFeatureActive: isScanning,
+            reduceMotion: reduceMotion
+        )
+    }
 
     var body: some View {
         ZStack {
-            if isScanning && !reduceMotion && controlActiveState != .inactive {
-                TimelineView(.animation) { timeline in
-                    let angle = (timeline.date.timeIntervalSinceReferenceDate * 180).truncatingRemainder(dividingBy: 360)
+            if isScanning && !reduceMotion {
+                TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
+                    let angle = (motionClock.elapsed(at: timeline.date) * 180).truncatingRemainder(dividingBy: 360)
                     RoundedRectangle(cornerRadius: 9.5, style: .continuous)
                         .stroke(
                             AngularGradient(
@@ -1047,14 +1115,30 @@ struct BrandLogoEmblem: View {
                 .foregroundStyle(.white)
         }
         .frame(width: 32, height: 32)
+        .onAppear {
+            motionClock.setPaused(playbackPolicy.isPaused)
+        }
+        .onChange(of: playbackPolicy.isPaused) { _, isPaused in
+            motionClock.setPaused(isPaused)
+        }
     }
 }
 
 // MARK: - 7. 顶边极光扫描光束（Canvas 严格裁剪，绝不溢出卡片边界）
 
 struct AuroraScanSweepBar: View {
+    var isVisible: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
+    @State private var motionClock = PausableAnimationClock()
+
+    private var playbackPolicy: AnimationPlaybackPolicy {
+        AnimationPlaybackPolicy(
+            isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isPageVisible: isVisible,
+            reduceMotion: reduceMotion
+        )
+    }
 
     var body: some View {
         Group {
@@ -1063,9 +1147,10 @@ struct AuroraScanSweepBar: View {
                     .fill(AppTheme.brandGradient)
                     .opacity(0.70)
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: controlActiveState == .inactive)) { timeline in
-                    let phase = (timeline.date.timeIntervalSinceReferenceDate * 0.78)
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: playbackPolicy.isPaused)) { timeline in
+                    let rawPhase = (motionClock.elapsed(at: timeline.date) * 0.78)
                         .truncatingRemainder(dividingBy: 1.0)
+                    let phase = rawPhase < 0 ? rawPhase + 1.0 : rawPhase
                     Canvas { context, size in
                         drawSweepBeam(in: &context, size: size, phase: phase)
                     }
@@ -1076,6 +1161,12 @@ struct AuroraScanSweepBar: View {
         .frame(height: 2.5)
         .clipped()
         .allowsHitTesting(false)
+        .onAppear {
+            motionClock.setPaused(playbackPolicy.isPaused)
+        }
+        .onChange(of: playbackPolicy.isPaused) { _, isPaused in
+            motionClock.setPaused(isPaused)
+        }
     }
 
     private func drawSweepBeam(in context: inout GraphicsContext, size: CGSize, phase: Double) {

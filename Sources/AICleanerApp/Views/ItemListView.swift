@@ -531,8 +531,7 @@ private struct VirtualizedItemListView: View {
                     ForEach(viewModel.displayedRows) { row in
                         switch row {
                         case let .sectionHeader(header):
-                            CleanSectionHeader(header: header, viewModel: viewModel)
-                                .equatable()
+                            CleanSectionHeaderContainer(header: header, viewModel: viewModel)
                                 .padding(.top, header.isFirstSection ? 2 : 14)
                                 .padding(.bottom, 6)
 
@@ -664,19 +663,73 @@ private struct AnimatableHairlineCanvas: View, Animatable {
     }
 }
 
-// MARK: - 无框极简分组标题（Equatable，零闭包分配）
+// MARK: - 无框极简分组标题（容器隔离状态 + Equatable 渲染，零抖动切换全选/取消本组）
 
-private struct CleanSectionHeader: View, Equatable {
+private struct CleanSectionHeaderContainer: View {
     let header: SectionHeaderRow
     let viewModel: CleanerViewModel
 
+    var body: some View {
+        CleanSectionHeader(
+            header: header,
+            isAllBulkSelected: header.supportsBulkSelection
+                && viewModel.isSectionAllBulkSelected(header.recommendation),
+            viewModel: viewModel
+        )
+        .equatable()
+    }
+}
+
+private struct CleanSectionHeader: View, Equatable {
+    let header: SectionHeaderRow
+    let isAllBulkSelected: Bool
+    let viewModel: CleanerViewModel
+
+    @Environment(\.colorScheme) private var colorScheme
+
     nonisolated static func == (lhs: CleanSectionHeader, rhs: CleanSectionHeader) -> Bool {
-        lhs.header == rhs.header && lhs.viewModel === rhs.viewModel
+        lhs.header == rhs.header
+            && lhs.isAllBulkSelected == rhs.isAllBulkSelected
+            && lhs.viewModel === rhs.viewModel
+    }
+
+    private var bulkActionTitle: String {
+        isAllBulkSelected ? "取消本组" : "全选本组"
+    }
+
+    private var bulkActionTooltip: String {
+        if isAllBulkSelected {
+            return "取消勾选本组当前可见条目"
+        }
+        if header.individualOnlyCount > 0 {
+            return "全选本组当前可见的 \(header.bulkSelectableCount) 条可批量项（自动跳过 \(header.individualOnlyCount) 条近期修改或 /tmp 仅手选项）"
+        }
+        return "全选本组当前可见的 \(header.bulkSelectableCount) 条条目"
+    }
+
+    private var tint: Color {
+        AppTheme.color(for: header.recommendation)
+    }
+
+    private var bulkForegroundColor: Color {
+        isAllBulkSelected ? .secondary : tint
+    }
+
+    private var bulkBackgroundColor: Color {
+        if isAllBulkSelected {
+            return Color.primary.opacity(colorScheme == .dark ? 0.11 : 0.065)
+        }
+        return tint.opacity(colorScheme == .dark ? 0.16 : 0.11)
+    }
+
+    private var bulkBorderColor: Color {
+        if isAllBulkSelected {
+            return Color.primary.opacity(colorScheme == .dark ? 0.18 : 0.12)
+        }
+        return tint.opacity(colorScheme == .dark ? 0.28 : 0.18)
     }
 
     var body: some View {
-        let tint = AppTheme.color(for: header.recommendation)
-
         HStack(spacing: 8) {
             Button {
                 viewModel.toggleSectionCollapsed(header.recommendation)
@@ -707,28 +760,38 @@ private struct CleanSectionHeader: View, Equatable {
             Spacer(minLength: 8)
 
             if header.supportsBulkSelection {
-                Button("勾选本组") {
-                    viewModel.selectSection(header.recommendation)
-                }
-                .buttonStyle(.plain)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(tint)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(tint.opacity(0.11)))
-                .help("勾选本组中可批量选择的条目")
+                bulkActionButton
             } else if header.recommendation == .reviewSuggested {
                 Text("仅逐条手选")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(tint)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(tint.opacity(0.11)))
+                    .frame(height: 22)
+                    .background(Capsule(style: .continuous).fill(tint.opacity(0.11)))
                     .help("本组条目需逐条手动确认勾选，所有批量勾选操作均会自动跳过")
             }
         }
         .padding(.horizontal, 4)
         .frame(height: 28)
+    }
+
+    private var bulkActionButton: some View {
+        Button {
+            viewModel.toggleSectionSelection(header.recommendation)
+        } label: {
+            Text(bulkActionTitle)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .foregroundStyle(bulkForegroundColor)
+                .padding(.horizontal, 9)
+                .frame(minWidth: 66, minHeight: 22, maxHeight: 22)
+                .background(Capsule(style: .continuous).fill(bulkBackgroundColor))
+                .overlay(Capsule(style: .continuous).strokeBorder(bulkBorderColor, lineWidth: 0.7))
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(TactileScaleButtonStyle(pressedScale: 0.96))
+        .accessibilityLabel("\(bulkActionTitle)：\(header.recommendation.displayName)")
+        .help(bulkActionTooltip)
     }
 }
 

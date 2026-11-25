@@ -142,17 +142,18 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertEqual(rows["named.jsonl"]?.title, "Pi 保存的名称")
         XCTAssertEqual(rows[unnamed]?.title, "未命名会话")
         XCTAssertEqual(rows["archived.jsonl"]?.title, "转录归档的标题")
-        XCTAssertEqual(rows["archived.jsonl"]?.item.isBulkSelectable, false)
+        XCTAssertEqual(rows["archived.jsonl"]?.item.requiresIndividualSelection, false)
+        XCTAssertEqual(rows["archived.jsonl"]?.item.isBulkSelectable, true)
 
         model.searchText = "标题 结尾"
         XCTAssertEqual(model.filteredItems.map(\.id), [titled.id])
     }
 
     @MainActor
-    func testOldAndArchivedSessionsRequireIndividualSelection() async throws {
+    func testOldAndArchivedSessionsSupportSectionBulkToggleAndFilterLinkage() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
-        let oldDate = Date().addingTimeInterval(-20 * 86_400)
+        let oldDate = Date().addingTimeInterval(-40 * 86_400)
         try write(
             #"{"type":"user","message":{"role":"user","content":"Review the fixture branch"}}"#,
             at: ".claude/projects/-Users-fixture-demo/old.jsonl", in: home, modifiedAt: oldDate
@@ -170,50 +171,99 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertEqual(Set(sessions.map(\.fileName)), [
             "old.jsonl", "rollout-recent.jsonl.zst", "rollout-archive.jsonl", "old-agent.jsonl"
         ])
-        XCTAssertTrue(sessions.allSatisfy { $0.recommendation == .reviewSuggested })
+        XCTAssertTrue(sessions.allSatisfy {
+            $0.recommendation == .reviewSuggested && !$0.requiresIndividualSelection && $0.isBulkSelectable
+        })
         let old = try XCTUnwrap(sessions.first { $0.fileName == "old.jsonl" })
+        let oldAgent = try XCTUnwrap(sessions.first { $0.fileName == "old-agent.jsonl" })
+        let archive = try XCTUnwrap(sessions.first { $0.fileName == "rollout-archive.jsonl" })
         let cache = try XCTUnwrap(model.filteredItems.first { $0.ruleID == "workbuddy-cache" })
+        let allSessionIDs = Set(sessions.map(\.id))
+        let allBulkIDs = allSessionIDs.union([cache.id])
         XCTAssertTrue(old.displayName.contains("demo"))
         XCTAssertTrue(old.displayName.contains("Review the fixture branch"))
 
-        model.selectedAgeFilter = .olderThan7Days
+        // 验证分组头支持一键全选本组，且不含仅手选项
+        let reviewHeader = try XCTUnwrap(model.displayedRows.compactMap { row -> SectionHeaderRow? in
+            if case let .sectionHeader(header) = row, header.recommendation == .reviewSuggested { return header }
+            return nil
+        }.first)
+        XCTAssertTrue(reviewHeader.supportsBulkSelection)
+        XCTAssertEqual(reviewHeader.bulkSelectableCount, 4)
+        XCTAssertEqual(reviewHeader.individualOnlyCount, 0)
+
+        // 「勾选建议清理项」仍只勾选 .recommended，不波及按需清理旧会话
+        model.selectRecommendedInScope()
+        XCTAssertEqual(model.selectedItemIDs, [cache.id])
+        XCTAssertTrue(model.isSectionAllBulkSelected(.recommended))
+        XCTAssertFalse(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 按需清理分组头「全选本组」→ 全选全部旧会话与归档；再次点击「取消本组」→ 仅取消本组，保留建议清理项
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertEqual(model.selectedItemIDs, allBulkIDs)
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+        XCTAssertTrue(model.isSectionAllBulkSelected(.recommended))
+
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertEqual(model.selectedItemIDs, [cache.id])
+        XCTAssertFalse(model.isSectionAllBulkSelected(.reviewSuggested))
+        XCTAssertTrue(model.isSectionAllBulkSelected(.recommended))
+
+        // 建议清理分组头同样支持一键「取消本组」与重新「全选本组」
+        model.toggleSectionSelection(.recommended)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+        XCTAssertFalse(model.isSectionAllBulkSelected(.recommended))
+
+        // 与时间范围筛选（超过 30 天）联动：仅勾选当前可见的 2 条旧会话
+        model.selectedAgeFilter = .olderThan30Days
         XCTAssertEqual(Set(model.filteredItems.map(\.fileName)), ["old.jsonl", "old-agent.jsonl"])
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertEqual(model.selectedItemIDs, [old.id, oldAgent.id])
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 清空筛选后可见条目增多，按钮状态自动回退为「全选本组」
+        model.selectedAgeFilter = .all
+        XCTAssertFalse(model.isSectionAllBulkSelected(.reviewSuggested))
+        // 再次切回 30 天前筛选，按钮恢复为「取消本组」，点击即可一键取消这 2 条可见项
+        model.selectedAgeFilter = .olderThan30Days
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+        XCTAssertFalse(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 与搜索框联动：仅全选 / 取消匹配条目
         model.selectedAgeFilter = .all
         model.searchText = "Review the fixture branch"
         XCTAssertEqual(model.filteredItems.map(\.id), [old.id])
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertEqual(model.selectedItemIDs, [old.id])
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
         model.clearAllFilters()
 
-        model.selectRecommendedInScope()
-        XCTAssertEqual(model.selectedItemIDs, [cache.id])
-        model.clearAllSelection()
-        model.selectSection(.reviewSuggested)
-        XCTAssertTrue(model.selectedItemIDs.isEmpty)
-        model.selectSection(.recommended)
-        XCTAssertEqual(model.selectedItemIDs, [cache.id])
-        model.clearAllSelection()
+        // 控制栏「全选」「反选」自动覆盖放开后的按需清理旧会话与归档
         model.selectAllVisible()
-        XCTAssertEqual(model.selectedItemIDs, [cache.id])
+        XCTAssertEqual(model.selectedItemIDs, allBulkIDs)
+        XCTAssertTrue(model.allVisibleSelected)
         model.invertVisibleSelection()
         XCTAssertTrue(model.selectedItemIDs.isEmpty)
         model.invertVisibleSelection()
-        XCTAssertEqual(model.selectedItemIDs, [cache.id])
+        XCTAssertEqual(model.selectedItemIDs, allBulkIDs)
 
-        let archive = try XCTUnwrap(sessions.first { $0.fileName == "rollout-archive.jsonl" })
+        model.clearAllSelection()
         model.toggleSelection(for: old)
         model.toggleSelection(for: archive)
-        let manualIDs: Set<String> = [old.id, archive.id]
-        XCTAssertEqual(model.selectedItemIDs, manualIDs.union([cache.id]))
-        model.invertVisibleSelection()
-        XCTAssertEqual(model.selectedItemIDs, manualIDs)
+        let targetIDs: Set<String> = [old.id, archive.id]
         model.requestTrashConfirmation()
         XCTAssertTrue(model.showingTrashConfirmation)
-        XCTAssertEqual(Set(model.selectedItems.map(\.id)), manualIDs)
+        XCTAssertEqual(Set(model.selectedItems.map(\.id)), targetIDs)
         XCTAssertTrue(FileManager.default.fileExists(atPath: old.url.path))
 
         model.confirmAndTrashSelectedItems()
         try await waitUntil { model.lastCleanupResult != nil && !model.isCleaning && !model.isScanning }
         let result = try XCTUnwrap(model.lastCleanupResult)
-        XCTAssertEqual(Set(result.trashedItems.map(\.id)), manualIDs)
+        XCTAssertEqual(Set(result.trashedItems.map(\.id)), targetIDs)
         XCTAssertFalse(model.showingTrashConfirmation)
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.url.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: archive.url.path))
@@ -501,7 +551,7 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertNil(model.errorBannerMessage)
         XCTAssertFalse(model.filteredItems.contains(where: { $0.url.path == vanishedLog.url.path }))
 
-        // 单条恢复旧会话：重新回到待清理列表，不自动勾选且仍要求逐条勾选
+        // 单条恢复旧会话：重新回到待清理列表，不自动勾选，且支持在「按需清理」分组中批量勾选（建议清理不波及它）
         model.restoreExcludedItem(sessionRecord)
         try await waitUntil { !model.isScanning }
         model.sidebarSelection = .allClients
@@ -509,9 +559,13 @@ final class CleanerViewModelTests: XCTestCase {
         let restoredSession = try XCTUnwrap(model.filteredItems.first(where: { $0.url.path == oldSession.url.path }))
         XCTAssertEqual(restoredSession.preferredDisplayTitle, "重要历史排查会话")
         XCTAssertFalse(model.isSelected(restoredSession))
-        XCTAssertFalse(restoredSession.isBulkSelectable)
-        model.selectAllVisible()
+        XCTAssertFalse(restoredSession.requiresIndividualSelection)
+        XCTAssertTrue(restoredSession.isBulkSelectable)
+        model.selectRecommendedInScope()
         XCTAssertFalse(model.isSelected(restoredSession))
+        model.selectAllVisible()
+        XCTAssertTrue(model.isSelected(restoredSession))
+        model.clearAllSelection()
 
         // 跨重启后「全部恢复」：剩余 keep.log 与高风险 plugins 均回到待清理列表且均不自动勾选
         let restarted = makeViewModel(home: home)
@@ -1109,6 +1163,184 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertTrue(model.excludedItems.isEmpty)
         XCTAssertEqual(countingEngine.scanCount, 1)
         XCTAssertEqual(model.report?.totalItemCount, 0)
+    }
+
+    @MainActor
+    func testMixedReviewSectionBulkToggleIncludesSessionsAndSkipsTmpAndNotRecommended() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AICleanerMixedReviewTest-\(UUID().uuidString)")
+        let home = root.appendingPathComponent("FakeHome", isDirectory: true)
+        let privateTmp = root.appendingPathComponent("private/tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: privateTmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let staleDate = fixedNow.addingTimeInterval(-35 * 86_400)
+        let recentDate = fixedNow.addingTimeInterval(-2 * 3600)
+
+        // 1. 建议清理项
+        try write(String(repeating: "L", count: 1_200), at: ".claude/debug/home.log", in: home, modifiedAt: staleDate)
+        // 2. 可批量勾选的「按需清理」项（旧会话、.zst 压缩归档、archived_sessions、近期普通会话）
+        try write(
+            #"{"type":"user","cwd":"/Users/fixture/demo","message":{"role":"user","content":"35天前旧会话"}}"#,
+            at: ".claude/projects/-Users-fixture-demo/stale-session.jsonl",
+            in: home,
+            modifiedAt: staleDate
+        )
+        try write(
+            #"{"type":"user","cwd":"/Users/fixture/demo","message":{"role":"user","content":"近期普通会话"}}"#,
+            at: ".claude/projects/-Users-fixture-demo/recent-session.jsonl",
+            in: home,
+            modifiedAt: recentDate
+        )
+        try write(
+            "compressed",
+            at: ".codex/sessions/2026/11/01/rollout-compressed.jsonl.zst",
+            in: home,
+            modifiedAt: recentDate
+        )
+        try write(
+            "archived",
+            at: ".codex/archived_sessions/rollout-archived.jsonl",
+            in: home,
+            modifiedAt: recentDate
+        )
+        // 3. 强制仅手选的 /tmp 安全边界项（24h 内 AI 临时项 + /tmp 未归属项）
+        try write(String(repeating: "T", count: 900), at: "codex-recent-active.log", in: privateTmp, modifiedAt: recentDate)
+        try write(String(repeating: "U", count: 1_800), at: "manual-unattributed.tar", in: privateTmp, modifiedAt: staleDate)
+        // 4. 不建议清理项（硬保护凭据 + 可覆盖插件）
+        try write("secret", at: ".codex/auth.json", in: home, modifiedAt: staleDate)
+        try write("plugin", at: ".workbuddy/plugins/demo/plugin.js", in: home, modifiedAt: staleDate)
+
+        let guardInstance = SafetyGuard(homeDirectory: home)
+        let engine = ScanEngine(
+            homeDirectory: home,
+            safetyGuard: guardInstance,
+            systemTempRoot: privateTmp,
+            userTempRoot: nil,
+            currentUID: getuid(),
+            activeTempDirectoryPath: nil,
+            now: fixedNow
+        )
+        let model = CleanerViewModel(
+            homeDirectory: home,
+            customDirectoryStore: CustomDirectoryStore(
+                storageURL: root.appendingPathComponent("custom.json"),
+                safetyGuard: guardInstance
+            ),
+            historyStore: CleanupHistoryStore(storageURL: root.appendingPathComponent("history.json")),
+            excludedItemStore: ExcludedItemStore(storageURL: root.appendingPathComponent("excluded.json")),
+            trashPerformer: FixtureTrashPerformer(directory: root.appendingPathComponent(".fixture-trash")),
+            scanEngine: engine
+        )
+
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+
+        let byName = Dictionary(uniqueKeysWithValues: model.filteredItems.map { ($0.fileName, $0) })
+        let homeLog = try XCTUnwrap(byName["home.log"])
+        let staleSession = try XCTUnwrap(byName["stale-session.jsonl"])
+        let recentSession = try XCTUnwrap(byName["recent-session.jsonl"])
+        let compressed = try XCTUnwrap(byName["rollout-compressed.jsonl.zst"])
+        let archived = try XCTUnwrap(byName["rollout-archived.jsonl"])
+        let codexRecent = try XCTUnwrap(byName["codex-recent-active.log"])
+        let manualUnattributed = try XCTUnwrap(byName["manual-unattributed.tar"])
+        let authItem = try XCTUnwrap(byName["auth.json"])
+        let pluginItem = try XCTUnwrap(byName["plugins"])
+
+        let expectedReviewBulkIDs: Set<String> = [staleSession.id, recentSession.id, compressed.id, archived.id]
+        let expectedAllBulkIDs: Set<String> = expectedReviewBulkIDs.union([homeLog.id])
+
+        // 核对安全边界标志
+        XCTAssertTrue(codexRecent.requiresIndividualSelection && !codexRecent.isBulkSelectable)
+        XCTAssertTrue(manualUnattributed.requiresIndividualSelection && !manualUnattributed.isBulkSelectable)
+        XCTAssertFalse(authItem.isBulkSelectable)
+        XCTAssertFalse(pluginItem.isBulkSelectable)
+
+        // 空间总览中「按需清理」分组混合了 4 条可批量项 + 2 条仅手选项
+        let overviewReviewHeader = try XCTUnwrap(model.displayedRows.compactMap { row -> SectionHeaderRow? in
+            if case let .sectionHeader(header) = row, header.recommendation == .reviewSuggested { return header }
+            return nil
+        }.first)
+        XCTAssertTrue(overviewReviewHeader.supportsBulkSelection)
+        XCTAssertEqual(overviewReviewHeader.bulkSelectableCount, 4)
+        XCTAssertEqual(overviewReviewHeader.individualOnlyCount, 2)
+
+        // 分组头「全选本组」仅选中 4 条 AI 按需项，跳过 /tmp 近期项、/tmp 未归属项与不建议清理项
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertEqual(model.selectedItemIDs, expectedReviewBulkIDs)
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 验证两种勾选态在 Light / Dark 模式下渲染无异常
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+            let host = NSHostingView(rootView: ItemListView(viewModel: model, isVisible: true))
+            host.appearance = NSAppearance(named: appearanceName)
+            host.frame = NSRect(x: 0, y: 0, width: 928, height: 760)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(host.fittingSize.width, 0)
+            XCTAssertGreaterThan(host.fittingSize.height, 0)
+        }
+
+        // 再次点击「取消本组」一键取消
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+        XCTAssertFalse(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 控制栏「全选」覆盖建议清理 + AI 按需项，依然严格跳过 /tmp 近期、/tmp 未归属和 .notRecommended
+        model.selectAllVisible()
+        XCTAssertEqual(model.selectedItemIDs, expectedAllBulkIDs)
+        XCTAssertTrue(model.isSectionAllBulkSelected(.recommended))
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 手动勾选 /tmp 近期与未归属项后执行反选：手动勾选项保留，其余仅在可批量项内反选
+        model.clearAllSelection()
+        model.toggleSelection(for: codexRecent)
+        model.toggleSelection(for: manualUnattributed)
+        model.invertVisibleSelection()
+        XCTAssertEqual(model.selectedItemIDs, expectedAllBulkIDs.union([codexRecent.id, manualUnattributed.id]))
+        model.invertVisibleSelection()
+        XCTAssertEqual(model.selectedItemIDs, [codexRecent.id, manualUnattributed.id])
+
+        // 切换到 Codex 客户端（混合 2 条归档 + 1 条 /tmp 近期项）
+        model.clearAllSelection()
+        model.sidebarSelection = .client("codex")
+        let codexReviewHeader = try XCTUnwrap(model.displayedRows.compactMap { row -> SectionHeaderRow? in
+            if case let .sectionHeader(header) = row, header.recommendation == .reviewSuggested { return header }
+            return nil
+        }.first)
+        XCTAssertTrue(codexReviewHeader.supportsBulkSelection)
+        XCTAssertEqual(codexReviewHeader.bulkSelectableCount, 2)
+        XCTAssertEqual(codexReviewHeader.individualOnlyCount, 1)
+
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertEqual(model.selectedItemIDs, [compressed.id, archived.id])
+        XCTAssertFalse(model.isSelected(codexRecent))
+        XCTAssertTrue(model.isSectionAllBulkSelected(.reviewSuggested))
+
+        // 搜索仅命中 /tmp 近期项时，分组头自动退回「仅逐条手选」
+        model.searchText = "codex-recent-active.log"
+        let recentOnlyHeader = try XCTUnwrap(model.displayedRows.compactMap { row -> SectionHeaderRow? in
+            if case let .sectionHeader(header) = row, header.recommendation == .reviewSuggested { return header }
+            return nil
+        }.first)
+        XCTAssertFalse(recentOnlyHeader.supportsBulkSelection)
+        XCTAssertEqual(recentOnlyHeader.bulkSelectableCount, 0)
+        XCTAssertEqual(recentOnlyHeader.individualOnlyCount, 1)
+        model.searchText = ""
+
+        // 切换到「/tmp 未归属临时项」：全组均为不可批量项，保持仅手选与安全提示条
+        model.clearAllSelection()
+        model.sidebarSelection = .client(TempDirectoryScanner.unattributedTempClientID)
+        XCTAssertNotNil(model.scopeNoticeBanner)
+        let unattributedHeader = try XCTUnwrap(model.displayedRows.compactMap { row -> SectionHeaderRow? in
+            if case let .sectionHeader(header) = row, header.recommendation == .reviewSuggested { return header }
+            return nil
+        }.first)
+        XCTAssertFalse(unattributedHeader.supportsBulkSelection)
+        XCTAssertEqual(unattributedHeader.bulkSelectableCount, 0)
+        XCTAssertEqual(unattributedHeader.individualOnlyCount, 1)
+        model.toggleSectionSelection(.reviewSuggested)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
     }
 
     @MainActor

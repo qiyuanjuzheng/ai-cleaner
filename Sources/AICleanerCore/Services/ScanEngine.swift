@@ -26,7 +26,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
     public let safetyGuard: SafetyGuard
     public let sizer: DirectorySizer
     public let sessionReader: SessionMetadataReader
-    /// 聊天会话超过该天数未活跃时，归入「按需清理」并要求逐条勾选（默认 14 天）
+    /// 聊天会话超过该天数未活跃时，归入「按需清理」并标注历史未活跃提示（默认 14 天）
     public let staleSessionDays: Int
     /// `/tmp` 与系统用户临时目录中 AI 临时项的安全冷却时间（默认 24 小时）
     public let tempCooldownHours: Int
@@ -720,7 +720,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
         )
     }
 
-    /// 旧会话和归档会话需由用户逐条确认。
+    /// 旧会话和归档会话统一归入「按需清理」，支持在分组头一键全选/取消本组或逐条勾选。
     private func resolveRecommendation(
         rule: ScanRule,
         url: URL,
@@ -732,12 +732,12 @@ public struct ScanEngine: ScanPerforming, Sendable {
         }
 
         if rule.isSessionArchive == true || url.pathExtension.lowercased() == "zst" {
-            return (.reviewSuggested, "已归档的历史会话，确认无需保留后可逐条勾选。", true)
+            return (.reviewSuggested, "已归档的历史会话，确认无需保留后可勾选清理。", false)
         }
 
         let staleCutoff = Calendar.current.date(byAdding: .day, value: -staleSessionDays, to: referenceNow) ?? referenceNow
         if modifiedAt < staleCutoff {
-            return (.reviewSuggested, "超过 \(staleSessionDays) 天未活跃，确认无需保留后可逐条勾选。", true)
+            return (.reviewSuggested, "超过 \(staleSessionDays) 天未活跃的历史会话，确认无需保留后可勾选清理。", false)
         }
 
         return (rule.recommendation, rule.explanation, false)

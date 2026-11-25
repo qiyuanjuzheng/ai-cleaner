@@ -160,7 +160,7 @@ final class SessionScanningTests: XCTestCase {
         XCTAssertEqual(after.allItems.first?.url.path, keepSession.path)
     }
 
-    func testArchivedSessionsKeepLocalNamesAndIndividualSelection() throws {
+    func testArchivedAndStaleSessionsKeepLocalNamesAndAllowBulkSelection() throws {
         let id = "019dd867-38a5-73e3-b3c5-4a0bdfbf2a95"
         let otherID = "01a199b5-4a6f-7591-af48-46874459a62c"
         let rollout = "rollout-2026-04-29T16-42-16-\(id)"
@@ -184,12 +184,31 @@ final class SessionScanningTests: XCTestCase {
             to: sandbox.homeURL.appendingPathComponent(".codex/session_index.jsonl")
         )
         let doubao = try sandbox.createFile(relativeToHome: ".doubao/lark-chats/2026-11-24.json", byteCount: 128)
+        let oldDate = Date().addingTimeInterval(-20 * 86_400)
+        let staleClaude = sandbox.homeURL.appendingPathComponent(
+            ".claude/projects/-Users-alice-workspace-stale/22222222-aaaa-bbbb-cccc-000000000002.jsonl"
+        )
+        try writeUTF8(
+            #"{"type":"user","cwd":"/Users/alice/workspace/stale","message":{"role":"user","content":"两周前的历史会话"}}"#,
+            to: staleClaude
+        )
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: staleClaude.path)
 
         let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
-        let items = [compressed, archived, doubao].compactMap { url in report.allItems.first { $0.url == url } }
-        XCTAssertEqual(items.count, 3)
-        XCTAssertTrue(items.allSatisfy { $0.recommendation == .reviewSuggested && !$0.isBulkSelectable })
-        XCTAssertEqual(items.map(\.sessionTitle), ["压缩任务的最新名称", "已归档任务", nil])
+        let items = [compressed, archived, doubao, staleClaude].compactMap { url in
+            report.allItems.first { $0.url == url }
+        }
+        XCTAssertEqual(items.count, 4)
+        XCTAssertTrue(items.allSatisfy {
+            $0.recommendation == .reviewSuggested
+                && !$0.requiresIndividualSelection
+                && $0.isBulkSelectable
+                && !$0.safetyNote.contains("逐条勾选")
+        })
+        XCTAssertEqual(items.first { $0.url == compressed }?.safetyNote, "已归档的历史会话，确认无需保留后可勾选清理。")
+        XCTAssertEqual(items.first { $0.url == archived }?.safetyNote, "已归档的历史会话，确认无需保留后可勾选清理。")
+        XCTAssertEqual(items.first { $0.url == staleClaude }?.safetyNote, "超过 14 天未活跃的历史会话，确认无需保留后可勾选清理。")
+        XCTAssertEqual(items.prefix(3).map(\.sessionTitle), ["压缩任务的最新名称", "已归档任务", nil])
         XCTAssertEqual(items.first { $0.url == archived }?.sessionProjectName, "archived-project")
         XCTAssertEqual(items.first { $0.url == doubao }?.displayName, "2026-11-24.json")
         XCTAssertFalse(report.allItems.contains { $0.fileName == "session_index.jsonl" })

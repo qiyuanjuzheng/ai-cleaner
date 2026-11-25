@@ -704,6 +704,8 @@ struct StorageRingGauge: View {
     }
 
     var body: some View {
+        let centerValue = centerBytes
+        let centerText = CleanerFormatting.formatBytes(centerValue)
         let total = max(1.0, Double(totalBytes))
         let recFrac = appeared ? Double(recommendedBytes) / total : 0
         let revFrac = appeared ? Double(reviewBytes) / total : 0
@@ -800,11 +802,14 @@ struct StorageRingGauge: View {
                 Text(centerLabel)
                     .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(CleanerFormatting.formatBytes(centerBytes))
+                Text(centerText)
                     .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(centerColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(centerValue)))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: centerText)
+                    .frame(maxWidth: .infinity)
             }
             .padding(.horizontal, 10)
         }

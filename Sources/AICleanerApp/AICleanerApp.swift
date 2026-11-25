@@ -96,7 +96,7 @@ struct AICleanerApp: App {
                 }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
 
-                Button("查看移入废纸篓趋势") {
+                Button(CleanupHistoryCopy.openActionTitle) {
                     viewModel.sidebarSelection = .history
                 }
                 .keyboardShortcut("2", modifiers: .command)

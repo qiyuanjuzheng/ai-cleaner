@@ -518,7 +518,7 @@ struct ScanReadyHeroView: View {
                     }
                     .pointingHandCursor(isHistoryHovered && allowsPointerCursor)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isHistoryHovered)
-                    .help("查看移入废纸篓趋势")
+                    .help(CleanupHistoryCopy.openActionTitle)
                 }
             }
             .padding(.top, 6)
@@ -918,14 +918,30 @@ struct StorageRingGauge: View {
 
 struct SparkleBurstOverlay: View {
     let triggerID: UUID
+    let isVisible: Bool
+    let consumeTrigger: ((UUID) -> Bool)?
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
     @State private var startDate: Date = Date()
-    @State private var isBurstActive: Bool = true
+    @State private var isBurstActive: Bool
+
+    init(
+        triggerID: UUID,
+        isVisible: Bool = true,
+        initialBurstActive: Bool = false,
+        consumeTrigger: ((UUID) -> Bool)? = nil
+    ) {
+        self.triggerID = triggerID
+        self.isVisible = isVisible
+        self.consumeTrigger = consumeTrigger
+        _isBurstActive = State(initialValue: initialBurstActive)
+    }
 
     private var playbackPolicy: AnimationPlaybackPolicy {
         AnimationPlaybackPolicy(
             isWindowVisibleOnScreen: isWindowVisibleOnScreen,
+            isPageVisible: isVisible,
             isFeatureActive: isBurstActive,
             reduceMotion: reduceMotion
         )
@@ -956,25 +972,40 @@ struct SparkleBurstOverlay: View {
     }
 
     var body: some View {
-        Group {
-            if !reduceMotion && isBurstActive {
-                TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
-                    let elapsed = timeline.date.timeIntervalSince(startDate)
-                    if elapsed < 1.35 {
-                        Canvas { context, size in
-                            drawParticles(in: &context, size: size, elapsed: elapsed)
+        Color.clear
+            .overlay {
+                if !reduceMotion && isBurstActive {
+                    TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
+                        let elapsed = timeline.date.timeIntervalSince(startDate)
+                        if elapsed < 1.35 {
+                            Canvas { context, size in
+                                drawParticles(in: &context, size: size, elapsed: elapsed)
+                            }
                         }
                     }
                 }
             }
-        }
-        .allowsHitTesting(false)
-        .task(id: triggerID) {
-            startDate = Date()
-            isBurstActive = true
-            try? await Task.sleep(for: .milliseconds(1400))
-            isBurstActive = false
-        }
+            .allowsHitTesting(false)
+            .onChange(of: isVisible) { _, visible in
+                if !visible && isBurstActive {
+                    isBurstActive = false
+                }
+            }
+            .task(id: triggerID) {
+                guard isVisible else {
+                    isBurstActive = false
+                    return
+                }
+                let shouldPlay = consumeTrigger?(triggerID) ?? true
+                guard shouldPlay, !reduceMotion else {
+                    isBurstActive = false
+                    return
+                }
+                startDate = Date()
+                isBurstActive = true
+                defer { isBurstActive = false }
+                try? await Task.sleep(for: .milliseconds(1400))
+            }
     }
 
     private func drawParticles(in context: inout GraphicsContext, size: CGSize, elapsed: Double) {

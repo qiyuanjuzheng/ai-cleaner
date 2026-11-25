@@ -284,7 +284,7 @@ final class CleanerViewModel {
                 }
                 return
             }
-            // 从历史趋势页或已排除页返回刚才浏览的同一个客户端标签时，零重建直接瞬时恢复
+            // 从清理记录页或已排除页返回刚才浏览的同一个客户端标签时，零重建直接瞬时恢复
             if sidebarSelection == activeListScopeSelection && hasAppliedCurrentScope {
                 return
             }
@@ -349,6 +349,7 @@ final class CleanerViewModel {
         }
     }
     var cleanupCelebrationID: UUID = UUID()
+    @ObservationIgnored private(set) var playedCleanupCelebrationID: UUID? = nil
 
     var lastCleanupResult: CleanupResult?
     var errorBannerMessage: String?
@@ -1687,7 +1688,7 @@ final class CleanerViewModel {
                     _ = try self.historyStore.record(result: result)
                     self.historyRecords = self.historyStore.load()
                 } catch {
-                    self.errorBannerMessage = "文件已移入废纸篓，保存统计记录失败：\(error.localizedDescription)"
+                    self.errorBannerMessage = "文件已移入废纸篓，保存清理记录失败：\(error.localizedDescription)"
                 }
 
                 // 清理完成后直接从内存扫描报告原位扣减已移入废纸篓的条目，不再自动触发全量磁盘重扫
@@ -1714,7 +1715,7 @@ final class CleanerViewModel {
         do {
             historyRecords = try historyStore.delete(id: id)
         } catch {
-            errorBannerMessage = "删除统计记录失败：\(error.localizedDescription)"
+            errorBannerMessage = "删除清理记录失败：\(error.localizedDescription)"
         }
     }
 
@@ -1723,8 +1724,26 @@ final class CleanerViewModel {
             try historyStore.clearAll()
             historyRecords = []
         } catch {
-            errorBannerMessage = "清空统计记录失败：\(error.localizedDescription)"
+            errorBannerMessage = "清空清理记录失败：\(error.localizedDescription)"
         }
+    }
+
+    /// 当前清理结果对应的庆祝粒子事件是否尚未消费播放
+    func shouldPlayCleanupCelebration(for id: UUID) -> Bool {
+        guard let result = lastCleanupResult, !result.hasFailures, result.trashedCount > 0 else {
+            return false
+        }
+        return cleanupCelebrationID == id && playedCleanupCelebrationID != id
+    }
+
+    /// 原子消费一次清理庆祝粒子事件：同一次清理结果仅首次返回 `true`，切页返回或视图重建后返回 `false`
+    @discardableResult
+    func consumeCleanupCelebration(for id: UUID) -> Bool {
+        guard shouldPlayCleanupCelebration(for: id) else {
+            return false
+        }
+        playedCleanupCelebrationID = id
+        return true
     }
 
     func clientTint(for clientID: String) -> Color {

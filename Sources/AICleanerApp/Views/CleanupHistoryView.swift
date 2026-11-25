@@ -2,8 +2,86 @@ import AICleanerCore
 import Charts
 import SwiftUI
 
+enum CleanupHistoryCopy {
+    static let title = "清理记录"
+    static let openActionTitle = "查看清理记录"
+    static let clearRecordsMenuTitle = "清空清理记录…"
+    static let clearRecordsAlertTitle = "清空清理记录？"
+    static let clearRecordsConfirmTitle = "清空清理记录"
+    static let clearRecordsAlertMessage = "此操作会清空清理记录和排行，废纸篓中的文件会保留。"
+    static let clearOptionsHelp = "清理记录选项"
+    static let deleteSingleRecordHelp = "删除这条清理记录（保留废纸篓文件）"
+    static let emptyStateTitle = "暂无清理记录"
+}
+
+enum CleanupHistoryChartGeometry {
+    /// 计算数据点在图表中对应的 X 轴视觉中心日期：
+    /// - `.cumulative`（累计折线/面积图）：直接落在 `pointDate`（当日 `00:00`）
+    /// - `.daily`（单日柱状图，`BarMark` 使用 `unit: .day`）：落在 `[startOfDay, nextDayStart)` 的水平正中心（通常为当日 `12:00`，自动兼容夏令时）
+    static func anchorDate(
+        for pointDate: Date,
+        mode: CleanupTrendMetricMode,
+        calendar: Calendar = .current
+    ) -> Date {
+        switch mode {
+        case .cumulative:
+            return pointDate
+        case .daily:
+            let dayStart = calendar.startOfDay(for: pointDate)
+            let nextDayStart = calendar.date(byAdding: .day, value: 1, to: dayStart)
+                ?? dayStart.addingTimeInterval(86_400)
+            return dayStart.addingTimeInterval(nextDayStart.timeIntervalSince(dayStart) * 0.5)
+        }
+    }
+
+    /// 根据图表悬停反算出的 `rawDate` 吸附到目标数据点：
+    /// - `.daily` 按自然日分桶：优先按 `[dayStart, nextDayStart)` 精准命中所在自然日（覆盖柱子左边缘、中心、右边缘及跨日 `00:00` 边界），越界时钳制至首/尾点；
+    /// - `.daily` 按周分桶 或 `.cumulative`：按各点视觉中心 `anchorDate` 计算最近点，等距时吸附较新一天。
+    static func nearestPoint(
+        to rawDate: Date,
+        in points: [CleanupTrendPoint],
+        mode: CleanupTrendMetricMode,
+        usesWeeklyBuckets: Bool = false,
+        calendar: Calendar = .current
+    ) -> CleanupTrendPoint? {
+        guard !points.isEmpty else { return nil }
+
+        if mode == .daily && !usesWeeklyBuckets {
+            let hoveredDay = calendar.startOfDay(for: rawDate)
+            if let exactMatch = points.first(where: { calendar.isDate($0.date, inSameDayAs: hoveredDay) }) {
+                return exactMatch
+            }
+            if let first = points.first, hoveredDay < calendar.startOfDay(for: first.date) {
+                return first
+            }
+            if let last = points.last, hoveredDay > calendar.startOfDay(for: last.date) {
+                return last
+            }
+        }
+
+        var bestPoint = points[0]
+        var bestDistance = abs(
+            anchorDate(for: bestPoint.date, mode: mode, calendar: calendar)
+                .timeIntervalSince(rawDate)
+        )
+
+        for point in points.dropFirst() {
+            let distance = abs(
+                anchorDate(for: point.date, mode: mode, calendar: calendar)
+                    .timeIntervalSince(rawDate)
+            )
+            if distance < bestDistance || (distance == bestDistance && point.date > bestPoint.date) {
+                bestPoint = point
+                bestDistance = distance
+            }
+        }
+        return bestPoint
+    }
+}
+
 struct CleanupHistoryView: View {
     @Bindable var viewModel: CleanerViewModel
+    var initialHoveredPointDate: Date? = nil
     @Namespace private var rangeNamespace
 
     @State private var chartRevealed: Bool = false
@@ -24,7 +102,8 @@ struct CleanupHistoryView: View {
                 HistoryTrendChartCard(
                     viewModel: viewModel,
                     summary: summary,
-                    chartRevealed: chartRevealed
+                    chartRevealed: chartRevealed,
+                    initialHoveredPointDate: initialHoveredPointDate
                 )
 
                 if !summary.isEmpty {
@@ -42,15 +121,15 @@ struct CleanupHistoryView: View {
                 }
             }
         }
-        .alert("清空统计记录？", isPresented: $showingClearAlert) {
+        .alert(CleanupHistoryCopy.clearRecordsAlertTitle, isPresented: $showingClearAlert) {
             Button("取消", role: .cancel) {}
-            Button("清空统计记录", role: .destructive) {
+            Button(CleanupHistoryCopy.clearRecordsConfirmTitle, role: .destructive) {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.20)) {
                     viewModel.clearAllHistoryRecords()
                 }
             }
         } message: {
-            Text("此操作会清空趋势和排行，废纸篓中的文件会保留。")
+            Text(CleanupHistoryCopy.clearRecordsAlertMessage)
         }
     }
 
@@ -58,7 +137,7 @@ struct CleanupHistoryView: View {
 
     private var headerRow: some View {
         HStack(alignment: .center, spacing: 12) {
-            Text("移入废纸篓趋势")
+            Text(CleanupHistoryCopy.title)
                 .font(.system(.title2, design: .rounded).weight(.bold))
 
             Spacer(minLength: 8)
@@ -102,7 +181,7 @@ struct CleanupHistoryView: View {
 
             if !summary.isEmpty {
                 Menu {
-                    Button("清空统计记录…", role: .destructive) {
+                    Button(CleanupHistoryCopy.clearRecordsMenuTitle, role: .destructive) {
                         showingClearAlert = true
                     }
                 } label: {
@@ -123,7 +202,7 @@ struct CleanupHistoryView: View {
                         .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
                 )
                 .fixedSize()
-                .help("统计选项")
+                .help(CleanupHistoryCopy.clearOptionsHelp)
             }
         }
         .frame(height: 44)
@@ -374,17 +453,29 @@ struct CleanupHistoryView: View {
     }
 }
 
-// MARK: - 3. 隔离的趋势图玻璃卡片（悬停光标仅局部重绘图表区，且吸附同日不重复触发状态变更）
+// MARK: - 3. 隔离的图表玻璃卡片（悬停光标仅局部重绘图表区，且吸附同日不重复触发状态变更）
 
-private struct HistoryTrendChartCard: View {
+struct HistoryTrendChartCard: View {
     @Bindable var viewModel: CleanerViewModel
     let summary: CleanupHistorySummary
     let chartRevealed: Bool
 
     @Namespace private var modeNamespace
-    @State private var hoveredPointDate: Date? = nil
+    @State private var hoveredPointDate: Date?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        viewModel: CleanerViewModel,
+        summary: CleanupHistorySummary,
+        chartRevealed: Bool,
+        initialHoveredPointDate: Date? = nil
+    ) {
+        self.viewModel = viewModel
+        self.summary = summary
+        self.chartRevealed = chartRevealed
+        _hoveredPointDate = State(initialValue: initialHoveredPointDate)
+    }
 
     private var periodLabel: String {
         summary.usesWeeklyBuckets ? "当周" : "当日"
@@ -497,6 +588,7 @@ private struct HistoryTrendChartCard: View {
         let mode = viewModel.historyMetricMode
         let metricLabel = chartMetricLabel
         let isCumulative = mode == .cumulative
+        let calendar = Calendar.current
         let emerald = AppTheme.color(for: .recommended)
         let cyan = Color(red: 0.20, green: 0.74, blue: 0.96)
         let maxRaw = points.map { mode.bytes(for: $0) }.max() ?? 0
@@ -550,7 +642,7 @@ private struct HistoryTrendChartCard: View {
                 ForEach(points) { point in
                     let yVal = chartRevealed ? mode.bytes(for: point) : 0
                     BarMark(
-                        x: .value("日期", point.date, unit: .day),
+                        x: .value("日期", point.date, unit: .day, calendar: calendar),
                         y: .value(metricLabel, yVal)
                     )
                     .cornerRadius(4)
@@ -567,19 +659,24 @@ private struct HistoryTrendChartCard: View {
 
             if let active = hoveredPoint {
                 let activeY = mode.bytes(for: active)
-                RuleMark(x: .value("日期", active.date))
+                let activeX = CleanupHistoryChartGeometry.anchorDate(
+                    for: active.date,
+                    mode: mode,
+                    calendar: calendar
+                )
+                RuleMark(x: .value("日期", activeX))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     .foregroundStyle(Color.primary.opacity(colorScheme == .dark ? 0.30 : 0.22))
 
                 PointMark(
-                    x: .value("日期", active.date),
+                    x: .value("日期", activeX),
                     y: .value(metricLabel, activeY)
                 )
                 .symbolSize(90)
                 .foregroundStyle(emerald.opacity(0.28))
 
                 PointMark(
-                    x: .value("日期", active.date),
+                    x: .value("日期", activeX),
                     y: .value(metricLabel, activeY)
                 )
                 .symbolSize(38)
@@ -625,12 +722,18 @@ private struct HistoryTrendChartCard: View {
                             let xPos = location.x - plotOriginX
                             if xPos >= 0 && xPos <= proxy.plotSize.width,
                                let rawDate: Date = proxy.value(atX: xPos),
-                               let nearest = points.min(by: {
-                                   abs($0.date.timeIntervalSince(rawDate)) < abs($1.date.timeIntervalSince(rawDate))
-                               }) {
+                               let nearest = CleanupHistoryChartGeometry.nearestPoint(
+                                   to: rawDate,
+                                   in: points,
+                                   mode: mode,
+                                   usesWeeklyBuckets: summary.usesWeeklyBuckets,
+                                   calendar: calendar
+                               ) {
                                 if hoveredPointDate != nearest.date {
                                     hoveredPointDate = nearest.date
                                 }
+                            } else if hoveredPointDate != nil {
+                                hoveredPointDate = nil
                             }
                         case .ended:
                             if hoveredPointDate != nil {
@@ -683,7 +786,7 @@ private struct HistoryTrendChartCard: View {
                         .foregroundStyle(AppTheme.color(for: .recommended))
                 }
 
-                Text("暂无清理记录")
+                Text(CleanupHistoryCopy.emptyStateTitle)
                     .font(.headline)
 
                 Button {
@@ -749,7 +852,7 @@ private struct HistoryLogRow: View {
                             .background(Circle().fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.06)))
                     }
                     .buttonStyle(.plain)
-                    .help("删除这条统计记录（保留废纸篓文件）")
+                    .help(CleanupHistoryCopy.deleteSingleRecordHelp)
                 } else {
                     Color.clear
                 }

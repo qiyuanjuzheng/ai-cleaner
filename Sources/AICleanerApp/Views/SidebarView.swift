@@ -262,6 +262,7 @@ struct SidebarView: View {
             .padding(.horizontal, 16)
             .frame(height: 34)
         }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func select(_ selection: SidebarSelection) {

@@ -1,10 +1,22 @@
 import AICleanerCore
 import SwiftUI
 
+enum ItemListLayoutRegion: Hashable {
+    case dashboard
+    case controls
+    case scopeNotice
+}
+
+extension EnvironmentValues {
+    // An optional background that exposes each region's rendered frame in hosted window tests.
+    @Entry var itemListLayoutProbe: ((ItemListLayoutRegion) -> AnyView)? = nil
+}
+
 struct ItemListView: View {
     @Bindable var viewModel: CleanerViewModel
     var isVisible: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.itemListLayoutProbe) private var layoutProbe
 
     var body: some View {
         if viewModel.report == nil {
@@ -34,22 +46,27 @@ struct ItemListView: View {
         } else {
             VStack(spacing: 0) {
                 HeroDashboardHeaderView(viewModel: viewModel, isVisible: isVisible)
+                    .background { layoutProbe?(.dashboard) }
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .padding(.bottom, 12)
 
                 ItemControlBarView(viewModel: viewModel)
+                    .background { layoutProbe?(.controls) }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
 
                 if let banner = viewModel.scopeNoticeBanner {
                     ScopeNoticeBannerView(banner: banner)
+                        .background { layoutProbe?(.scopeNotice) }
                         .padding(.horizontal, 20)
                         .padding(.bottom, 10)
+                        .layoutPriority(1)
                 }
 
                 VirtualizedItemListView(viewModel: viewModel)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 }
@@ -679,10 +696,8 @@ private struct ScopeNoticeBannerView: View {
                 Text(banner.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 10)

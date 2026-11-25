@@ -82,6 +82,7 @@ struct ContentView: View {
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                 // 智能悬浮操作岛（与列表页一同保活，切去清理记录/已排除再返回时不重建、不重播旧提示动效）
                 BottomActionBar(viewModel: viewModel, isVisible: isListPage)

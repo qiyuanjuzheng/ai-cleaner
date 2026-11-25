@@ -2721,6 +2721,10 @@ final class VirtualizedItemTableController {
 
     init() {
         let scrollView = NSScrollView()
+        for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            scrollView.setContentHuggingPriority(.defaultLow, for: axis)
+            scrollView.setContentCompressionResistancePriority(.defaultLow, for: axis)
+        }
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
@@ -2801,6 +2805,19 @@ struct VirtualizedItemTableView: NSViewRepresentable {
 
     func makeCoordinator() -> VirtualizedItemTableController {
         VirtualizedItemTableController()
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        // SwiftUI sizes the viewport. Only AppKit needs the full document height for scrolling.
+        CGSize(
+            width: viewportDimension(proposal.width, fallback: 320),
+            height: viewportDimension(proposal.height, fallback: 240)
+        )
+    }
+
+    private func viewportDimension(_ proposed: CGFloat?, fallback: CGFloat) -> CGFloat {
+        guard let proposed, proposed.isFinite else { return fallback }
+        return proposed
     }
 
     func makeNSView(context: Context) -> NSScrollView {

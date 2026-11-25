@@ -2,6 +2,7 @@
 import AICleanerCore
 import AppKit
 import Foundation
+import os
 import SwiftUI
 import XCTest
 
@@ -685,6 +686,179 @@ final class VirtualizedItemTableViewTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testPopulatedTableReportsViewportSizeForSwiftUIProposals() throws {
+        _ = NSApplication.shared
+        let home = makeTempSandbox()
+        let model = makeViewModel(home: home)
+
+        for count in [160, 5_100] {
+            model.report = makeSyntheticLargeReport(
+                home: home,
+                recommendedCount: count,
+                reviewCount: 0,
+                notRecommendedCount: 0
+            )
+            let measurements = OSAllocatedUnfairLock(initialState: Optional<TableProposalSizes>.none)
+            let hosting = NSHostingView(rootView: MeasureTableProposals(measurements: measurements) {
+                VirtualizedItemTableView(
+                    rows: model.displayedRows,
+                    rowsRevision: model.displayedRowsRevision,
+                    selectionRevision: model.selectionRevision,
+                    viewportID: model.listViewportID,
+                    colorScheme: .light,
+                    viewModel: model
+                )
+            })
+            let window = attachToOffscreenWindow(hosting, size: NSSize(width: 920, height: 640))
+            defer { window.close() }
+            hosting.layoutSubtreeIfNeeded()
+
+            let table = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? ItemTableView }.first)
+            XCTAssertGreaterThanOrEqual(table.numberOfRows, count)
+            XCTAssertGreaterThan(table.rect(ofRow: table.numberOfRows - 1).maxY, 8_000)
+            let viewport = try XCTUnwrap(table.enclosingScrollView)
+            for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+                XCTAssertEqual(viewport.contentHuggingPriority(for: axis), .defaultLow)
+                XCTAssertEqual(viewport.contentCompressionResistancePriority(for: axis), .defaultLow)
+            }
+
+            let sizes = try XCTUnwrap(measurements.withLock { $0 })
+            XCTAssertEqual(sizes.finite, CGSize(width: 752, height: 403))
+            XCTAssertEqual(sizes.zero, .zero)
+            XCTAssertEqual(sizes.mixed.width, 752)
+            XCTAssertEqual(sizes.zeroHeight.height, 0)
+            for size in [sizes.unspecified, sizes.infinity] {
+                XCTAssertGreaterThan(size.width, 0)
+                XCTAssertGreaterThan(size.height, 0)
+                XCTAssertLessThanOrEqual(size.width, 920)
+                XCTAssertLessThanOrEqual(size.height, 640)
+            }
+            XCTAssertEqual(sizes.mixed.height, sizes.unspecified.height)
+        }
+    }
+
+    @MainActor
+    func testWindowKeepsBothColumnsInBoundsWhenSwitchingToUnattributedTemp() throws {
+        let application = NSApplication.shared
+        let previousAppearance = application.appearance
+        defer { application.appearance = previousAppearance }
+
+        let home = makeTempSandbox()
+        let model = makeViewModel(home: home)
+        let builtIn = Array(BuiltInClientRules.allProfiles.prefix(24))
+        let unattributed = TempDirectoryScanner.unattributedTempProfile()
+        let otherTemp = TempDirectoryScanner.otherAITempProfile()
+        let profiles = builtIn + [unattributed, otherTemp]
+        model.report = ScanReport(
+            clientSummaries: profiles.map { profile in
+                let isUnattributed = profile.id == unattributed.id
+                let items = (0..<(isUnattributed ? 130 : 1)).map { index in
+                    let name = "layout-fixture-\(index).tmp"
+                    return CleanableItem(
+                        clientID: profile.id, clientName: profile.name,
+                        ruleID: "layout-fixture", displayName: name, fileName: name,
+                        url: home.appendingPathComponent(profile.id).appendingPathComponent(name),
+                        category: .temporary, recommendation: isUnattributed ? .reviewSuggested : .recommended,
+                        safetyNote: "布局测试", sizeBytes: 1_024, fileCount: 1,
+                        modifiedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                        isDirectory: false, isCustom: false, requiresIndividualSelection: isUnattributed
+                    )
+                }
+                return ClientScanSummary(profile: profile, items: items)
+            },
+            totalBuiltInProfilesCount: builtIn.count,
+            detectedBuiltInClientsCount: builtIn.count
+        )
+        XCTAssertGreaterThanOrEqual(model.builtInSidebarEntries.count, 20)
+
+        let hosting = NSHostingView(rootView: ContentView(viewModel: model)
+            .environment(\.itemListLayoutProbe) { region in AnyView(ItemListFrameProbe(region: region)) })
+        let window = attachToOffscreenWindow(hosting, size: NSSize(width: 1180, height: 760))
+        defer { window.close() }
+        window.toolbar = NSToolbar(identifier: "LayoutRegressionToolbar")
+        window.toolbarStyle = .unified
+        window.orderBack(nil)
+
+        var bannerHeights: [CGFloat] = []
+        for size in [NSSize(width: 1020, height: 660), NSSize(width: 1180, height: 760)] {
+            window.setFrame(NSRect(origin: window.frame.origin, size: size), display: false)
+            layoutHostedWindow(window)
+            for selection in [
+                SidebarSelection.allClients, .client(unattributed.id), .client(builtIn[0].id),
+                .client(otherTemp.id), .history, .excluded, .allClients
+            ] {
+                model.sidebarSelection = selection
+                layoutHostedWindow(window)
+                let visibleBounds = window.contentLayoutRect.insetBy(dx: -1, dy: -1)
+                XCTAssertEqual(window.frame.size, size, "\(selection)")
+
+                let views = descendants(of: hosting)
+                let scrollViews = views.compactMap { $0 as? NSScrollView }
+                let sidebar = try XCTUnwrap(scrollViews.first { scroll in
+                    scroll.bounds.width > 0 && scroll.bounds.width <= 300
+                }, "侧栏缺少滚动视口")
+                let sidebarFrame = sidebar.convert(sidebar.bounds, to: nil)
+                XCTAssertLessThanOrEqual(sidebarFrame.height, window.contentLayoutRect.height)
+                XCTAssertTrue(visibleBounds.contains(sidebarFrame), "\(selection): \(sidebarFrame)")
+
+                if selection.isListScope {
+                    let table = try XCTUnwrap(scrollViews.first { $0.documentView is ItemTableView })
+                    let tableFrame = table.convert(table.bounds, to: nil)
+                    XCTAssertGreaterThan(tableFrame.height, 0)
+                    XCTAssertTrue(visibleBounds.contains(tableFrame), "\(selection): \(tableFrame)")
+
+                    let probes = views.compactMap { $0 as? ItemListFrameProbe.FrameView }
+                    let regions: [ItemListLayoutRegion] = selection == .client(unattributed.id)
+                        ? [.dashboard, .controls, .scopeNotice]
+                        : [.dashboard, .controls]
+                    var previousBottom = visibleBounds.maxY
+                    for region in regions {
+                        let probe = try XCTUnwrap(probes.first { $0.region == region }, "\(region)")
+                        let frame = probe.convert(probe.bounds, to: nil)
+                        XCTAssertFalse(frame.isEmpty, "\(region)")
+                        XCTAssertTrue(visibleBounds.contains(frame), "\(region): \(frame)")
+                        XCTAssertLessThanOrEqual(frame.maxY, previousBottom + 1, "\(region)")
+                        previousBottom = frame.minY
+                        if region == .scopeNotice { bannerHeights.append(frame.height) }
+                    }
+                    XCTAssertLessThanOrEqual(tableFrame.maxY, previousBottom + 1)
+                }
+
+                if selection == .client(unattributed.id) {
+                    XCTAssertEqual(model.filteredItems.count, 130)
+                    XCTAssertNotNil(model.scopeNoticeBanner)
+                    let clip = sidebar.contentView
+                    let top = clip.bounds.origin
+                    let document = try XCTUnwrap(sidebar.documentView)
+                    XCTAssertGreaterThan(document.bounds.height, clip.bounds.height)
+                    let scrolledBounds = clip.constrainBoundsRect(clip.bounds.offsetBy(dx: 0, dy: 200))
+                    clip.scroll(to: scrolledBounds.origin)
+                    sidebar.reflectScrolledClipView(clip)
+                    layoutHostedWindow(window)
+                    XCTAssertGreaterThan(clip.bounds.origin.y, top.y, "切到未归属分组后侧栏应当可滚动")
+                    clip.scroll(to: top)
+                    sidebar.reflectScrolledClipView(clip)
+                }
+            }
+        }
+        XCTAssertEqual(bannerHeights.count, 2)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(bannerHeights.first), try XCTUnwrap(bannerHeights.last))
+    }
+
+    @MainActor
+    private func descendants(of view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { descendants(of: $0) }
+    }
+
+    @MainActor
+    private func layoutHostedWindow(_ window: NSWindow) {
+        window.layoutIfNeeded()
+        window.contentView?.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        window.layoutIfNeeded()
+    }
+
     // MARK: - Test Helpers
 
     private func makeTempSandbox() -> URL {
@@ -969,5 +1143,47 @@ final class VirtualizedItemTableViewTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+}
+
+private typealias TableProposalSizes = (
+    finite: CGSize, zero: CGSize, mixed: CGSize, zeroHeight: CGSize, unspecified: CGSize, infinity: CGSize
+)
+
+private struct ItemListFrameProbe: NSViewRepresentable {
+    let region: ItemListLayoutRegion
+
+    final class FrameView: NSView {
+        var region: ItemListLayoutRegion?
+    }
+
+    func makeNSView(context: Context) -> FrameView {
+        FrameView()
+    }
+
+    func updateNSView(_ nsView: FrameView, context: Context) {
+        nsView.region = region
+    }
+}
+
+private struct MeasureTableProposals: Layout {
+    let measurements: OSAllocatedUnfairLock<TableProposalSizes?>
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let table = subviews[0]
+        let sizes = (
+            table.sizeThatFits(ProposedViewSize(width: 752, height: 403)),
+            table.sizeThatFits(.zero),
+            table.sizeThatFits(ProposedViewSize(width: 752, height: nil)),
+            table.sizeThatFits(ProposedViewSize(width: .infinity, height: 0)),
+            table.sizeThatFits(.unspecified),
+            table.sizeThatFits(.infinity)
+        )
+        measurements.withLock { $0 = sizes }
+        return CGSize(width: 920, height: 640)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }

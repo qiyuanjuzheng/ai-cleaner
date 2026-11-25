@@ -33,7 +33,7 @@ struct ItemListView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: viewModel.isScanning)
         } else {
             VStack(spacing: 0) {
-                HeroDashboardHeaderView(viewModel: viewModel)
+                HeroDashboardHeaderView(viewModel: viewModel, isVisible: isVisible)
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
                     .padding(.bottom, 12)
@@ -58,6 +58,7 @@ struct ItemListView: View {
 
 private struct HeroDashboardHeaderView: View {
     @Bindable var viewModel: CleanerViewModel
+    var isVisible: Bool = true
     @Namespace private var tierNamespace
     @State private var hoveredRecommendation: CleanupRecommendation? = nil
     @Environment(\.colorScheme) private var colorScheme
@@ -90,7 +91,8 @@ private struct HeroDashboardHeaderView: View {
                     reviewBytes: viewModel.scopedReviewSuggestedBytes,
                     protectedBytes: viewModel.scopedProtectedBytes,
                     highlightedTier: highlightedRingTier,
-                    isScanning: viewModel.isScanning
+                    isScanning: viewModel.isScanning,
+                    isVisible: isVisible
                 )
 
                 VStack(alignment: .leading, spacing: 11) {
@@ -210,7 +212,7 @@ private struct HeroDashboardHeaderView: View {
         )
         .overlay(alignment: .top) {
             if viewModel.isScanning {
-                AuroraScanSweepBar()
+                AuroraScanSweepBar(isVisible: isVisible)
                     .padding(.horizontal, 14)
                     .transition(.opacity)
             }

@@ -6,6 +6,7 @@ struct ContentView: View {
     @Bindable var viewModel: CleanerViewModel
     @State private var hasVisitedHistory: Bool = false
     @State private var hasVisitedExcluded: Bool = false
+    @State private var isWindowVisibleOnScreen: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -19,6 +20,15 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 252, max: 300)
         } detail: {
             ZStack(alignment: .bottom) {
+                WindowVisibilityObserver { isVisible in
+                    if isWindowVisibleOnScreen != isVisible {
+                        isWindowVisibleOnScreen = isVisible
+                    }
+                }
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
                 AmbientAuroraBackdrop(accentColor: viewModel.activeAccentColor)
                     .animation(
                         reduceMotion ? nil : .easeOut(duration: 0.20),
@@ -81,6 +91,7 @@ struct ContentView: View {
                 }
             }
         }
+        .environment(\.isWindowVisibleOnScreen, isWindowVisibleOnScreen)
         .navigationSplitViewStyle(.balanced)
         .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbar {

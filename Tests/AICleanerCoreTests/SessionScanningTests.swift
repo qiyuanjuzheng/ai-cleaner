@@ -160,6 +160,41 @@ final class SessionScanningTests: XCTestCase {
         XCTAssertEqual(after.allItems.first?.url.path, keepSession.path)
     }
 
+    func testArchivedSessionsKeepLocalNamesAndIndividualSelection() throws {
+        let id = "019dd867-38a5-73e3-b3c5-4a0bdfbf2a95"
+        let otherID = "01a199b5-4a6f-7591-af48-46874459a62c"
+        let rollout = "rollout-2026-04-29T16-42-16-\(id)"
+        let compressed = try sandbox.createFile(
+            relativeToHome: ".codex/sessions/2026/04/29/\(rollout).jsonl.zst", byteCount: 128
+        )
+        let archived = sandbox.homeURL.appendingPathComponent(
+            ".codex/archived_sessions/rollout-2026-11-02T08-42-37-\(otherID).jsonl"
+        )
+        try writeUTF8(
+            #"{"type":"session_meta","payload":{"id":""# + otherID + #"","cwd":"/fixture/archived-project"}}"#,
+            to: archived
+        )
+        try writeUTF8(
+            """
+            {"id":"\(id)","thread_name":"较早的名称"}
+            malformed entry
+            {"id":"\(otherID)","thread_name":"已归档任务"}
+            {"id":"\(id.uppercased())","thread_name":"压缩任务的最新名称"}
+            """,
+            to: sandbox.homeURL.appendingPathComponent(".codex/session_index.jsonl")
+        )
+        let doubao = try sandbox.createFile(relativeToHome: ".doubao/lark-chats/2026-11-24.json", byteCount: 128)
+
+        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let items = [compressed, archived, doubao].compactMap { url in report.allItems.first { $0.url == url } }
+        XCTAssertEqual(items.count, 3)
+        XCTAssertTrue(items.allSatisfy { $0.recommendation == .reviewSuggested && !$0.isBulkSelectable })
+        XCTAssertEqual(items.map(\.sessionTitle), ["压缩任务的最新名称", "已归档任务", nil])
+        XCTAssertEqual(items.first { $0.url == archived }?.sessionProjectName, "archived-project")
+        XCTAssertEqual(items.first { $0.url == doubao }?.displayName, "2026-11-24.json")
+        XCTAssertFalse(report.allItems.contains { $0.fileName == "session_index.jsonl" })
+    }
+
     private func writeUTF8(_ content: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(content.utf8).write(to: url)

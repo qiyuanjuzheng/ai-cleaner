@@ -18,6 +18,74 @@ private struct FixtureTrashPerformer: TrashPerforming {
 
 final class CleanerViewModelTests: XCTestCase {
     @MainActor
+    func testSessionRowsShowSavedTitlesAndKeepReadableFallbacks() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let project = ".claude/projects/-Users-fixture-demo"
+        let longTitle = String(repeating: "合成会话标题 ", count: 32) + "结尾"
+        let longRecord = #"{"type":"custom-title","customTitle":""# + longTitle + #""}"#
+        try write(
+            [
+                #"{"type":"user","cwd":"/Users/fixture/demo","message":{"role":"user","content":"原始提问"}}"#,
+                #"{"type":"custom-title","customTitle":"旧标题"}"#,
+                String(repeating: #"{"type":"assistant"}"# + "\n", count: 4_000),
+                longRecord,
+                #"{"type":"ai-title","aiTitle":"自动生成标题"}"#
+            ].joined(separator: "\n"),
+            at: "\(project)/titled.jsonl", in: home, modifiedAt: Date().addingTimeInterval(-20 * 86_400)
+        )
+        try write(
+            """
+            {"type":"user","message":{"role":"user","content":"回退到首条提问"}}
+            {"type":"custom-title","customTitle":"   "}
+            """,
+            at: "\(project)/fallback.jsonl", in: home
+        )
+        try write(
+            """
+            {"type":"user","message":{"role":"user","content":"旧版首条提问"}}
+            {"type":"summary","summary":"客户端保存的展示名称"}
+            """,
+            at: "\(project)/summary.jsonl", in: home
+        )
+        try write(
+            #"{"type":"session","cwd":"/Users/fixture/pi-project"}"# + "\n"
+                + #"{"type":"session_info","name":"Pi 保存的名称"}"#,
+            at: ".pi/agent/sessions/--Users-fixture-pi-project--/named.jsonl", in: home
+        )
+        let unnamed = "7a0760df-cdb2-46b9-b6fd-ba88bdd62303.jsonl"
+        try write("invalid record", at: ".claude/transcripts/\(unnamed)", in: home)
+        try write(
+            #"{"type":"ai-title","aiTitle":"转录归档的标题"}"#,
+            at: ".claude/transcripts/archived.jsonl", in: home
+        )
+
+        let model = makeViewModel(home: home)
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+
+        let rows = Dictionary(uniqueKeysWithValues: model.displayedRows.compactMap { entry -> (String, ItemDisplayRow)? in
+            if case let .item(row) = entry { return (row.item.fileName, row) }
+            return nil
+        })
+        let titled = try XCTUnwrap(rows["titled.jsonl"])
+        XCTAssertEqual(titled.title, longTitle)
+        XCTAssertTrue(titled.detailText.contains("demo"))
+        XCTAssertTrue(titled.detailText.contains(titled.item.safetyNote))
+        XCTAssertFalse(titled.dateText.isEmpty)
+        XCTAssertFalse(titled.sizeText.isEmpty)
+        XCTAssertEqual(rows["fallback.jsonl"]?.title, "demo · 回退到首条提问")
+        XCTAssertEqual(rows["summary.jsonl"]?.title, "demo · 客户端保存的展示名称")
+        XCTAssertEqual(rows["named.jsonl"]?.title, "Pi 保存的名称")
+        XCTAssertEqual(rows[unnamed]?.title, "未命名会话")
+        XCTAssertEqual(rows["archived.jsonl"]?.title, "转录归档的标题")
+        XCTAssertEqual(rows["archived.jsonl"]?.item.isBulkSelectable, false)
+
+        model.searchText = "标题 结尾"
+        XCTAssertEqual(model.filteredItems.map(\.id), [titled.id])
+    }
+
+    @MainActor
     func testOldAndArchivedSessionsRequireIndividualSelection() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }

@@ -1,19 +1,34 @@
 import Foundation
 
-/// 聊天会话元数据轻量预览（严格只读，单文件仅读取前部有限字节，不修改任何文件）
+/// 聊天会话元数据轻量预览（严格只读，仅读取文件头尾的有限字节）
 public struct SessionPreview: Equatable, Sendable {
     public let projectName: String?
     public let promptSnippet: String?
+    public let title: String?
+    public let summary: String?
 
-    public init(projectName: String? = nil, promptSnippet: String? = nil) {
+    public init(
+        projectName: String? = nil,
+        promptSnippet: String? = nil,
+        title: String? = nil,
+        summary: String? = nil
+    ) {
         self.projectName = projectName
         self.promptSnippet = promptSnippet
+        self.title = title
+        self.summary = summary
     }
 }
 
+struct SessionItemMetadata {
+    let displayName: String
+    var title: String? = nil
+    var projectName: String? = nil
+}
+
 /// 面向各 AI 客户端本地聊天会话的轻量只读摘要解析器：
-/// - 支持 Claude Code、Codex（2025/2026 JSONL 与 `.jsonl.zst`）、Pi、Cursor 等会话命名与摘要；
-/// - 单文件仅读取头部最多 64 KB，保证上千条会话扫描依然快速且零副作用。
+/// - 从 Claude Code、Pi 的会话记录或 Codex 的本地索引读取会话标题。
+/// - 会话记录头尾各读取最多 64 KB，每次扫描仅加载一次 Codex 标题索引。
 public struct SessionMetadataReader: Sendable {
     private static let maxHeadBytes = 65_536
     private static let maxLinesToScan = 45
@@ -28,6 +43,20 @@ public struct SessionMetadataReader: Sendable {
         isDirectory: Bool,
         fileManager: FileManager = .default
     ) -> String {
+        projectSessionMetadata(
+            itemURL: itemURL,
+            projectFolderName: projectFolderName,
+            isDirectory: isDirectory,
+            fileManager: fileManager
+        ).displayName
+    }
+
+    func projectSessionMetadata(
+        itemURL: URL,
+        projectFolderName: String,
+        isDirectory: Bool,
+        fileManager: FileManager
+    ) -> SessionItemMetadata {
         let preview: SessionPreview
         if !isDirectory && itemURL.pathExtension.lowercased() == "jsonl" {
             preview = readJSONLPreview(from: itemURL)
@@ -45,81 +74,85 @@ public struct SessionMetadataReader: Sendable {
         }
 
         let projectLabel = preview.projectName ?? Self.decodeEncodedProjectName(projectFolderName)
+        let title = isDirectory ? nil : preview.title
         let shortID = Self.extractShortIdentifier(from: itemURL.deletingPathExtension().lastPathComponent)
 
-        if let snippet = preview.promptSnippet {
+        if let snippet = preview.summary ?? preview.promptSnippet {
             let suffix = isDirectory ? "（子代理/产物）" : ""
-            if let projectLabel, !projectLabel.isEmpty {
-                return "\(projectLabel) · \(snippet)\(suffix)"
-            }
-            return "\(snippet)\(suffix)"
+            let displayName = [projectLabel, snippet + suffix].compactMap { $0 }.joined(separator: " · ")
+            return SessionItemMetadata(displayName: displayName, title: title, projectName: projectLabel)
         }
 
         let fallbackKind = isDirectory ? "会话子代理/产物" : "会话记录"
-        if let projectLabel, !projectLabel.isEmpty {
-            return "\(projectLabel) · \(fallbackKind) (\(shortID))"
-        }
-        return "\(fallbackKind) (\(shortID))"
+        let displayName = [projectLabel, "\(fallbackKind) (\(shortID))"].compactMap { $0 }.joined(separator: " · ")
+        return SessionItemMetadata(displayName: displayName, title: title, projectName: projectLabel)
     }
 
     /// 为 Codex `rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl[.zst]` 构造可读展示名称
     public func buildRolloutSessionDisplayName(fileURL: URL) -> String {
+        rolloutSessionMetadata(fileURL: fileURL, codexTitles: [:]).displayName
+    }
+
+    private func rolloutSessionMetadata(fileURL: URL, codexTitles: [UUID: String]) -> SessionItemMetadata {
         let fileName = fileURL.lastPathComponent
         let parsed = Self.parseCodexRolloutName(fileName)
         let isCompressed = fileName.lowercased().hasSuffix(".zst")
+        let indexedTitle = parsed.id.flatMap { codexTitles[$0] }
 
+        let preview: SessionPreview
         if !isCompressed && fileName.lowercased().hasSuffix(".jsonl") {
-            let preview = readJSONLPreview(from: fileURL)
-            if let snippet = preview.promptSnippet {
-                if let project = preview.projectName, !project.isEmpty {
-                    return "\(project) · \(snippet)"
-                }
-                if let dateText = parsed.dateText {
-                    return "\(dateText) · \(snippet)"
-                }
-                return snippet
-            }
-            if let project = preview.projectName, !project.isEmpty {
-                if let dateText = parsed.dateText {
-                    return "\(project) · \(dateText) (\(parsed.shortID))"
-                }
-                return "\(project) · 会话记录 (\(parsed.shortID))"
-            }
+            preview = readJSONLPreview(from: fileURL)
+        } else {
+            preview = SessionPreview()
         }
 
-        let kindLabel = isCompressed ? "压缩会话归档" : "会话记录"
-        if let dateText = parsed.dateText {
-            return "\(dateText) · \(kindLabel) (\(parsed.shortID))"
+        let name: String
+        if let snippet = preview.summary ?? preview.promptSnippet {
+            name = [preview.projectName ?? parsed.dateText, snippet].compactMap { $0 }.joined(separator: " · ")
+        } else if let project = preview.projectName {
+            name = "\(project) · \(parsed.dateText ?? "会话记录") (\(parsed.shortID))"
+        } else if let date = parsed.dateText {
+            let kind = isCompressed ? "压缩会话归档" : "会话记录"
+            name = "\(date) · \(kind) (\(parsed.shortID))"
+        } else {
+            name = fileName
         }
-        return fileName
+        return SessionItemMetadata(displayName: name, title: indexedTitle ?? preview.title, projectName: preview.projectName)
     }
 
     /// 为扁平会话目录（一级子项）构造友好名称
     public func buildFlatSessionDisplayName(itemURL: URL, isDirectory: Bool) -> String {
+        flatSessionMetadata(itemURL: itemURL, isDirectory: isDirectory).displayName
+    }
+
+    func flatSessionMetadata(
+        itemURL: URL,
+        isDirectory: Bool,
+        codexTitles: [UUID: String] = [:]
+    ) -> SessionItemMetadata {
         let name = itemURL.lastPathComponent
-        if name.hasPrefix("rollout-") {
-            return buildRolloutSessionDisplayName(fileURL: itemURL)
+        if !isDirectory && name.hasPrefix("rollout-") {
+            return rolloutSessionMetadata(fileURL: itemURL, codexTitles: codexTitles)
         }
         if !isDirectory && name.lowercased().hasSuffix(".jsonl") {
             let preview = readJSONLPreview(from: itemURL)
-            if let snippet = preview.promptSnippet {
-                if let project = preview.projectName, !project.isEmpty {
-                    return "\(project) · \(snippet)"
-                }
-                return snippet
+            var displayName = name
+            if let snippet = preview.summary ?? preview.promptSnippet {
+                displayName = [preview.projectName, snippet].compactMap { $0 }.joined(separator: " · ")
             }
+            return SessionItemMetadata(displayName: displayName, title: preview.title, projectName: preview.projectName)
         }
         if isDirectory && (name.hasPrefix("Users-") || name.hasPrefix("-Users-")) {
             if let decoded = Self.decodeEncodedProjectName(name), !decoded.isEmpty {
-                return "\(decoded)（项目会话/缓存）"
+                return SessionItemMetadata(displayName: "\(decoded)（项目会话/缓存）")
             }
         }
-        return name
+        return SessionItemMetadata(displayName: name)
     }
 
-    /// 严格只读：从非压缩 JSONL 会话文件头部提取 `cwd` 项目名与首条有意义的用户提问摘要
+    /// 只读提取非压缩会话的标题、项目和首条提问。重命名记录通常追加在文件末尾。
     public func readJSONLPreview(from url: URL) -> SessionPreview {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
+        guard let handle = Self.openRegularFile(url) else {
             return SessionPreview()
         }
         defer {
@@ -130,24 +163,13 @@ public struct SessionMetadataReader: Sendable {
             return SessionPreview()
         }
 
-        guard let text = String(data: data, encoding: .utf8)
-            ?? String(decoding: data, as: UTF8.self) as String?
-        else {
-            return SessionPreview()
-        }
+        let headLines = String(decoding: data, as: UTF8.self).split { $0 == "\n" || $0 == "\r\n" }
 
         var foundProjectName: String?
         var foundSnippet: String?
-        var lineCount = 0
 
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            lineCount += 1
-            if lineCount > Self.maxLinesToScan { break }
-            guard let lineData = rawLine.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-            else {
-                continue
-            }
+        for rawLine in headLines.prefix(Self.maxLinesToScan) {
+            guard let json = Self.parseJSON(Data(rawLine.utf8)) else { continue }
 
             // 1. 提取工作目录对应的项目名
             if foundProjectName == nil {
@@ -173,10 +195,93 @@ public struct SessionMetadataReader: Sendable {
             }
         }
 
-        return SessionPreview(projectName: foundProjectName, promptSnippet: foundSnippet)
+        var titleLines = headLines
+        if data.count == Self.maxHeadBytes,
+           let end = try? handle.seekToEnd(), end > UInt64(Self.maxHeadBytes),
+           (try? handle.seek(toOffset: end - UInt64(Self.maxHeadBytes) - 1)) != nil,
+           let tail = try? handle.read(upToCount: Self.maxHeadBytes + 1),
+           let firstNewline = tail.firstIndex(of: 0x0A) {
+            // 从边界前一字节开始读取，以区分恰好在行首和截断了首行的情况。
+            titleLines += String(decoding: tail.suffix(from: firstNewline + 1), as: UTF8.self)
+                .split { $0 == "\n" || $0 == "\r\n" }
+        }
+
+        var customTitle: String?
+        var generatedTitle: String?
+        var summary: String?
+        for line in titleLines.reversed() {
+            guard line.contains("\"customTitle\"") || line.contains("\"aiTitle\"")
+                || line.contains("\"session_info\"") || line.contains("\"summary\""),
+                let json = Self.parseJSON(Data(line.utf8)) else { continue }
+            switch json["type"] as? String {
+            case "custom-title":
+                customTitle = customTitle ?? Self.nonBlank(json["customTitle"])
+            case "session_info":
+                customTitle = customTitle ?? Self.nonBlank(json["name"])
+            case "ai-title":
+                generatedTitle = generatedTitle ?? Self.nonBlank(json["aiTitle"])
+            case "summary":
+                summary = summary ?? Self.nonBlank(json["summary"])
+            default:
+                break
+            }
+        }
+        return SessionPreview(
+            projectName: foundProjectName,
+            promptSnippet: foundSnippet,
+            title: customTitle ?? generatedTitle,
+            summary: summary
+        )
     }
 
     // MARK: - Helpers
+
+    func readCodexTitles(from url: URL) -> [UUID: String] {
+        guard let handle = Self.openRegularFile(url) else { return [:] }
+        defer { try? handle.close() }
+
+        var titles: [UUID: String] = [:]
+        var pendingLine = Data()
+        func consumeLine() {
+            guard pendingLine.count <= Self.maxHeadBytes, !pendingLine.isEmpty,
+                  let entry = Self.parseJSON(pendingLine),
+                  let id = (entry["id"] as? String).flatMap(UUID.init(uuidString:)),
+                  let name = entry["thread_name"] as? String else { return }
+            titles[id] = Self.nonBlank(name)
+        }
+
+        // 索引为追加写入格式。按行读完整索引即可匹配较早的归档，同一 ID 以最后一条为准。
+        while !Task.isCancelled,
+              let chunk = try? handle.read(upToCount: Self.maxHeadBytes), !chunk.isEmpty {
+            for (index, part) in chunk.split(separator: 0x0A, omittingEmptySubsequences: false).enumerated() {
+                if index > 0 {
+                    consumeLine()
+                    pendingLine.removeAll(keepingCapacity: true)
+                }
+                if pendingLine.count <= Self.maxHeadBytes {
+                    pendingLine.append(contentsOf: part)
+                }
+            }
+        }
+        consumeLine()
+        return titles
+    }
+
+    private static func openRegularFile(_ url: URL) -> FileHandle? {
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
+        return try? FileHandle(forReadingFrom: url)
+    }
+
+    private static func parseJSON(_ data: Data) -> [String: Any]? {
+        try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func nonBlank(_ value: Any?) -> String? {
+        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        return text
+    }
 
     /// 从常见编码后的项目目录名提取简短可读名称：
     /// 例如 `-Users-alice-workspace-my-app` / `--Users-alice-workspace-my-app--` -> `my-app`
@@ -227,7 +332,7 @@ public struct SessionMetadataReader: Sendable {
         return String(stem.prefix(8))
     }
 
-    private static func parseCodexRolloutName(_ fileName: String) -> (dateText: String?, shortID: String) {
+    private static func parseCodexRolloutName(_ fileName: String) -> (dateText: String?, shortID: String, id: UUID?) {
         // rollout-2026-11-02T08-42-37-01a199b5-4a6f-7591-af48-46874459a62c.jsonl(.zst)
         var stem = fileName
         if stem.hasSuffix(".jsonl.zst") {
@@ -237,7 +342,7 @@ public struct SessionMetadataReader: Sendable {
         }
 
         guard stem.hasPrefix("rollout-") else {
-            return (nil, extractShortIdentifier(from: stem))
+            return (nil, extractShortIdentifier(from: stem), nil)
         }
 
         let remainder = String(stem.dropFirst("rollout-".count))
@@ -253,11 +358,11 @@ public struct SessionMetadataReader: Sendable {
                 let idStart = remainder.index(remainder.startIndex, offsetBy: min(20, remainder.count))
                 let idTail = String(remainder[idStart...])
                 let shortID = idTail.isEmpty ? extractShortIdentifier(from: stem) : String(idTail.prefix(8))
-                return (dateText, shortID)
+                return (dateText, shortID, UUID(uuidString: String(idTail)))
             }
         }
 
-        return (nil, extractShortIdentifier(from: remainder))
+        return (nil, extractShortIdentifier(from: remainder), nil)
     }
 
     private static func extractUserMessage(from json: [String: Any]) -> String? {

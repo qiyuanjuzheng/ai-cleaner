@@ -2,13 +2,25 @@ import Darwin
 import Foundation
 import os
 
+/// 抽象只读扫描引擎执行器，生产环境默认由 `ScanEngine` 实现，
+/// 单元测试可注入计数或桩对象以验证扫描触发次数与边界行为。
+public protocol ScanPerforming: Sendable {
+    var homeDirectory: URL { get }
+    var safetyGuard: SafetyGuard { get }
+    func scan(
+        customDirectories: [CustomScanDirectory],
+        excludedItems: [ExcludedItemRecord],
+        now: Date?
+    ) -> ScanReport
+}
+
 /// 多客户端只读扫描引擎：
 /// - 严格只读，不修改任何目标目录内容；
 /// - 并发扫描所有内置 AI 客户端规则，仅展示本机实际存在的客户端；
 /// - 分层扫描 `/private/tmp` 与系统用户临时目录，将高置信度 AI 临时项归属到对应客户端，并为未归属项提供仅手选区；
 /// - 自动区分「建议清理」「按需清理」与「不建议清理」三类条目，让用户一眼辨别清理价值与风险；
 /// - 结合 SafetyGuard 自动拦截可清理列表中混入的登录态、凭据、核心配置、项目记忆与主数据库。
-public struct ScanEngine: Sendable {
+public struct ScanEngine: ScanPerforming, Sendable {
     public let homeDirectory: URL
     public let builtInProfiles: [AIClientProfile]
     public let safetyGuard: SafetyGuard

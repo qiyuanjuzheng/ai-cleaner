@@ -2,6 +2,7 @@
 import AICleanerCore
 import AppKit
 import Foundation
+import os
 import SwiftUI
 import XCTest
 
@@ -13,6 +14,68 @@ private struct FixtureTrashPerformer: TrashPerforming {
         let destination = directory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.moveItem(at: url, to: destination)
         return destination
+    }
+}
+
+private final class ConfigurableTrashPerformer: TrashPerforming, @unchecked Sendable {
+    let directory: URL
+    private let failingPathsLock: OSAllocatedUnfairLock<Set<String>>
+
+    init(directory: URL, failingPaths: Set<String> = []) {
+        self.directory = directory
+        self.failingPathsLock = OSAllocatedUnfairLock(initialState: failingPaths)
+    }
+
+    func setFailingPaths(_ paths: Set<String>) {
+        failingPathsLock.withLock { $0 = paths }
+    }
+
+    func trashItem(at url: URL) throws -> URL? {
+        let normalized = ExcludedItemMatcher.normalizePath(url)
+        let canonical = ExcludedItemMatcher.canonicalMatchPath(url.path)
+        let shouldFail = failingPathsLock.withLock { paths in
+            paths.contains(normalized) || paths.contains(canonical)
+        }
+        if shouldFail {
+            throw NSError(
+                domain: "ConfigurableTrashPerformer",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "模拟文件占用或权限不足"]
+            )
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.moveItem(at: url, to: destination)
+        return destination
+    }
+}
+
+private final class CountingScanEngine: ScanPerforming, @unchecked Sendable {
+    private let wrapped: ScanEngine
+    private let countLock = OSAllocatedUnfairLock(initialState: 0)
+
+    var homeDirectory: URL { wrapped.homeDirectory }
+    var safetyGuard: SafetyGuard { wrapped.safetyGuard }
+
+    var scanCount: Int {
+        countLock.withLock { $0 }
+    }
+
+    init(wrapping wrapped: ScanEngine) {
+        self.wrapped = wrapped
+    }
+
+    func scan(
+        customDirectories: [CustomScanDirectory],
+        excludedItems: [ExcludedItemRecord],
+        now: Date?
+    ) -> ScanReport {
+        countLock.withLock { $0 += 1 }
+        return wrapped.scan(
+            customDirectories: customDirectories,
+            excludedItems: excludedItems,
+            now: now
+        )
     }
 }
 
@@ -571,14 +634,16 @@ final class CleanerViewModelTests: XCTestCase {
         try write(String(repeating: "i", count: 9_000), at: ".sboxcache_hidden", in: privateTmp, modifiedAt: oldDate)
 
         let guardInstance = SafetyGuard(homeDirectory: home)
-        let engine = ScanEngine(
-            homeDirectory: home,
-            safetyGuard: guardInstance,
-            systemTempRoot: tmpLink,
-            userTempRoot: userTmp,
-            currentUID: getuid(),
-            activeTempDirectoryPath: nil,
-            now: fixedNow
+        let engine = CountingScanEngine(
+            wrapping: ScanEngine(
+                homeDirectory: home,
+                safetyGuard: guardInstance,
+                systemTempRoot: tmpLink,
+                userTempRoot: userTmp,
+                currentUID: getuid(),
+                activeTempDirectoryPath: nil,
+                now: fixedNow
+            )
         )
         let model = CleanerViewModel(
             homeDirectory: home,
@@ -594,6 +659,7 @@ final class CleanerViewModelTests: XCTestCase {
 
         model.rescan()
         try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertEqual(engine.scanCount, 1)
 
         // 1. 侧边栏分组验证
         XCTAssertEqual(Set(model.builtInSidebarEntries.map(\.id)), ["claude-code", "codex"])
@@ -677,27 +743,31 @@ final class CleanerViewModelTests: XCTestCase {
             XCTAssertGreaterThan(listHost.fittingSize.height, 0)
         }
 
-        // 5. 逐条手动勾选未归属项 + 近期修改 AI 项，执行移入废纸篓闭环并验证重扫结果
+        // 5. 逐条手动勾选未归属项 + 近期修改 AI 项，执行移入废纸篓闭环并验证原位扣减（不再自动重扫）
         model.toggleSelection(for: manualOld)
         model.toggleSelection(for: codexRecent)
         XCTAssertEqual(model.selectedItemIDs, [manualOld.id, codexRecent.id])
 
         model.confirmAndTrashSelectedItems()
-        try await waitUntil { !model.isCleaning && !model.isScanning && model.lastCleanupResult != nil }
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
 
+        XCTAssertFalse(model.isScanning)
+        XCTAssertEqual(engine.scanCount, 1, "清理完成后不应再触发 ScanEngine 全量重扫")
         XCTAssertEqual(model.lastCleanupResult?.trashedCount, 2)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: manualOld.url.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: codexRecent.url.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: manualRecent.url.path))
         XCTAssertEqual(model.filteredItems.map(\.fileName), ["manual-scratch-recent.tmp"])
 
-        // 6. 验证与 AICL-13 排除条目兼容：右键排除剩余未归属项 -> 重扫仍隐藏 -> 恢复后重现且仍为仅手选
+        // 6. 验证与 AICL-13 排除条目兼容：右键排除剩余未归属项 -> 手动重扫仍隐藏 -> 恢复后重现且仍为仅手选
         model.excludeItem(manualRecent)
         XCTAssertEqual(model.excludedItems.count, 1)
         XCTAssertTrue(model.tempSidebarEntries.allSatisfy { $0.id != TempDirectoryScanner.unattributedTempClientID })
 
         model.rescan()
         try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertEqual(engine.scanCount, 2)
         XCTAssertFalse(model.report?.allItems.contains(where: { $0.fileName == "manual-scratch-recent.tmp" }) == true)
 
         let excludedRecord = try XCTUnwrap(model.excludedItems.first)
@@ -711,7 +781,342 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
-    private func makeViewModel(home: URL) -> CleanerViewModel {
+    func testCleanupUpdatesInPlaceWithoutTriggeringRescanAndManualRefreshStillWorks() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try write(String(repeating: "A", count: 4_000), at: ".claude/debug/alpha.log", in: home)
+        try write(String(repeating: "B", count: 6_000), at: ".claude/debug/beta.log", in: home)
+        try write(
+            String(repeating: "C", count: 9_000),
+            at: "Library/Application Support/Cursor/GPUCache/data_0",
+            in: home
+        )
+
+        let countingEngine = CountingScanEngine(wrapping: ScanEngine(homeDirectory: home))
+        let model = makeViewModel(home: home, scanEngine: countingEngine)
+
+        model.startScan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertEqual(countingEngine.scanCount, 1)
+
+        let initialTotalBytes = try XCTUnwrap(model.report?.totalSizeBytes)
+        let initialCelebrationID = model.cleanupCelebrationID
+        let alpha = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "alpha.log" }))
+        let beta = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "beta.log" }))
+        let gpuCache = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "GPUCache" }))
+
+        // 在首次扫描完成后、清理前于磁盘新增一个文件：若未重扫，则清理后不应出现该文件
+        try write(String(repeating: "N", count: 2_000), at: ".claude/debug/late-arrival.log", in: home)
+
+        model.toggleSelection(for: alpha)
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertFalse(model.isScanning)
+        XCTAssertEqual(countingEngine.scanCount, 1, "部分清理后不得再次调用 ScanEngine")
+        XCTAssertNotEqual(model.cleanupCelebrationID, initialCelebrationID)
+        XCTAssertEqual(model.lastCleanupResult?.trashedCount, 1)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+        XCTAssertEqual(model.historyRecords.count, 1)
+
+        // 原位扣减列表、侧栏计数与空间仪表盘读数
+        let remainingBytes = initialTotalBytes - alpha.sizeBytes
+        XCTAssertEqual(model.report?.totalSizeBytes, remainingBytes)
+        XCTAssertEqual(model.scopedRecommendedBytes, remainingBytes)
+        XCTAssertEqual(model.scopedCleanableBytes, remainingBytes)
+        XCTAssertEqual(model.reportTotalBytesText, CleanerFormatting.formatBytes(remainingBytes))
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.id == alpha.id }))
+        XCTAssertTrue(model.filteredItems.contains(where: { $0.id == beta.id }))
+        XCTAssertTrue(model.filteredItems.contains(where: { $0.id == gpuCache.id }))
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.fileName == "late-arrival.log" }))
+
+        let claudeSidebar = try XCTUnwrap(model.builtInSidebarEntries.first(where: { $0.id == "claude-code" }))
+        XCTAssertEqual(claudeSidebar.cleanableBytes, beta.sizeBytes)
+
+        // 手动触发 rescan() 与 startScan() 仍正常执行全量扫描并发现新文件
+        model.rescan()
+        try await waitUntil { !model.isScanning && model.filteredItems.contains(where: { $0.fileName == "late-arrival.log" }) }
+        XCTAssertEqual(countingEngine.scanCount, 2)
+
+        model.sidebarSelection = .history
+        model.startScan()
+        XCTAssertEqual(model.sidebarSelection, .allClients)
+        try await waitUntil { !model.isScanning && countingEngine.scanCount == 3 }
+        XCTAssertEqual(countingEngine.scanCount, 3)
+    }
+
+    @MainActor
+    func testCleanupPreservesFiltersSearchAndViewportInSameScopeAndFallsBackWhenClientEmptied() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let oldDate = Date().addingTimeInterval(-15 * 86_400)
+        try write(String(repeating: "1", count: 3_000), at: ".claude/debug/match-alpha.log", in: home, modifiedAt: oldDate)
+        try write(String(repeating: "2", count: 5_000), at: ".claude/debug/match-beta.log", in: home, modifiedAt: oldDate)
+        try write(String(repeating: "3", count: 2_000), at: ".claude/debug/other.log", in: home, modifiedAt: oldDate)
+        try write(
+            String(repeating: "G", count: 8_000),
+            at: "Library/Application Support/Cursor/GPUCache/data_0",
+            in: home
+        )
+        let customRoot = home.appendingPathComponent("custom-scratch", isDirectory: true)
+        try write(String(repeating: "X", count: 1_500), at: "custom-scratch/only.tmp", in: home)
+
+        let guardInstance = SafetyGuard(homeDirectory: home)
+        let customStore = CustomDirectoryStore(
+            storageURL: home.appendingPathComponent("custom.json"),
+            safetyGuard: guardInstance
+        )
+        let addedCustom = try customStore.add(
+            url: customRoot,
+            displayName: "自定义临时区",
+            category: .custom,
+            mode: .children
+        )
+        let customClientID = addedCustom.toClientProfile().id
+
+        let countingEngine = CountingScanEngine(wrapping: ScanEngine(homeDirectory: home, safetyGuard: guardInstance))
+        let model = CleanerViewModel(
+            homeDirectory: home,
+            customDirectoryStore: customStore,
+            historyStore: CleanupHistoryStore(storageURL: home.appendingPathComponent("history.json")),
+            excludedItemStore: ExcludedItemStore(storageURL: home.appendingPathComponent("excluded-items.json")),
+            trashPerformer: FixtureTrashPerformer(directory: home.appendingPathComponent(".fixture-trash")),
+            scanEngine: countingEngine
+        )
+
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertEqual(countingEngine.scanCount, 1)
+
+        // 1. 停留在 Claude Code 客户端且未清空时：保留搜索词、筛选条件、排序与视口位置（不重置 listViewportID）
+        model.sidebarSelection = .client("claude-code")
+        model.searchText = "match"
+        model.selectedCategory = .logs
+        model.selectedAgeFilter = .olderThan7Days
+        model.sortOrder = .nameAscending
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["match-alpha.log", "match-beta.log"])
+
+        let viewportBeforePartialClean = model.listViewportID
+        let matchAlpha = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "match-alpha.log" }))
+        model.toggleSelection(for: matchAlpha)
+
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertFalse(model.isScanning)
+        XCTAssertEqual(model.sidebarSelection, .client("claude-code"))
+        XCTAssertEqual(model.searchText, "match")
+        XCTAssertEqual(model.selectedCategory, .logs)
+        XCTAssertEqual(model.selectedAgeFilter, .olderThan7Days)
+        XCTAssertEqual(model.sortOrder, .nameAscending)
+        XCTAssertEqual(model.listViewportID, viewportBeforePartialClean, "同分组未清空时不应重置列表视口")
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["match-beta.log"])
+        XCTAssertEqual(model.scopedRecommendedBytes, 7_000)
+
+        // 2. 清理 Cursor 最后一条：当前选中的客户端分组平滑回退到「空间总览」且计数准确
+        model.clearAllFilters()
+        model.sidebarSelection = .client("cursor")
+        let viewportBeforeFallback = model.listViewportID
+        let cursorCache = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "GPUCache" }))
+        model.dismissCleanupBanner()
+        model.toggleSelection(for: cursorCache)
+
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertEqual(model.sidebarSelection, .allClients)
+        XCTAssertEqual(model.headerTitleText, "空间总览")
+        XCTAssertNotEqual(model.listViewportID, viewportBeforeFallback)
+        XCTAssertNil(model.builtInSidebarEntries.first(where: { $0.id == "cursor" }))
+        XCTAssertEqual(model.report?.detectedBuiltInClientsCount, 1)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+
+        // 3. 清理自定义目录最后一条：按既有规则保留自定义目录分组，不切走、不崩溃
+        model.sidebarSelection = .client(customClientID)
+        let customOnly = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "only.tmp" }))
+        model.dismissCleanupBanner()
+        model.toggleSelection(for: customOnly)
+
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertEqual(model.sidebarSelection, .client(customClientID))
+        XCTAssertTrue(model.filteredItems.isEmpty)
+        let customEntry = try XCTUnwrap(model.customSidebarEntries.first(where: { $0.id == customClientID }))
+        XCTAssertEqual(customEntry.cleanableBytes, 0)
+    }
+
+    @MainActor
+    func testCleanupRetainsFailedAndBlockedItemsAndAllFailureLeavesReportUnchanged() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        try write(String(repeating: "O", count: 3_000), at: ".claude/debug/ok.log", in: home)
+        try write(String(repeating: "F", count: 4_000), at: ".claude/debug/fail.log", in: home)
+        let customRoot = home.appendingPathComponent("custom-guard-test", isDirectory: true)
+        try write(String(repeating: "D", count: 2_000), at: "custom-guard-test/protected-dir/safe.tmp", in: home)
+
+        let guardInstance = SafetyGuard(homeDirectory: home)
+        let customStore = CustomDirectoryStore(
+            storageURL: home.appendingPathComponent("custom.json"),
+            safetyGuard: guardInstance
+        )
+        _ = try customStore.add(
+            url: customRoot,
+            displayName: "护栏验证目录",
+            category: .custom,
+            mode: .children
+        )
+
+        let failURL = home.appendingPathComponent(".claude/debug/fail.log")
+        let performer = ConfigurableTrashPerformer(
+            directory: home.appendingPathComponent(".fixture-trash"),
+            failingPaths: [ExcludedItemMatcher.normalizePath(failURL)]
+        )
+        let countingEngine = CountingScanEngine(wrapping: ScanEngine(homeDirectory: home, safetyGuard: guardInstance))
+        let model = CleanerViewModel(
+            homeDirectory: home,
+            customDirectoryStore: customStore,
+            historyStore: CleanupHistoryStore(storageURL: home.appendingPathComponent("history.json")),
+            excludedItemStore: ExcludedItemStore(storageURL: home.appendingPathComponent("excluded-items.json")),
+            trashPerformer: performer,
+            scanEngine: countingEngine
+        )
+
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertEqual(countingEngine.scanCount, 1)
+
+        let okItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "ok.log" }))
+        let failItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "fail.log" }))
+        let protectedDirItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "protected-dir" }))
+
+        // 清理前向目录内写入硬保护凭据文件，触发 TrashCleaner 实时拦截
+        try write("token=secret", at: "custom-guard-test/protected-dir/auth.json", in: home)
+
+        // 1. 全部失败 / 被保护拦截：不修改报告、不重置视口、不触发重扫、不触发庆祝动效
+        let beforeIDs = model.report?.allItems.map(\.id)
+        let beforeBytes = model.report?.totalSizeBytes
+        let beforeViewport = model.listViewportID
+        let beforeCelebration = model.cleanupCelebrationID
+
+        model.toggleSelection(for: failItem)
+        model.toggleSelection(for: protectedDirItem)
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertFalse(model.isScanning)
+        XCTAssertEqual(model.lastCleanupResult?.trashedCount, 0)
+        XCTAssertEqual(model.lastCleanupResult?.failedItems.map(\.id), [failItem.id])
+        XCTAssertEqual(model.lastCleanupResult?.skippedProtectedItems.map(\.id), [protectedDirItem.id])
+        XCTAssertEqual(model.cleanupCelebrationID, beforeCelebration)
+        XCTAssertEqual(model.report?.allItems.map(\.id), beforeIDs)
+        XCTAssertEqual(model.report?.totalSizeBytes, beforeBytes)
+        XCTAssertEqual(model.listViewportID, beforeViewport)
+        XCTAssertTrue(model.historyRecords.isEmpty)
+
+        // 2. 部分成功 + 部分失败：仅移除成功项，失败与拦截项继续保留在列表中
+        model.dismissCleanupBanner()
+        model.toggleSelection(for: okItem)
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertEqual(model.lastCleanupResult?.trashedItems.map(\.id), [okItem.id])
+        XCTAssertEqual(model.lastCleanupResult?.failedItems.map(\.id), [failItem.id])
+        XCTAssertEqual(model.lastCleanupResult?.skippedProtectedItems.map(\.id), [protectedDirItem.id])
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.id == okItem.id }))
+        XCTAssertTrue(model.filteredItems.contains(where: { $0.id == failItem.id }))
+        XCTAssertTrue(model.filteredItems.contains(where: { $0.id == protectedDirItem.id }))
+        XCTAssertFalse(model.selectedItemIDs.contains(okItem.id))
+        XCTAssertEqual(model.report?.totalSizeBytes, (beforeBytes ?? 0) - okItem.sizeBytes)
+    }
+
+    @MainActor
+    func testCleanupRemovesNestedChildEntriesAndPrunesExcludedSessionSnapshots() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let parentCustomRoot = home.appendingPathComponent("nested-workspace", isDirectory: true)
+        let bundleDir = parentCustomRoot.appendingPathComponent("bundle", isDirectory: true)
+        try write(String(repeating: "A", count: 2_500), at: "nested-workspace/bundle/child-active.tmp", in: home)
+        try write(String(repeating: "B", count: 1_500), at: "nested-workspace/bundle/child-excluded.tmp", in: home)
+
+        let guardInstance = SafetyGuard(homeDirectory: home)
+        let customStore = CustomDirectoryStore(
+            storageURL: home.appendingPathComponent("custom.json"),
+            safetyGuard: guardInstance
+        )
+        _ = try customStore.add(
+            url: parentCustomRoot,
+            displayName: "父自定义目录",
+            category: .custom,
+            mode: .children
+        )
+        _ = try customStore.add(
+            url: bundleDir,
+            displayName: "子自定义目录",
+            category: .custom,
+            mode: .children
+        )
+
+        let countingEngine = CountingScanEngine(wrapping: ScanEngine(homeDirectory: home, safetyGuard: guardInstance))
+        let model = CleanerViewModel(
+            homeDirectory: home,
+            customDirectoryStore: customStore,
+            historyStore: CleanupHistoryStore(storageURL: home.appendingPathComponent("history.json")),
+            excludedItemStore: ExcludedItemStore(storageURL: home.appendingPathComponent("excluded-items.json")),
+            trashPerformer: FixtureTrashPerformer(directory: home.appendingPathComponent(".fixture-trash")),
+            scanEngine: countingEngine
+        )
+
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertEqual(countingEngine.scanCount, 1)
+
+        let bundleItem = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "bundle" }))
+        let activeChild = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "child-active.tmp" }))
+        let excludedChild = try XCTUnwrap(model.filteredItems.first(where: { $0.fileName == "child-excluded.tmp" }))
+
+        // 先排除目录内的一条子项（会在 sessionExcludedSnapshots 中缓存快照）
+        model.excludeItem(excludedChild)
+        XCTAssertEqual(model.excludedItems.count, 1)
+        XCTAssertEqual(model.missingExcludedItemCount, 0)
+        XCTAssertEqual(model.excludedItemRows.first?.existsOnDisk, true)
+
+        // 清理父目录 bundle -> 残留子项 child-active.tmp 同步移除，且已排除项磁盘状态刷新为已不存在
+        model.toggleSelection(for: bundleItem)
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.id == bundleItem.id }))
+        XCTAssertFalse(model.filteredItems.contains(where: { $0.id == activeChild.id }))
+        XCTAssertEqual(model.report?.totalItemCount, 0)
+        XCTAssertEqual(model.report?.totalSizeBytes, 0)
+        XCTAssertEqual(model.missingExcludedItemCount, 1)
+        XCTAssertEqual(model.excludedItemRows.first?.existsOnDisk, false)
+
+        // 恢复该已排除记录时，因磁盘不存在且快照已清理，不会把幽灵条目合回报告，也不触发重扫
+        let record = try XCTUnwrap(model.excludedItems.first)
+        model.restoreExcludedItem(record)
+        XCTAssertTrue(model.excludedItems.isEmpty)
+        XCTAssertEqual(countingEngine.scanCount, 1)
+        XCTAssertEqual(model.report?.totalItemCount, 0)
+    }
+
+    @MainActor
+    private func makeViewModel(
+        home: URL,
+        scanEngine: (any ScanPerforming)? = nil,
+        trashPerformer: (any TrashPerforming)? = nil
+    ) -> CleanerViewModel {
         CleanerViewModel(
             homeDirectory: home,
             customDirectoryStore: CustomDirectoryStore(
@@ -720,7 +1125,8 @@ final class CleanerViewModelTests: XCTestCase {
             ),
             historyStore: CleanupHistoryStore(storageURL: home.appendingPathComponent("history.json")),
             excludedItemStore: ExcludedItemStore(storageURL: home.appendingPathComponent("excluded-items.json")),
-            trashPerformer: FixtureTrashPerformer(directory: home.appendingPathComponent(".fixture-trash"))
+            trashPerformer: trashPerformer ?? FixtureTrashPerformer(directory: home.appendingPathComponent(".fixture-trash")),
+            scanEngine: scanEngine
         )
     }
 

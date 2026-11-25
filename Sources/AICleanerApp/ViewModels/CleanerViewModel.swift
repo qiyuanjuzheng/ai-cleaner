@@ -180,7 +180,7 @@ enum FlatListRow: Identifiable, Equatable, Sendable {
 @Observable
 final class CleanerViewModel {
     // MARK: - Core Services
-    private let scanEngine: ScanEngine
+    private let scanEngine: any ScanPerforming
     private let trashCleaner: TrashCleaner
     private let customDirectoryStore: CustomDirectoryStore
     private let historyStore: CleanupHistoryStore
@@ -431,7 +431,7 @@ final class CleanerViewModel {
         historyStore: CleanupHistoryStore? = nil,
         excludedItemStore: ExcludedItemStore? = nil,
         trashPerformer: any TrashPerforming = SystemTrashPerformer(),
-        scanEngine: ScanEngine? = nil
+        scanEngine: (any ScanPerforming)? = nil
     ) {
         let resolvedHome = scanEngine?.homeDirectory ?? homeDirectory
         let guardInstance = scanEngine?.safetyGuard ?? SafetyGuard(homeDirectory: resolvedHome)
@@ -1190,7 +1190,8 @@ final class CleanerViewModel {
             let bundle = await Task.detached(priority: .userInitiated) {
                 let newReport = engine.scan(
                     customDirectories: customDirs,
-                    excludedItems: excludedSnapshot
+                    excludedItems: excludedSnapshot,
+                    now: nil
                 )
                 return Self.buildPreparedReportBundle(from: newReport, homeDirectory: homeDir)
             }.value
@@ -1552,6 +1553,24 @@ final class CleanerViewModel {
         showingTrashConfirmation = true
     }
 
+    private func pruneSessionExcludedSnapshots(matchingTrashedItems trashedItems: [CleanableItem]) {
+        guard !sessionExcludedSnapshots.isEmpty, !trashedItems.isEmpty else { return }
+        let matcher = TrashedItemMatcher(items: trashedItems)
+        var resolvedDirCache: [String: String] = [:]
+        var nextSnapshots: [String: [(item: CleanableItem, profile: AIClientProfile, isProtected: Bool)]] = [:]
+        nextSnapshots.reserveCapacity(sessionExcludedSnapshots.count)
+
+        for (key, entries) in sessionExcludedSnapshots {
+            let remaining = entries.filter { entry in
+                !matcher.matches(entry.item, resolvedDirCache: &resolvedDirCache)
+            }
+            if !remaining.isEmpty {
+                nextSnapshots[key] = remaining
+            }
+        }
+        sessionExcludedSnapshots = nextSnapshots
+    }
+
     func confirmAndTrashSelectedItems(acknowledgedNotRecommendedRisk: Bool = false) {
         let targets = selectedItems
         guard !targets.isEmpty, !isCleaning else { return }
@@ -1569,8 +1588,8 @@ final class CleanerViewModel {
                 cleaner.trash(items: targets, allowNotRecommendedOverride: allowOverride)
             }.value
 
-            self.lastCleanupResult = result
-            if result.trashedCount > 0 {
+            let trashedItems = result.trashedItems.map(\.item)
+            if !trashedItems.isEmpty {
                 self.cleanupCelebrationID = UUID()
                 do {
                     _ = try self.historyStore.record(result: result)
@@ -1578,15 +1597,24 @@ final class CleanerViewModel {
                 } catch {
                     self.errorBannerMessage = "文件已移入废纸篓，保存统计记录失败：\(error.localizedDescription)"
                 }
+
+                // 清理完成后直接从内存扫描报告原位扣减已移入废纸篓的条目，不再自动触发全量磁盘重扫
+                self.pruneSessionExcludedSnapshots(matchingTrashedItems: trashedItems)
+                if let currentReport = self.report {
+                    let updatedReport = currentReport.removing(trashedItems: trashedItems)
+                    self.applyUpdatedReportInPlace(updatedReport)
+                } else {
+                    let trashedIDs = Set(result.trashedItems.map(\.id))
+                    self.selectedItemIDs.subtract(trashedIDs)
+                }
+                if !self.excludedItems.isEmpty {
+                    self.refreshExcludedItemStatuses()
+                }
             }
+
+            self.lastCleanupResult = result
             self.isCleaning = false
             self.showingTrashConfirmation = false
-
-            let trashedIDs = Set(result.trashedItems.map(\.id))
-            self.selectedItemIDs.subtract(trashedIDs)
-
-            // 清理完成后立即刷新列表，反馈真实剩余空间
-            self.rescan()
         }
     }
 

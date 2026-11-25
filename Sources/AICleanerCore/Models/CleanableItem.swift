@@ -273,14 +273,37 @@ public struct ScanReport: Sendable {
     /// 与 `ScanEngine` 约定保持一致：内置客户端与系统临时目录分组若已无任何展示条目则从列表移除，自定义目录分组保留。
     public func filtering(excluding matcher: ExcludedItemMatcher) -> ScanReport {
         guard !matcher.isEmpty else { return self }
+        return rebuilding { !matcher.isExcluded($0.url) }
+    }
 
+    /// 便捷重载：直接传入已排除记录数组过滤扫描报告
+    public func filtering(excludedItems: [ExcludedItemRecord]) -> ScanReport {
+        filtering(excluding: ExcludedItemMatcher(records: excludedItems))
+    }
+
+    /// 原位移除已成功移入废纸篓的条目（含按规范化路径前缀归属已清理目录内部的残留子条目），
+    /// 并实时重算各客户端分组摘要与全局 `O(1)` 统计字段。
+    /// 与 `filtering(excluding:)` 保持一致：内置客户端与系统临时目录分组清空后自动移除，自定义目录分组保留。
+    public func removing(trashedItems: [CleanableItem]) -> ScanReport {
+        guard !trashedItems.isEmpty else { return self }
+        let matcher = TrashedItemMatcher(items: trashedItems)
+        var resolvedDirCache: [String: String] = [:]
+        return rebuilding { !matcher.matches($0, resolvedDirCache: &resolvedDirCache) }
+    }
+
+    /// 便捷重载：直接传入已移入废纸篓记录数组原位扣减扫描报告
+    public func removing(trashedRecords: [TrashedItemRecord]) -> ScanReport {
+        removing(trashedItems: trashedRecords.map(\.item))
+    }
+
+    private func rebuilding(keeping shouldKeep: (CleanableItem) -> Bool) -> ScanReport {
         var builtIn: [ClientScanSummary] = []
         var tempGroups: [ClientScanSummary] = []
         var custom: [ClientScanSummary] = []
 
         for summary in clientSummaries {
-            let filteredItems = summary.items.filter { !matcher.isExcluded($0.url) }
-            let filteredProtected = summary.protectedItems.filter { !matcher.isExcluded($0.url) }
+            let filteredItems = summary.items.filter(shouldKeep)
+            let filteredProtected = summary.protectedItems.filter(shouldKeep)
 
             switch summary.profile.kind {
             case .customDirectory:
@@ -327,11 +350,6 @@ public struct ScanReport: Sendable {
             detectedBuiltInClientsCount: builtIn.count,
             skippedProtectedCount: skippedProtectedCount
         )
-    }
-
-    /// 便捷重载：直接传入已排除记录数组过滤扫描报告
-    public func filtering(excludedItems: [ExcludedItemRecord]) -> ScanReport {
-        filtering(excluding: ExcludedItemMatcher(records: excludedItems))
     }
 
     /// 将同一次扫描会话中曾被临时排除的条目快照无闪烁合并回报告（自动跳过仍被排除或已重复存在的条目）
@@ -452,5 +470,160 @@ public struct ScanReport: Sendable {
             return lhs.protectedSizeBytes > rhs.protectedSizeBytes
         }
         return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
+    }
+}
+
+/// 基于条目 ID 与规范化路径（含目录子树边界）的已清理条目匹配器：
+/// - 精确匹配已成功移入废纸篓条目的 `id`；
+/// - 按规范化路径与目录边界（`/a/dir` 匹配 `/a/dir` 及 `/a/dir/...`，绝不误匹配 `/a/dir2` 或 `/a/dir.log`）
+///   匹配位于已清理目录内部的残留子条目；
+/// - 复用 `SafetyGuard.normalizeTempPath` 与祖先目录符号链接解析，兼容 `/tmp` ↔ `/private/tmp`、`/var` ↔ `/private/var`
+///   且在目录已被移入废纸篓后仍可正确归并，同时保留末级符号链接身份不穿透目标目录。
+public struct TrashedItemMatcher: Sendable, Hashable {
+    private let trashedIDs: Set<String>
+    private let exactPaths: Set<String>
+
+    public var isEmpty: Bool {
+        trashedIDs.isEmpty && exactPaths.isEmpty
+    }
+
+    public init(items: [CleanableItem] = []) {
+        var ids: Set<String> = []
+        var exact: Set<String> = []
+        var resolvedDirCache: [String: String] = [:]
+
+        for item in items {
+            ids.insert(item.id)
+            for variant in Self.pathVariants(for: item.url, resolvedDirCache: &resolvedDirCache) {
+                exact.insert(variant)
+            }
+        }
+
+        self.trashedIDs = ids
+        self.exactPaths = exact
+    }
+
+    public func matches(_ item: CleanableItem) -> Bool {
+        var cache: [String: String] = [:]
+        return matches(item, resolvedDirCache: &cache)
+    }
+
+    public func matches(_ item: CleanableItem, resolvedDirCache: inout [String: String]) -> Bool {
+        guard !isEmpty else { return false }
+        if trashedIDs.contains(item.id) {
+            return true
+        }
+        return matches(url: item.url, resolvedDirCache: &resolvedDirCache)
+    }
+
+    public func matches(url: URL, resolvedDirCache: inout [String: String]) -> Bool {
+        guard !exactPaths.isEmpty else { return false }
+        for variant in Self.pathVariants(for: url, resolvedDirCache: &resolvedDirCache) {
+            if matchesPath(variant) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func matchesPath(_ candidate: String) -> Bool {
+        if exactPaths.contains(candidate) {
+            return true
+        }
+        guard candidate.hasPrefix("/"), candidate.count > 1 else {
+            return false
+        }
+        var searchEnd = candidate.endIndex
+        while let slashIndex = candidate[..<searchEnd].lastIndex(of: "/") {
+            if slashIndex == candidate.startIndex {
+                break
+            }
+            let ancestor = String(candidate[..<slashIndex])
+            if exactPaths.contains(ancestor) {
+                return true
+            }
+            searchEnd = slashIndex
+        }
+        return false
+    }
+
+    private static func pathVariants(for url: URL, resolvedDirCache: inout [String: String]) -> [String] {
+        let rawNormalized = ExcludedItemMatcher.normalizePath(url)
+        let tempNormalized = ExcludedItemMatcher.normalizePath(SafetyGuard.normalizeTempPath(url))
+        let ancestorResolved = resolveExistingAncestorPath(for: tempNormalized, cache: &resolvedDirCache)
+
+        var variants: [String] = [rawNormalized]
+        if !variants.contains(tempNormalized) {
+            variants.append(tempNormalized)
+        }
+        if !variants.contains(ancestorResolved) {
+            variants.append(ancestorResolved)
+        }
+        return variants
+    }
+
+    private static func resolveExistingAncestorPath(
+        for normalizedPath: String,
+        cache: inout [String: String]
+    ) -> String {
+        guard normalizedPath.hasPrefix("/"), normalizedPath != "/" else {
+            return normalizedPath
+        }
+        let url = URL(fileURLWithPath: normalizedPath).standardizedFileURL
+        // 仅解析祖先目录符号链接，保留末级节点身份不穿透末级符号链接
+        let leafName = url.lastPathComponent
+        let parentPath = ExcludedItemMatcher.normalizePath(url.deletingLastPathComponent())
+        let resolvedParent = resolveExistingDirectoryPath(parentPath, cache: &cache)
+        return resolvedParent == "/" ? "/\(leafName)" : "\(resolvedParent)/\(leafName)"
+    }
+
+    private static func resolveExistingDirectoryPath(
+        _ dirPath: String,
+        cache: inout [String: String]
+    ) -> String {
+        if let cached = cache[dirPath] {
+            return cached
+        }
+        guard dirPath.hasPrefix("/"), dirPath != "/" else {
+            cache[dirPath] = dirPath
+            return dirPath
+        }
+
+        let fileManager = FileManager.default
+        var currentPath = dirPath
+        var missingComponents: [String] = []
+
+        while currentPath != "/" {
+            if let cached = cache[currentPath] {
+                var resolved = cached
+                for component in missingComponents.reversed() {
+                    resolved = resolved == "/" ? "/\(component)" : "\(resolved)/\(component)"
+                }
+                cache[dirPath] = resolved
+                return resolved
+            }
+            if fileManager.fileExists(atPath: currentPath) {
+                let resolvedExisting = ExcludedItemMatcher.normalizePath(
+                    URL(fileURLWithPath: currentPath).resolvingSymlinksInPath()
+                )
+                cache[currentPath] = resolvedExisting
+                var resolved = resolvedExisting
+                for component in missingComponents.reversed() {
+                    resolved = resolved == "/" ? "/\(component)" : "\(resolved)/\(component)"
+                }
+                cache[dirPath] = resolved
+                return resolved
+            }
+            let currentURL = URL(fileURLWithPath: currentPath)
+            missingComponents.append(currentURL.lastPathComponent)
+            let nextPath = ExcludedItemMatcher.normalizePath(currentURL.deletingLastPathComponent())
+            if nextPath == currentPath {
+                break
+            }
+            currentPath = nextPath
+        }
+
+        cache[dirPath] = dirPath
+        return dirPath
     }
 }

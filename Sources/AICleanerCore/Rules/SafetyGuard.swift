@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// 安全策略判定结果
@@ -70,9 +71,31 @@ public struct SafetyGuard: Sendable {
         validateTarget(url, allowUserOverride: true)
     }
 
+    /// 规范化 `/tmp` 符号链接路径（将 `/tmp/...` 及直接符号链接父目录解析为真实父路径，同时保留末级符号链接身份不穿透）。
+    public static func normalizeTempPath(_ url: URL) -> URL {
+        let standardized = url.standardizedFileURL
+        let path = standardized.path
+        if path == "/tmp" {
+            return URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        }
+        if path.hasPrefix("/tmp/") {
+            return URL(fileURLWithPath: "/private" + path).standardizedFileURL
+        }
+        let parent = standardized.deletingLastPathComponent()
+        let parentIsSymlink = (try? parent.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
+        if parentIsSymlink {
+            let resolvedParent = parent.resolvingSymlinksInPath().standardizedFileURL
+            return resolvedParent.appendingPathComponent(standardized.lastPathComponent).standardizedFileURL
+        }
+        return standardized
+    }
+
     private func validateTarget(_ url: URL, allowUserOverride: Bool) -> SafetyDecision {
         let pathCheck = validateBasePath(url, allowHomeSubdirectoryRoots: false)
         guard pathCheck.isAllowed else { return pathCheck }
+
+        let specialNodeCheck = Self.validateSpecialNode(atPath: url.path)
+        guard specialNodeCheck.isAllowed else { return specialNodeCheck }
 
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         if values?.isSymbolicLink == true {
@@ -82,6 +105,9 @@ public struct SafetyGuard: Sendable {
             guard resolvedPath.hasPrefix(parentPath + "/") || resolvedPath == parentPath else {
                 return .blocked(reason: "跳过指向扫描目录外部的符号链接")
             }
+
+            let resolvedSpecialCheck = Self.validateSpecialNode(atPath: resolved.path)
+            guard resolvedSpecialCheck.isAllowed else { return resolvedSpecialCheck }
 
             if !allowUserOverride {
                 let resolvedIsDir = (try? resolved.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
@@ -157,7 +183,7 @@ public struct SafetyGuard: Sendable {
         var enumerationFailed = false
         guard let enumerator = fileManager.enumerator(
             at: url,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileResourceTypeKey],
             options: [],
             errorHandler: { _, _ in
                 enumerationFailed = true
@@ -168,8 +194,15 @@ public struct SafetyGuard: Sendable {
         }
 
         for case let childURL as URL in enumerator {
-            guard let values = try? childURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+            guard let values = try? childURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileResourceTypeKey]) else {
                 return .blocked(reason: "无法检查目录内的条目：\(childURL.lastPathComponent)")
+            }
+            if let resourceType = values.fileResourceType,
+               Self.isSpecialResourceType(resourceType) {
+                return .blocked(reason: "目录内包含特殊系统节点（Socket/FIFO/设备文件）：\(childURL.lastPathComponent)")
+            }
+            if let reason = Self.validateSpecialNode(atPath: childURL.path).blockReason {
+                return .blocked(reason: "目录内包含受保护内容：\(reason)")
             }
             let isSymlink = values.isSymbolicLink == true
             let decision = allowUserOverride
@@ -182,6 +215,9 @@ public struct SafetyGuard: Sendable {
                 let resolved = childURL.resolvingSymlinksInPath()
                 if let reason = validateHardProtection(path: resolved.path).blockReason {
                     return .blocked(reason: "目录内的符号链接指向受保护内容：\(reason)")
+                }
+                if let reason = Self.validateSpecialNode(atPath: resolved.path).blockReason {
+                    return .blocked(reason: "目录内的符号链接指向特殊系统节点：\(reason)")
                 }
             }
         }
@@ -208,6 +244,9 @@ public struct SafetyGuard: Sendable {
         }) {
             return .blocked(reason: "已锁定凭据或客户端存储：~/\(subtree)")
         }
+        if fileName.lowercased().hasSuffix(".sock") {
+            return .blocked(reason: "Unix Domain Socket 文件不允许清理：\(fileName)")
+        }
         if Self.mainDatabaseNames.contains(baseName) {
             return .blocked(reason: "已锁定客户端主数据库及附属文件：\(fileName)")
         }
@@ -218,6 +257,23 @@ public struct SafetyGuard: Sendable {
             return .blocked(reason: "已锁定登录凭据或密钥：\(fileName)")
         }
 
+        return .allowed
+    }
+
+    private static func isSpecialResourceType(_ type: URLFileResourceType) -> Bool {
+        type == .socket || type == .namedPipe || type == .characterSpecial || type == .blockSpecial
+    }
+
+    private static func validateSpecialNode(atPath path: String) -> SafetyDecision {
+        var st = stat()
+        guard lstat(path, &st) == 0 else {
+            return .allowed
+        }
+        let modeType = st.st_mode & S_IFMT
+        if modeType == S_IFSOCK || modeType == S_IFIFO || modeType == S_IFCHR || modeType == S_IFBLK {
+            let name = (path as NSString).lastPathComponent
+            return .blocked(reason: "特殊系统节点（Socket/FIFO/设备文件）不允许清理：\(name)")
+        }
         return .allowed
     }
 

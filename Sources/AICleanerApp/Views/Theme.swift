@@ -170,6 +170,10 @@ enum AppTheme {
             return Color(red: 0.96, green: 0.42, blue: 0.60)
         case "zed":
             return Color(red: 0.34, green: 0.74, blue: 0.98)
+        case "tempAI":
+            return Color(red: 0.96, green: 0.62, blue: 0.24)
+        case "tempUnattributed":
+            return Color(red: 0.90, green: 0.56, blue: 0.20)
         default:
             return Color(red: 0.16, green: 0.80, blue: 0.62)
         }

@@ -24,10 +24,18 @@ struct AICleanerApp: App {
     @State private var viewModel: CleanerViewModel
 
     init() {
-        // 允许开发与验证阶段通过环境变量 AI_CLEANER_HOME 指定隔离主目录，默认使用当前 macOS 用户主目录
-        if let overridePath = ProcessInfo.processInfo.environment["AI_CLEANER_HOME"],
+        // 允许开发与验证阶段通过环境变量 AI_CLEANER_HOME（及可选 AI_CLEANER_SYSTEM_TMP / AI_CLEANER_USER_TMP）
+        // 指定隔离沙箱目录，默认使用当前 macOS 用户主目录与系统临时目录
+        let env = ProcessInfo.processInfo.environment
+        if let overridePath = env["AI_CLEANER_HOME"],
            !overridePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let homeURL = URL(fileURLWithPath: overridePath, isDirectory: true).standardizedFileURL
+            let systemTmpURL = env["AI_CLEANER_SYSTEM_TMP"]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
+            let userTmpURL = env["AI_CLEANER_USER_TMP"]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
             let guardInstance = SafetyGuard(homeDirectory: homeURL)
             let sandboxConfigDir = homeURL.appendingPathComponent(".aicleaner-sandbox-config", isDirectory: true)
             let store = CustomDirectoryStore(
@@ -40,12 +48,19 @@ struct AICleanerApp: App {
             let excludedItemStore = ExcludedItemStore(
                 storageURL: sandboxConfigDir.appendingPathComponent("excluded-items.json")
             )
+            let engine = ScanEngine(
+                homeDirectory: homeURL,
+                safetyGuard: guardInstance,
+                systemTempRoot: systemTmpURL,
+                userTempRoot: userTmpURL
+            )
             _viewModel = State(
                 initialValue: CleanerViewModel(
                     homeDirectory: homeURL,
                     customDirectoryStore: store,
                     historyStore: historyStore,
-                    excludedItemStore: excludedItemStore
+                    excludedItemStore: excludedItemStore,
+                    scanEngine: engine
                 )
             )
         } else {

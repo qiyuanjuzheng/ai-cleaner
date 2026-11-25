@@ -256,6 +256,16 @@ struct CleanupHistoryView: View {
                                         .font(.system(size: 12.5, weight: .medium))
                                         .foregroundStyle(tint)
                                         .frame(width: 20, height: 20)
+                                } else if client.clientID == TempDirectoryScanner.otherAITempClientID {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(tint)
+                                        .frame(width: 20, height: 20)
+                                } else if client.clientID == TempDirectoryScanner.unattributedTempClientID {
+                                    Image(systemName: "folder.badge.questionmark")
+                                        .font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(tint)
+                                        .frame(width: 20, height: 20)
                                 } else {
                                     ClientLogo(clientID: client.clientID)
                                 }

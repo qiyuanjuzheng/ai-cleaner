@@ -1,7 +1,14 @@
 import Foundation
 
-/// AI 客户端（或自定义目录组）的规则配置画像
+/// AI 客户端（或自定义目录 / 系统临时目录分组）的规则配置画像
 public struct AIClientProfile: Identifiable, Codable, Hashable, Sendable {
+    public enum ProfileKind: String, Codable, Hashable, Sendable {
+        case builtInClient
+        case otherAITemp
+        case unattributedTemp
+        case customDirectory
+    }
+
     public let id: String
     public let name: String
     public let symbolName: String
@@ -12,6 +19,7 @@ public struct AIClientProfile: Identifiable, Codable, Hashable, Sendable {
     public let rules: [ScanRule]
     public let isCustom: Bool
     public let customDirectoryID: UUID?
+    public let kind: ProfileKind
 
     public init(
         id: String,
@@ -22,7 +30,8 @@ public struct AIClientProfile: Identifiable, Codable, Hashable, Sendable {
         protectedSummary: String,
         rules: [ScanRule],
         isCustom: Bool = false,
-        customDirectoryID: UUID? = nil
+        customDirectoryID: UUID? = nil,
+        kind: ProfileKind? = nil
     ) {
         self.id = id
         self.name = name
@@ -33,6 +42,27 @@ public struct AIClientProfile: Identifiable, Codable, Hashable, Sendable {
         self.rules = rules
         self.isCustom = isCustom
         self.customDirectoryID = customDirectoryID
+        self.kind = kind ?? (isCustom ? .customDirectory : .builtInClient)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, symbolName, accentToken, description, protectedSummary, rules, isCustom, customDirectoryID, kind
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.symbolName = try container.decode(String.self, forKey: .symbolName)
+        self.accentToken = try container.decode(String.self, forKey: .accentToken)
+        self.description = try container.decode(String.self, forKey: .description)
+        self.protectedSummary = try container.decode(String.self, forKey: .protectedSummary)
+        self.rules = try container.decode([ScanRule].self, forKey: .rules)
+        let isCustom = try container.decode(Bool.self, forKey: .isCustom)
+        self.isCustom = isCustom
+        self.customDirectoryID = try container.decodeIfPresent(UUID.self, forKey: .customDirectoryID)
+        self.kind = try container.decodeIfPresent(ProfileKind.self, forKey: .kind)
+            ?? (isCustom ? .customDirectory : .builtInClient)
     }
 }
 

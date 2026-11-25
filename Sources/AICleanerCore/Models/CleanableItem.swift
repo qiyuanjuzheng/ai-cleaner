@@ -18,6 +18,10 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
     public let safetyNote: String
     public let hardProtectionReason: String?
     public let requiresIndividualSelection: Bool
+    /// 来源类别标识（例如「临时文件（/tmp）」），为空时不额外显示来源标签
+    public let sourceBadge: String?
+    /// 是否为冷却期内（默认 24 小时内）近期修改项，用于在界面展示「近期修改」提示
+    public let isRecentlyModified: Bool
     public let sizeBytes: Int64
     public let fileCount: Int
     public let modifiedAt: Date
@@ -65,7 +69,9 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         hardProtectionReason: String? = nil,
         requiresIndividualSelection: Bool = false,
         sessionTitle: String? = nil,
-        sessionProjectName: String? = nil
+        sessionProjectName: String? = nil,
+        sourceBadge: String? = nil,
+        isRecentlyModified: Bool = false
     ) {
         let standardized = url.standardizedFileURL
         self.id = "\(clientID)::\(standardized.path)"
@@ -95,6 +101,8 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         self.safetyNote = hardProtectionReason ?? safetyNote
         self.hardProtectionReason = hardProtectionReason
         self.requiresIndividualSelection = requiresIndividualSelection
+        self.sourceBadge = sourceBadge
+        self.isRecentlyModified = isRecentlyModified
         self.sizeBytes = sizeBytes
         self.fileCount = fileCount
         self.modifiedAt = modifiedAt
@@ -262,18 +270,20 @@ public struct ScanReport: Sendable {
     }
 
     /// 返回按排除清单过滤后的新扫描报告，并实时重算所有客户端分组与全局统计汇总。
-    /// 与 `ScanEngine` 约定保持一致：内置客户端若已无任何展示条目则从列表移除，自定义目录分组保留。
+    /// 与 `ScanEngine` 约定保持一致：内置客户端与系统临时目录分组若已无任何展示条目则从列表移除，自定义目录分组保留。
     public func filtering(excluding matcher: ExcludedItemMatcher) -> ScanReport {
         guard !matcher.isEmpty else { return self }
 
         var builtIn: [ClientScanSummary] = []
+        var tempGroups: [ClientScanSummary] = []
         var custom: [ClientScanSummary] = []
 
         for summary in clientSummaries {
             let filteredItems = summary.items.filter { !matcher.isExcluded($0.url) }
             let filteredProtected = summary.protectedItems.filter { !matcher.isExcluded($0.url) }
 
-            if summary.profile.isCustom {
+            switch summary.profile.kind {
+            case .customDirectory:
                 custom.append(
                     ClientScanSummary(
                         profile: summary.profile,
@@ -282,23 +292,37 @@ public struct ScanReport: Sendable {
                         skippedProtectedCount: summary.skippedProtectedCount
                     )
                 )
-            } else if !filteredItems.isEmpty || !filteredProtected.isEmpty {
-                builtIn.append(
-                    ClientScanSummary(
-                        profile: summary.profile,
-                        items: filteredItems,
-                        protectedItems: filteredProtected,
-                        skippedProtectedCount: summary.skippedProtectedCount
+            case .otherAITemp, .unattributedTemp:
+                if !filteredItems.isEmpty || !filteredProtected.isEmpty {
+                    tempGroups.append(
+                        ClientScanSummary(
+                            profile: summary.profile,
+                            items: filteredItems,
+                            protectedItems: filteredProtected,
+                            skippedProtectedCount: summary.skippedProtectedCount
+                        )
                     )
-                )
+                }
+            case .builtInClient:
+                if !filteredItems.isEmpty || !filteredProtected.isEmpty {
+                    builtIn.append(
+                        ClientScanSummary(
+                            profile: summary.profile,
+                            items: filteredItems,
+                            protectedItems: filteredProtected,
+                            skippedProtectedCount: summary.skippedProtectedCount
+                        )
+                    )
+                }
             }
         }
 
         builtIn.sort(by: Self.compareBuiltInSummaries)
+        tempGroups.sort(by: Self.compareTempSummaries)
 
         return ScanReport(
             scannedAt: scannedAt,
-            clientSummaries: builtIn + custom,
+            clientSummaries: builtIn + tempGroups + custom,
             totalBuiltInProfilesCount: totalBuiltInProfilesCount,
             detectedBuiltInClientsCount: builtIn.count,
             skippedProtectedCount: skippedProtectedCount
@@ -361,6 +385,7 @@ public struct ScanReport: Sendable {
         guard didInsert else { return self }
 
         var builtIn: [ClientScanSummary] = []
+        var tempGroups: [ClientScanSummary] = []
         var custom: [(order: Int, summary: ClientScanSummary)] = []
 
         for bucket in byProfileID.values {
@@ -378,23 +403,45 @@ public struct ScanReport: Sendable {
                 protectedItems: sortedProtected,
                 skippedProtectedCount: bucket.skipped
             )
-            if bucket.profile.isCustom {
+            switch bucket.profile.kind {
+            case .customDirectory:
                 custom.append((bucket.order, summary))
-            } else if !summary.items.isEmpty || !summary.protectedItems.isEmpty {
-                builtIn.append(summary)
+            case .otherAITemp, .unattributedTemp:
+                if !summary.items.isEmpty || !summary.protectedItems.isEmpty {
+                    tempGroups.append(summary)
+                }
+            case .builtInClient:
+                if !summary.items.isEmpty || !summary.protectedItems.isEmpty {
+                    builtIn.append(summary)
+                }
             }
         }
 
         builtIn.sort(by: Self.compareBuiltInSummaries)
+        tempGroups.sort(by: Self.compareTempSummaries)
         let sortedCustom = custom.sorted { $0.order < $1.order }.map(\.summary)
 
         return ScanReport(
             scannedAt: scannedAt,
-            clientSummaries: builtIn + sortedCustom,
+            clientSummaries: builtIn + tempGroups + sortedCustom,
             totalBuiltInProfilesCount: totalBuiltInProfilesCount,
             detectedBuiltInClientsCount: builtIn.count,
             skippedProtectedCount: skippedProtectedCount
         )
+    }
+
+    private static func compareTempSummaries(_ lhs: ClientScanSummary, _ rhs: ClientScanSummary) -> Bool {
+        let rank: (AIClientProfile.ProfileKind) -> Int = { kind in
+            switch kind {
+            case .otherAITemp: return 0
+            case .unattributedTemp: return 1
+            default: return 2
+            }
+        }
+        let lhsRank = rank(lhs.profile.kind)
+        let rhsRank = rank(rhs.profile.kind)
+        if lhsRank != rhsRank { return lhsRank < rhsRank }
+        return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
     }
 
     private static func compareBuiltInSummaries(_ lhs: ClientScanSummary, _ rhs: ClientScanSummary) -> Bool {

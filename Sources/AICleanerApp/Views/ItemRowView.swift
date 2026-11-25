@@ -143,6 +143,34 @@ struct ItemRowView: View, Equatable {
                                 .padding(.vertical, 1.5)
                                 .background(Capsule().fill(recColor.opacity(0.18)))
                                 .foregroundStyle(recColor)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+
+                        if let sourceBadge = item.sourceBadge {
+                            Text(sourceBadge)
+                                .font(.system(size: 9.5, weight: .medium))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(
+                                    Capsule().fill(Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.065))
+                                )
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+
+                        if item.isRecentlyModified {
+                            let recentTint = AppTheme.color(for: .reviewSuggested)
+                            Text("近期修改")
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(
+                                    Capsule().fill(recentTint.opacity(colorScheme == .dark ? 0.18 : 0.13))
+                                )
+                                .foregroundStyle(recentTint)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
 
                         if row.showClientBadge {

@@ -541,6 +541,168 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLayeredTmpBulkSkipManualSelectionSortingAndSwiftUILayout() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AICleanerTmpUITest-\(UUID().uuidString)")
+        let home = root.appendingPathComponent("FakeHome", isDirectory: true)
+        let privateTmp = root.appendingPathComponent("private/tmp", isDirectory: true)
+        let tmpLink = root.appendingPathComponent("tmp", isDirectory: true)
+        let userTmp = root.appendingPathComponent("user-tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: privateTmp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: userTmp, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: tmpLink, withDestinationURL: privateTmp)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let oldDate = fixedNow.addingTimeInterval(-72 * 3600)
+        let midDate = fixedNow.addingTimeInterval(-36 * 3600)
+        let recentDate = fixedNow.addingTimeInterval(-2 * 3600)
+
+        // Home 缓存 + Layer 1 AI /tmp（冷却期外 & 近期修改）+ 其他 AI /tmp + Layer 2 未归属（旧 & 近期）
+        try write(String(repeating: "a", count: 600), at: ".claude/debug/home.log", in: home, modifiedAt: oldDate)
+        try write(String(repeating: "b", count: 4_000), at: "codex-clipboard-old.png", in: privateTmp, modifiedAt: oldDate)
+        try write(String(repeating: "c", count: 1_200), at: "codex-active-recent.log", in: privateTmp, modifiedAt: recentDate)
+        try write(String(repeating: "d", count: 2_500), at: "magpie-bridge-old.log", in: privateTmp, modifiedAt: oldDate)
+        try write(String(repeating: "e", count: 5_000), at: "manual-archive-old.tar", in: privateTmp, modifiedAt: oldDate)
+        try write(String(repeating: "f", count: 1_500), at: "manual-scratch-recent.tmp", in: privateTmp, modifiedAt: recentDate)
+        try write(String(repeating: "g", count: 2_000), at: "claude-user-tmp.log", in: userTmp, modifiedAt: midDate)
+        // 不应出现在未归属区的 userTmp 普通文件 & /tmp 隐藏缓存
+        try write(String(repeating: "h", count: 9_000), at: "unrelated-browser-cache.bin", in: userTmp, modifiedAt: oldDate)
+        try write(String(repeating: "i", count: 9_000), at: ".sboxcache_hidden", in: privateTmp, modifiedAt: oldDate)
+
+        let guardInstance = SafetyGuard(homeDirectory: home)
+        let engine = ScanEngine(
+            homeDirectory: home,
+            safetyGuard: guardInstance,
+            systemTempRoot: tmpLink,
+            userTempRoot: userTmp,
+            currentUID: getuid(),
+            activeTempDirectoryPath: nil,
+            now: fixedNow
+        )
+        let model = CleanerViewModel(
+            homeDirectory: home,
+            customDirectoryStore: CustomDirectoryStore(
+                storageURL: root.appendingPathComponent("custom.json"),
+                safetyGuard: guardInstance
+            ),
+            historyStore: CleanupHistoryStore(storageURL: root.appendingPathComponent("history.json")),
+            excludedItemStore: ExcludedItemStore(storageURL: root.appendingPathComponent("excluded.json")),
+            trashPerformer: FixtureTrashPerformer(directory: root.appendingPathComponent(".fixture-trash")),
+            scanEngine: engine
+        )
+
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+
+        // 1. 侧边栏分组验证
+        XCTAssertEqual(Set(model.builtInSidebarEntries.map(\.id)), ["claude-code", "codex"])
+        XCTAssertEqual(
+            model.tempSidebarEntries.map(\.id),
+            [TempDirectoryScanner.otherAITempClientID, TempDirectoryScanner.unattributedTempClientID]
+        )
+
+        let byName = Dictionary(uniqueKeysWithValues: model.filteredItems.map { ($0.fileName, $0) })
+        let codexOld = try XCTUnwrap(byName["codex-clipboard-old.png"])
+        let codexRecent = try XCTUnwrap(byName["codex-active-recent.log"])
+        let magpieOld = try XCTUnwrap(byName["magpie-bridge-old.log"])
+        let manualOld = try XCTUnwrap(byName["manual-archive-old.tar"])
+        let manualRecent = try XCTUnwrap(byName["manual-scratch-recent.tmp"])
+        let claudeHome = try XCTUnwrap(byName["home.log"])
+        let claudeUserTmp = try XCTUnwrap(byName["claude-user-tmp.log"])
+        XCTAssertNil(byName["unrelated-browser-cache.bin"])
+        XCTAssertNil(byName[".sboxcache_hidden"])
+
+        // 2. 空间总览中全部 4 个批量入口均跳过未归属项与 24h 内近期修改项
+        let expectedBulkIDs: Set<String> = [claudeHome.id, claudeUserTmp.id, codexOld.id, magpieOld.id]
+        model.selectRecommendedInScope()
+        XCTAssertEqual(model.selectedItemIDs, expectedBulkIDs)
+
+        model.clearAllSelection()
+        model.selectSection(.reviewSuggested)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty, "勾选本组应跳过未归属与近期修改项")
+
+        model.selectAllVisible()
+        XCTAssertEqual(model.selectedItemIDs, expectedBulkIDs)
+
+        // 先手动勾选一条未归属项，再执行反选：手动勾选项保留，其余仅在可批量项中反选
+        model.clearAllSelection()
+        model.toggleSelection(for: manualOld)
+        XCTAssertEqual(model.selectedItemIDs, [manualOld.id])
+        model.invertVisibleSelection()
+        XCTAssertEqual(model.selectedItemIDs, expectedBulkIDs.union([manualOld.id]))
+        model.invertVisibleSelection()
+        XCTAssertEqual(model.selectedItemIDs, [manualOld.id])
+
+        // 3. 切换到「/tmp 未归属临时项」分组：顶部提示条、排序、搜索与批量全跳过
+        model.clearAllSelection()
+        model.sidebarSelection = .client(TempDirectoryScanner.unattributedTempClientID)
+        XCTAssertNotNil(model.scopeNoticeBanner)
+        XCTAssertTrue(model.scopeNoticeBanner?.message.contains("/tmp") == true)
+        XCTAssertTrue(model.filteredBulkSelectableItems.isEmpty)
+
+        // 验证大小降序与修改时间最新排序
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["manual-archive-old.tar", "manual-scratch-recent.tmp"])
+        model.sortOrder = .modifiedDescending
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["manual-scratch-recent.tmp", "manual-archive-old.tar"])
+        model.sortOrder = .sizeDescending
+
+        // 验证搜索过滤（含「近期修改」与路径搜索）
+        model.searchText = "近期修改"
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["manual-scratch-recent.tmp"])
+        model.searchText = ""
+
+        // 在未归属分组内所有批量勾选均不生效
+        model.selectRecommendedInScope()
+        model.selectSection(.reviewSuggested)
+        model.selectAllVisible()
+        model.invertVisibleSelection()
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+
+        // 4. 在 Light / Dark 模式下验证真实 SwiftUI 主界面布局（含未归属提示条与来源/近期修改徽标）
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+            let host = NSHostingView(rootView: ContentView(viewModel: model))
+            host.appearance = NSAppearance(named: appearanceName)
+            host.frame = NSRect(x: 0, y: 0, width: 1180, height: 760)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(host.fittingSize.width, 0)
+            XCTAssertGreaterThan(host.fittingSize.height, 0)
+        }
+
+        // 5. 逐条手动勾选未归属项 + 近期修改 AI 项，执行移入废纸篓闭环并验证重扫结果
+        model.toggleSelection(for: manualOld)
+        model.toggleSelection(for: codexRecent)
+        XCTAssertEqual(model.selectedItemIDs, [manualOld.id, codexRecent.id])
+
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && !model.isScanning && model.lastCleanupResult != nil }
+
+        XCTAssertEqual(model.lastCleanupResult?.trashedCount, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manualOld.url.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: codexRecent.url.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manualRecent.url.path))
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["manual-scratch-recent.tmp"])
+
+        // 6. 验证与 AICL-13 排除条目兼容：右键排除剩余未归属项 -> 重扫仍隐藏 -> 恢复后重现且仍为仅手选
+        model.excludeItem(manualRecent)
+        XCTAssertEqual(model.excludedItems.count, 1)
+        XCTAssertTrue(model.tempSidebarEntries.allSatisfy { $0.id != TempDirectoryScanner.unattributedTempClientID })
+
+        model.rescan()
+        try await waitUntil { model.hasScanResults && !model.isScanning }
+        XCTAssertFalse(model.report?.allItems.contains(where: { $0.fileName == "manual-scratch-recent.tmp" }) == true)
+
+        let excludedRecord = try XCTUnwrap(model.excludedItems.first)
+        model.restoreExcludedItem(excludedRecord)
+        try await waitUntil { !model.isScanning && model.report?.allItems.contains(where: { $0.fileName == "manual-scratch-recent.tmp" }) == true }
+        XCTAssertTrue(model.excludedItems.isEmpty)
+        let restored = try XCTUnwrap(model.report?.allItems.first(where: { $0.fileName == "manual-scratch-recent.tmp" }))
+        XCTAssertTrue(restored.requiresIndividualSelection)
+        XCTAssertFalse(restored.isBulkSelectable)
+        XCTAssertFalse(model.isSelected(restored))
+    }
+
+    @MainActor
     private func makeViewModel(home: URL) -> CleanerViewModel {
         CleanerViewModel(
             homeDirectory: home,

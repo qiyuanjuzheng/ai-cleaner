@@ -45,6 +45,8 @@ enum ItemSortOrder: String, CaseIterable, Identifiable, Sendable {
 
 /// 单条扫描结果的预格式化展示数据（在后台线程一次性生成，杜绝列表渲染期加锁格式化或拼接字符串）
 struct PreparedItemPresentation: Sendable {
+    let title: String
+    let detailText: String
     let sizeText: String
     let dateText: String
     let abbreviatedPath: String
@@ -52,11 +54,20 @@ struct PreparedItemPresentation: Sendable {
     let searchableLowercased: String
 
     static func make(for item: CleanableItem, homeDirectory: URL) -> PreparedItemPresentation {
+        let title = item.scanResultTitle
+        let detailText: String
+        if let projectName = item.sessionProjectName, item.sessionTitle != nil || title == "未命名会话" {
+            detailText = "\(projectName) · \(item.safetyNote)"
+        } else {
+            detailText = item.safetyNote
+        }
         let sizeText = CleanerFormatting.formatBytes(item.sizeBytes)
         let dateText = CleanerFormatting.formatDate(item.modifiedAt)
         let abbreviatedPath = CleanerFormatting.abbreviatePath(item.url, homeDirectory: homeDirectory)
-        let rowTooltip = "\(item.safetyNote)\n路径：\(abbreviatedPath)"
+        let rowTooltip = "\(detailText)\n路径：\(abbreviatedPath)"
         let searchable = [
+            title,
+            item.sessionProjectName,
             item.displayName,
             item.fileName,
             item.url.path,
@@ -65,16 +76,32 @@ struct PreparedItemPresentation: Sendable {
             item.recommendation.displayName,
             item.safetyNote
         ]
+        .compactMap { $0 }
         .joined(separator: "\u{1F}")
         .lowercased()
 
         return PreparedItemPresentation(
+            title: title,
+            detailText: detailText,
             sizeText: sizeText,
             dateText: dateText,
             abbreviatedPath: abbreviatedPath,
             rowTooltip: rowTooltip,
             searchableLowercased: searchable
         )
+    }
+}
+
+private extension CleanableItem {
+    var scanResultTitle: String {
+        guard category == .sessions else { return displayName }
+        if let sessionTitle { return sessionTitle }
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileStem = isDirectory ? fileName : url.deletingPathExtension().lastPathComponent
+        if name.isEmpty || (name == fileName && UUID(uuidString: fileStem) != nil) {
+            return "未命名会话"
+        }
+        return name
     }
 }
 
@@ -104,6 +131,8 @@ struct SectionHeaderRow: Equatable, Sendable {
 struct ItemDisplayRow: Equatable, Sendable {
     let id: String
     let item: CleanableItem
+    let title: String
+    let detailText: String
     let sizeText: String
     let dateText: String
     let abbreviatedPath: String
@@ -608,7 +637,7 @@ final class CleanerViewModel {
                 if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt < rhs.modifiedAt }
                 return lhs.sizeBytes > rhs.sizeBytes
             case .nameAscending:
-                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                return lhs.scanResultTitle.localizedCaseInsensitiveCompare(rhs.scanResultTitle) == .orderedAscending
             }
         }
     }
@@ -721,6 +750,8 @@ final class CleanerViewModel {
                         ItemDisplayRow(
                             id: item.id,
                             item: item,
+                            title: presentation.title,
+                            detailText: presentation.detailText,
                             sizeText: presentation.sizeText,
                             dateText: presentation.dateText,
                             abbreviatedPath: presentation.abbreviatedPath,
@@ -901,7 +932,9 @@ final class CleanerViewModel {
                 if let presentation = presentationByID[item.id] {
                     return presentation.searchableLowercased.contains(lowerQuery)
                 }
-                return item.displayName.localizedCaseInsensitiveContains(lowerQuery)
+                return item.scanResultTitle.localizedCaseInsensitiveContains(lowerQuery)
+                    || item.sessionProjectName?.localizedCaseInsensitiveContains(lowerQuery) == true
+                    || item.displayName.localizedCaseInsensitiveContains(lowerQuery)
                     || item.fileName.localizedCaseInsensitiveContains(lowerQuery)
                     || item.url.path.localizedCaseInsensitiveContains(lowerQuery)
             }

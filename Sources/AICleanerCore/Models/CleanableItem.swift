@@ -8,6 +8,8 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
     public let ruleID: String
     /// 面向用户的友好名称（如「GPU 缓存」或「项目名 · 首条对话摘要」）
     public let displayName: String
+    public let sessionTitle: String?
+    public let sessionProjectName: String?
     /// 磁盘上的实际文件或目录名
     public let fileName: String
     public let url: URL
@@ -47,7 +49,9 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         isDirectory: Bool,
         isCustom: Bool,
         hardProtectionReason: String? = nil,
-        requiresIndividualSelection: Bool = false
+        requiresIndividualSelection: Bool = false,
+        sessionTitle: String? = nil,
+        sessionProjectName: String? = nil
     ) {
         let standardized = url.standardizedFileURL
         self.id = "\(clientID)::\(standardized.path)"
@@ -55,6 +59,8 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
         self.clientName = clientName
         self.ruleID = ruleID
         self.displayName = displayName
+        self.sessionTitle = sessionTitle
+        self.sessionProjectName = sessionProjectName
         self.fileName = fileName
         self.url = standardized
         self.category = category

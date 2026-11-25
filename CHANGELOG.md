@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+## [v0.2.0] - 2026-11-25
+
+### 新增
+
+- AICL-15: 接入 Release PR 自动发版流程与合并后自动构建发布 (#15)
+- AICL-14: 支持 /tmp 分层扫描与清理（AI 特征精准归类 + 未归属项仅手选） (#13)
+- AICL-13: 支持清理条目右键排除、查看已排除列表及恢复 (#12)
+
+### 修复
+
+- AICL-14: 修复 macOS 15 CI 下离屏 NavigationSplitView fittingSize 测试失败 (#14)
+- AICL-10 恢复环中心数字滚动 (#9)
+
+### 优化与变更
+
+- AICL-17: Pause animations by real window visibility instead of focus … (#17)
+- AICL-18: 清理完成后取消自动全量重扫，改为原位扣减并实时刷新列表 (#18)
+- AICL-11 在待清理会话列表中显示会话标题 (#10)
+
 ## [v0.1.0] - 2026-11-25
 
 ### 新增

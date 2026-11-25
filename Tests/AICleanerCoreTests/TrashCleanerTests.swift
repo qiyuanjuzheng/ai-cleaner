@@ -274,27 +274,324 @@ final class TrashCleanerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: trashURL.path))
     }
 
+    func testScanReportRemovingUpdatesStatsPruningSortingAndNestedSubpaths() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let privateTmpDir = sandbox.rootURL.appendingPathComponent("private-tmp", isDirectory: true)
+        let symlinkTmpDir = sandbox.rootURL.appendingPathComponent("tmp-link", isDirectory: true)
+        try FileManager.default.createDirectory(at: privateTmpDir, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: symlinkTmpDir, withDestinationURL: privateTmpDir)
+
+        let dirToTrash = try sandbox.createDirectory(relativeToHome: "cache/dir")
+        let nestedChild = try sandbox.createFile(relativeToHome: "cache/dir/sub/nested.log", byteCount: 300)
+        let siblingPrefixDir = try sandbox.createFile(relativeToHome: "cache/dir2/keep.log", byteCount: 400)
+        let siblingPrefixFile = try sandbox.createFile(relativeToHome: "cache/dir.log", byteCount: 250)
+        let symlinkTargetDir = try sandbox.createDirectory(relativeToHome: "cache/symlink-target")
+        let symlinkTargetChild = try sandbox.createFile(relativeToHome: "cache/symlink-target/real.bin", byteCount: 600)
+        let symlinkItemURL = sandbox.homeURL.appendingPathComponent("cache/link-to-target")
+        try FileManager.default.createSymbolicLink(at: symlinkItemURL, withDestinationURL: symlinkTargetDir)
+
+        // 模拟 /tmp 符号链接目录及其子项
+        let tempSubDir = privateTmpDir.appendingPathComponent("ai-dir", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempSubDir, withIntermediateDirectories: true)
+        let tempNestedViaSymlink = symlinkTmpDir.appendingPathComponent("ai-dir/child.tmp")
+        try Data(repeating: 1, count: 500).write(to: tempSubDir.appendingPathComponent("child.tmp"))
+
+        let clientAProfile = AIClientProfile(
+            id: "client-a",
+            name: "Alpha Client",
+            symbolName: "sparkles",
+            accentToken: "claude",
+            description: "测试客户端 A",
+            protectedSummary: "受保护项",
+            rules: [],
+            kind: .builtInClient
+        )
+        let clientBProfile = AIClientProfile(
+            id: "client-b",
+            name: "Beta Client",
+            symbolName: "sparkles",
+            accentToken: "codex",
+            description: "测试客户端 B",
+            protectedSummary: "受保护项",
+            rules: [],
+            kind: .builtInClient
+        )
+        let clientCProfile = AIClientProfile(
+            id: "client-c",
+            name: "Gamma Client",
+            symbolName: "sparkles",
+            accentToken: "cursor",
+            description: "仅剩受保护项",
+            protectedSummary: "受保护项",
+            rules: [],
+            kind: .builtInClient
+        )
+        let tempProfile = AIClientProfile(
+            id: TempDirectoryScanner.unattributedTempClientID,
+            name: "/tmp 未归属临时项",
+            symbolName: "folder.badge.questionmark",
+            accentToken: "tempUnattributed",
+            description: "临时分组",
+            protectedSummary: "系统受保护项",
+            rules: [],
+            kind: .unattributedTemp
+        )
+        let customID = UUID()
+        let customProfile = AIClientProfile(
+            id: "custom-\(customID.uuidString)",
+            name: "自定义缓存",
+            symbolName: "folder",
+            accentToken: "custom",
+            description: "自定义目录",
+            protectedSummary: "自定义受保护项",
+            rules: [],
+            isCustom: true,
+            customDirectoryID: customID,
+            kind: .customDirectory
+        )
+
+        let dirItem = makeItem(
+            clientID: clientAProfile.id,
+            clientName: clientAProfile.name,
+            url: dirToTrash,
+            sizeBytes: 5_000,
+            isDirectory: true,
+            recommendation: .recommended,
+            modifiedAt: now
+        )
+        let siblingDirItem = makeItem(
+            clientID: clientAProfile.id,
+            clientName: clientAProfile.name,
+            url: siblingPrefixDir,
+            sizeBytes: 400,
+            isDirectory: false,
+            recommendation: .reviewSuggested,
+            modifiedAt: now
+        )
+        let siblingFileItem = makeItem(
+            clientID: clientAProfile.id,
+            clientName: clientAProfile.name,
+            url: siblingPrefixFile,
+            sizeBytes: 250,
+            isDirectory: false,
+            recommendation: .recommended,
+            modifiedAt: now
+        )
+        let symlinkItem = makeItem(
+            clientID: clientAProfile.id,
+            clientName: clientAProfile.name,
+            url: symlinkItemURL,
+            sizeBytes: 100,
+            isDirectory: false,
+            recommendation: .recommended,
+            modifiedAt: now
+        )
+        let symlinkTargetChildItem = makeItem(
+            clientID: clientAProfile.id,
+            clientName: clientAProfile.name,
+            url: symlinkTargetChild,
+            sizeBytes: 600,
+            isDirectory: false,
+            recommendation: .recommended,
+            modifiedAt: now
+        )
+
+        let clientBOnlyItem = makeItem(
+            clientID: clientBProfile.id,
+            clientName: clientBProfile.name,
+            url: sandbox.homeURL.appendingPathComponent("client-b/cache.bin"),
+            sizeBytes: 2_000,
+            isDirectory: false,
+            recommendation: .recommended,
+            modifiedAt: now
+        )
+        let clientCProtectedItem = makeItem(
+            clientID: clientCProfile.id,
+            clientName: clientCProfile.name,
+            url: sandbox.homeURL.appendingPathComponent("client-c/auth.json"),
+            sizeBytes: 128,
+            isDirectory: false,
+            recommendation: .notRecommended,
+            modifiedAt: now
+        )
+        let clientCCleanableItem = makeItem(
+            clientID: clientCProfile.id,
+            clientName: clientCProfile.name,
+            url: sandbox.homeURL.appendingPathComponent("client-c/tmp.log"),
+            sizeBytes: 900,
+            isDirectory: false,
+            recommendation: .recommended,
+            modifiedAt: now
+        )
+        let tempDirItem = makeItem(
+            clientID: tempProfile.id,
+            clientName: tempProfile.name,
+            url: tempSubDir,
+            sizeBytes: 500,
+            isDirectory: true,
+            recommendation: .reviewSuggested,
+            modifiedAt: now
+        )
+        let tempNestedItem = makeItem(
+            clientID: tempProfile.id,
+            clientName: tempProfile.name,
+            url: tempNestedViaSymlink,
+            sizeBytes: 500,
+            isDirectory: false,
+            recommendation: .reviewSuggested,
+            modifiedAt: now
+        )
+        let customNestedItem = makeItem(
+            clientID: customProfile.id,
+            clientName: customProfile.name,
+            url: nestedChild,
+            sizeBytes: 300,
+            isDirectory: false,
+            recommendation: .reviewSuggested,
+            modifiedAt: now,
+            isCustom: true
+        )
+
+        let report = ScanReport(
+            scannedAt: now,
+            clientSummaries: [
+                ClientScanSummary(
+                    profile: clientAProfile,
+                    items: [dirItem, symlinkTargetChildItem, siblingDirItem, siblingFileItem, symlinkItem]
+                ),
+                ClientScanSummary(profile: clientBProfile, items: [clientBOnlyItem]),
+                ClientScanSummary(
+                    profile: clientCProfile,
+                    items: [clientCCleanableItem],
+                    protectedItems: [clientCProtectedItem]
+                ),
+                ClientScanSummary(profile: tempProfile, items: [tempDirItem, tempNestedItem]),
+                ClientScanSummary(profile: customProfile, items: [customNestedItem])
+            ],
+            totalBuiltInProfilesCount: 31,
+            detectedBuiltInClientsCount: 3,
+            skippedProtectedCount: 2
+        )
+
+        // 空数组应保持原报告不变
+        let unchanged = report.removing(trashedItems: [])
+        XCTAssertEqual(unchanged.totalItemCount, report.totalItemCount)
+        XCTAssertEqual(unchanged.totalSizeBytes, report.totalSizeBytes)
+        XCTAssertEqual(unchanged.detectedBuiltInClientsCount, 3)
+
+        // 先模拟真实删除已清理目录（验证目录不存在后，祖先符号链接仍能正确归并清理其子项）
+        try FileManager.default.removeItem(at: dirToTrash)
+        try FileManager.default.removeItem(at: tempSubDir)
+        try FileManager.default.removeItem(at: symlinkItemURL)
+
+        let updated = report.removing(trashedItems: [dirItem, symlinkItem, clientBOnlyItem, clientCCleanableItem, tempDirItem])
+
+        // 1. 被清理目录及内部子项（含跨自定义分组和跨符号链接父目录的 /tmp 子项）全部被移除
+        let remainingPaths = Set(updated.allItems.map(\.url.path))
+        XCTAssertFalse(remainingPaths.contains(dirItem.url.path))
+        XCTAssertFalse(remainingPaths.contains(nestedChild.path))
+        XCTAssertFalse(remainingPaths.contains(tempDirItem.url.path))
+        XCTAssertFalse(remainingPaths.contains(tempNestedItem.url.path))
+        XCTAssertFalse(remainingPaths.contains(symlinkItem.url.path))
+
+        // 2. 兄弟前缀路径（dir2、dir.log）与符号链接目标目录内容均完整保留
+        XCTAssertTrue(remainingPaths.contains(siblingPrefixDir.path))
+        XCTAssertTrue(remainingPaths.contains(siblingPrefixFile.path))
+        XCTAssertTrue(remainingPaths.contains(symlinkTargetChild.path))
+
+        // 3. 分组保留规则：
+        // - client-b 清空后从侧栏移除
+        // - client-c 仅剩 protectedItem，继续保留且可清理为 0
+        // - tempProfile 清空后自动移除
+        // - customProfile 清空后仍保留在侧栏末尾（items 为空）
+        XCTAssertEqual(updated.clientSummaries.map(\.id), [clientAProfile.id, clientCProfile.id, customProfile.id])
+        XCTAssertEqual(updated.detectedBuiltInClientsCount, 2)
+        XCTAssertEqual(updated.skippedProtectedCount, 2)
+        XCTAssertEqual(updated.scannedAt, now)
+
+        // 4. O(1) 全局汇总精确扣减
+        XCTAssertEqual(updated.totalRecommendedCount, 2) // siblingFileItem (250) + symlinkTargetChildItem (600)
+        XCTAssertEqual(updated.recommendedSizeBytes, 850)
+        XCTAssertEqual(updated.totalReviewSuggestedCount, 1) // siblingDirItem (400)
+        XCTAssertEqual(updated.reviewSuggestedSizeBytes, 400)
+        XCTAssertEqual(updated.totalItemCount, 3)
+        XCTAssertEqual(updated.totalSizeBytes, 1_250)
+        XCTAssertEqual(updated.totalProtectedItemCount, 1)
+        XCTAssertEqual(updated.protectedSizeBytes, 128)
+        XCTAssertEqual(updated.totalDiskFootprintBytes, 1_378)
+
+        let customSummary = try XCTUnwrap(updated.clientSummaries.first(where: { $0.id == customProfile.id }))
+        XCTAssertTrue(customSummary.items.isEmpty)
+        XCTAssertEqual(customSummary.totalSizeBytes, 0)
+
+        // 5. 移除受保护（非硬保护风险覆盖）条目后，client-c 彻底清空并从内置客户端移除
+        let afterRemovingProtected = updated.removing(trashedItems: [clientCProtectedItem])
+        XCTAssertEqual(afterRemovingProtected.clientSummaries.map(\.id), [clientAProfile.id, customProfile.id])
+        XCTAssertEqual(afterRemovingProtected.detectedBuiltInClientsCount, 1)
+        XCTAssertEqual(afterRemovingProtected.totalProtectedItemCount, 0)
+        XCTAssertEqual(afterRemovingProtected.protectedSizeBytes, 0)
+        XCTAssertEqual(afterRemovingProtected.totalDiskFootprintBytes, 1_250)
+    }
+
+    func testScanReportRemovingMatchesFreshDiskScanAfterPartialTrash() throws {
+        try sandbox.createFile(relativeToHome: ".claude/debug/a.log", byteCount: 1_200)
+        let debugB = try sandbox.createFile(relativeToHome: ".claude/debug/b.log", byteCount: 3_400)
+        try sandbox.createFile(relativeToHome: "Library/Application Support/Cursor/GPUCache/data_0", byteCount: 5_000)
+
+        let safetyGuard = SafetyGuard(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, safetyGuard: safetyGuard)
+        let performer = try SandboxTrashPerformer(
+            mockTrashDir: sandbox.rootURL.appendingPathComponent("MockTrash", isDirectory: true)
+        )
+        let cleaner = TrashCleaner(safetyGuard: safetyGuard, performer: performer)
+
+        let baseline = engine.scan()
+        let selected = baseline.allItems.filter {
+            $0.url.path == debugB.path || $0.clientID == "cursor"
+        }
+        XCTAssertEqual(selected.count, 2)
+
+        let result = cleaner.trash(items: selected)
+        XCTAssertEqual(result.trashedCount, 2)
+
+        let inPlace = baseline.removing(trashedRecords: result.trashedItems)
+        let rescanned = engine.scan()
+
+        XCTAssertEqual(inPlace.clientSummaries.map(\.id), rescanned.clientSummaries.map(\.id))
+        XCTAssertEqual(inPlace.allItems.map(\.id), rescanned.allItems.map(\.id))
+        XCTAssertEqual(inPlace.totalSizeBytes, rescanned.totalSizeBytes)
+        XCTAssertEqual(inPlace.recommendedSizeBytes, rescanned.recommendedSizeBytes)
+        XCTAssertEqual(inPlace.reviewSuggestedSizeBytes, rescanned.reviewSuggestedSizeBytes)
+        XCTAssertEqual(inPlace.protectedSizeBytes, rescanned.protectedSizeBytes)
+        XCTAssertEqual(inPlace.totalItemCount, rescanned.totalItemCount)
+        XCTAssertEqual(inPlace.detectedBuiltInClientsCount, rescanned.detectedBuiltInClientsCount)
+    }
+
     private func makeItem(
+        clientID: String = "test-client",
+        clientName: String = "Test Client",
         url: URL,
         sizeBytes: Int64,
         isDirectory: Bool,
-        recommendation: CleanupRecommendation = .recommended
+        recommendation: CleanupRecommendation = .recommended,
+        modifiedAt: Date = Date(),
+        isCustom: Bool = false
     ) -> CleanableItem {
         CleanableItem(
-            clientID: "test-client",
-            clientName: "Test Client",
+            clientID: clientID,
+            clientName: clientName,
             ruleID: "test-rule",
             displayName: url.lastPathComponent,
             fileName: url.lastPathComponent,
             url: url,
-            category: .temporary,
+            category: isCustom ? .custom : .temporary,
             recommendation: recommendation,
             safetyNote: "测试用临时条目",
             sizeBytes: sizeBytes,
             fileCount: 1,
-            modifiedAt: Date(),
+            modifiedAt: modifiedAt,
             isDirectory: isDirectory,
-            isCustom: false
+            isCustom: isCustom
         )
     }
 }

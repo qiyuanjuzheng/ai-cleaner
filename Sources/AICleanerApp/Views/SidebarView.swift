@@ -56,7 +56,7 @@ struct SidebarView: View {
                     ) {
                         select(.history)
                     }
-                    .help("累计已移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.totalHistoricalFreedBytes))")
+                    .help("\(CleanupHistoryCopy.cumulativeCleanedTitle) \(CleanerFormatting.formatBytes(viewModel.totalHistoricalFreedBytes))")
 
                     SidebarClientTile(
                         title: "已排除",

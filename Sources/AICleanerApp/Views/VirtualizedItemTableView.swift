@@ -1025,7 +1025,8 @@ final class SectionBulkPillButton: NSButton {
     func configure(
         recommendation: CleanupRecommendation,
         isAllBulkSelected: Bool,
-        selectTooltip: String
+        selectTooltip: String,
+        accessibilitySubject: String? = nil
     ) {
         self.recommendation = recommendation
         self.isAllBulkSelected = isAllBulkSelected
@@ -1040,7 +1041,7 @@ final class SectionBulkPillButton: NSButton {
             self.toolTip = desiredTooltip
         }
 
-        setAccessibilityLabel("\(actionTitle)：\(recommendation.displayName)")
+        setAccessibilityLabel("\(actionTitle)：\(accessibilitySubject ?? recommendation.displayName)")
         applyColors()
         needsLayout = true
         needsDisplay = true
@@ -1969,12 +1970,16 @@ final class SectionHeaderTableCellView: NSTableCellView {
     }
 }
 
-/// 「按项目会话分组」模式下的项目分组头（仅展示，无折叠与批量勾选入口，勾选规则仍按推荐分组）
+/// 「按项目会话分组」模式下的项目分组头：展示项目名与汇总，右侧提供「全选本组 / 取消本组」，沿用现有批量勾选规则
 @MainActor
 final class ProjectHeaderTableCellView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("ProjectHeaderCell")
 
     private(set) var currentHeader: ProjectHeaderRow?
+    private(set) var isCurrentlyAllBulkSelected: Bool = false
+
+    let bulkActionButton = SectionBulkPillButton()
+    var onToggleBulkSelection: (@MainActor (SessionProjectID) -> Void)?
 
     private let folderIconView: PassthroughImageView = {
         let view = PassthroughImageView()
@@ -2007,6 +2012,11 @@ final class ProjectHeaderTableCellView: NSTableCellView {
         addSubview(folderIconView)
         addSubview(titleLabel)
         addSubview(summaryLabel)
+        addSubview(bulkActionButton)
+
+        bulkActionButton.isHidden = true
+        bulkActionButton.target = self
+        bulkActionButton.action = #selector(handleBulkSelectionClick)
     }
 
     @available(*, unavailable)
@@ -2014,17 +2024,52 @@ final class ProjectHeaderTableCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(header: ProjectHeaderRow) {
+    func configure(
+        header: ProjectHeaderRow,
+        isAllBulkSelected: Bool = false,
+        onToggleBulkSelection: (@MainActor (SessionProjectID) -> Void)? = nil
+    ) {
         currentHeader = header
+        isCurrentlyAllBulkSelected = isAllBulkSelected
+        self.onToggleBulkSelection = onToggleBulkSelection
         titleLabel.stringValue = header.title
         summaryLabel.stringValue = header.summaryText
         folderIconView.image = ItemTableResources.symbolImage(named: "folder", pointSize: 10, weight: .regular)
         titleLabel.toolTip = header.project.workspacePath ?? header.title
+        bulkActionButton.isHidden = !header.supportsBulkSelection
+        if header.supportsBulkSelection {
+            configureBulkButton()
+        }
         needsLayout = true
+    }
+
+    func setAllBulkSelected(_ isAllBulkSelected: Bool) {
+        guard isCurrentlyAllBulkSelected != isAllBulkSelected, let header = currentHeader else { return }
+        isCurrentlyAllBulkSelected = isAllBulkSelected
+        if header.supportsBulkSelection {
+            configureBulkButton()
+            needsLayout = true
+        }
+    }
+
+    private func configureBulkButton() {
+        guard let header = currentHeader else { return }
+        bulkActionButton.configure(
+            recommendation: .recommended,
+            isAllBulkSelected: isCurrentlyAllBulkSelected,
+            selectTooltip: header.selectBulkTooltip,
+            accessibilitySubject: header.title
+        )
+    }
+
+    @objc private func handleBulkSelectionClick() {
+        guard let project = currentHeader?.project else { return }
+        onToggleBulkSelection?(project)
     }
 
     func refreshAppearance() {
         folderIconView.contentTintColor = .secondaryLabelColor
+        bulkActionButton.refreshAppearance()
     }
 
     override func layout() {
@@ -2039,13 +2084,20 @@ final class ProjectHeaderTableCellView: NSTableCellView {
         let contentH = VirtualizedItemTableMetrics.sectionHeaderContentHeight
         let midY = topPad + contentH / 2
 
+        var trailingLimitX = rightX
+        if !bulkActionButton.isHidden {
+            let btnW = bulkActionButton.preferredWidth
+            bulkActionButton.frame = CGRect(x: rightX - btnW, y: round(midY - 11), width: btnW, height: 22)
+            trailingLimitX = bulkActionButton.frame.minX - 8
+        }
+
         var cursorX = leftX
         folderIconView.frame = CGRect(x: cursorX, y: round(midY - 6), width: 12, height: 12)
         cursorX += 12 + 7
 
         let titleFit = titleLabel.fittingSize
         let summaryFit = summaryLabel.fittingSize
-        let availableW = max(0, rightX - cursorX)
+        let availableW = max(0, trailingLimitX - cursorX)
         let summaryW = min(ceil(summaryFit.width), max(0, availableW / 2))
         let titleW = min(ceil(titleFit.width), max(0, availableW - summaryW - 7))
         titleLabel.frame = CGRect(x: cursorX, y: round(midY - titleFit.height / 2), width: titleW, height: ceil(titleFit.height))
@@ -2395,8 +2447,12 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
                         && viewModel.isSectionAllBulkSelected(header.recommendation)
                     cell.setAllBulkSelected(isAllSelected)
                 }
-            case .projectHeader:
-                break
+            case let .projectHeader(header):
+                if let cell = tableView.view(atColumn: 0, row: rowIndex, makeIfNecessary: false) as? ProjectHeaderTableCellView {
+                    let isAllSelected = header.supportsBulkSelection
+                        && viewModel.isProjectGroupAllBulkSelected(header.project)
+                    cell.setAllBulkSelected(isAllSelected)
+                }
             }
         }
     }
@@ -2483,7 +2539,14 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
                 cell = ProjectHeaderTableCellView()
                 cell.identifier = ProjectHeaderTableCellView.reuseIdentifier
             }
-            cell.configure(header: header)
+            cell.configure(
+                header: header,
+                isAllBulkSelected: header.supportsBulkSelection
+                    && viewModel.isProjectGroupAllBulkSelected(header.project),
+                onToggleBulkSelection: { [weak self] project in
+                    self?.handleToggleProjectGroupSelection(project)
+                }
+            )
             return cell
 
         case let .item(itemRow):
@@ -2753,6 +2816,16 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
         closeFullTitlePopover(animated: true)
         guard let viewModel else { return }
         viewModel.toggleSectionSelection(recommendation)
+        if lastSelectionRevision != viewModel.selectionRevision {
+            lastSelectionRevision = viewModel.selectionRevision
+            refreshVisibleSelectionStates()
+        }
+    }
+
+    private func handleToggleProjectGroupSelection(_ project: SessionProjectID) {
+        closeFullTitlePopover(animated: true)
+        guard let viewModel else { return }
+        viewModel.toggleProjectGroupSelection(project)
         if lastSelectionRevision != viewModel.selectionRevision {
             lastSelectionRevision = viewModel.selectionRevision
             refreshVisibleSelectionStates()

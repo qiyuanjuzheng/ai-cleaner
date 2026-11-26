@@ -1490,6 +1490,27 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertEqual(visibleLockedSessions, ["codex.jsonl", "claude.jsonl"])
         XCTAssertEqual(Set(model.filteredBulkSelectableItems.map(\.fileName)), ["other.jsonl", "unknown.jsonl"])
 
+        let headersByProject = Dictionary(uniqueKeysWithValues: model.displayedRows.compactMap { row -> (SessionProjectID, ProjectHeaderRow)? in
+            if case .projectHeader(let header) = row { return (header.project, header) }
+            return nil
+        })
+        XCTAssertEqual(headersByProject[protectedProject]?.supportsBulkSelection, false)
+        XCTAssertEqual(headersByProject[otherProject]?.bulkSelectableCount, 1)
+
+        // 项目分组头一键全选只勾选本项目可批量会话，受保护项目不会被勾选
+        model.toggleProjectGroupSelection(protectedProject)
+        XCTAssertTrue(model.selectedItemIDs.isEmpty)
+        model.toggleProjectGroupSelection(otherProject)
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), ["other.jsonl"])
+        XCTAssertTrue(model.isProjectGroupAllBulkSelected(otherProject))
+        XCTAssertFalse(model.isProjectGroupAllBulkSelected(.unidentified))
+        model.toggleProjectGroupSelection(.unidentified)
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), ["other.jsonl", "unknown.jsonl"])
+        model.toggleProjectGroupSelection(otherProject)
+        XCTAssertFalse(model.isProjectGroupAllBulkSelected(otherProject))
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), ["unknown.jsonl"])
+        model.selectedItemIDs = []
+
         model.searchText = "other.jsonl"
         XCTAssertEqual(model.displayedRows.compactMap { row -> SessionProjectID? in
             if case .projectHeader(let header) = row { return header.project }

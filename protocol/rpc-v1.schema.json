@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qiyuanjuzheng.github.io/ai-cleaner/protocol/rpc-v1.schema.json",
+  "title": "AI Cleaner sidecar JSON-RPC v1 message",
+  "description": "Each UTF-8 line contains one message or one JSON-RPC batch.",
+  "oneOf": [
+    { "$ref": "#/$defs/message" },
+    { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/message" } }
+  ],
+  "$defs": {
+    "message": {
+      "oneOf": [
+        { "$ref": "#/$defs/request" },
+        { "$ref": "#/$defs/response" },
+        { "$ref": "#/$defs/notification" }
+      ]
+    },
+    "id": { "type": ["string", "number", "null"] },
+    "method": {
+      "enum": [
+        "core.handshake", "core.ping", "core.shutdown", "scan.start", "scan.cancel",
+        "report.summary", "clients.list", "items.query", "items.get", "items.resolvePath",
+        "selection.apply", "selection.confirmRisk", "trash.preview", "trash.execute",
+        "history.list", "history.delete", "history.clear", "excluded.list", "excluded.add",
+        "excluded.restore", "excluded.restoreAll", "customDirs.list", "customDirs.validate",
+        "customDirs.add", "customDirs.remove", "projects.list", "projects.sessions",
+        "projects.setProtection", "disk.capacity", "settings.get", "settings.set"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "required": ["jsonrpc", "method"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/id" },
+        "method": { "$ref": "#/$defs/method" },
+        "params": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "method": { "const": "core.handshake" } } },
+          "then": {
+            "required": ["params"],
+            "properties": { "params": { "$ref": "#/$defs/handshakeParams" } }
+          }
+        },
+        {
+          "if": { "properties": { "method": { "const": "items.query" } } },
+          "then": {
+            "required": ["params"],
+            "properties": { "params": { "$ref": "#/$defs/queryParams" } }
+          }
+        },
+        {
+          "if": { "properties": { "method": { "const": "selection.apply" } } },
+          "then": {
+            "required": ["params"],
+            "properties": { "params": { "$ref": "#/$defs/selectionParams" } }
+          }
+        },
+        {
+          "if": { "properties": { "method": { "const": "trash.execute" } } },
+          "then": {
+            "required": ["params"],
+            "properties": { "params": { "$ref": "#/$defs/executeTrashParams" } }
+          }
+        }
+      ]
+    },
+    "response": {
+      "type": "object",
+      "required": ["jsonrpc", "id"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/id" },
+        "result": {},
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "oneOf": [{ "required": ["result"] }, { "required": ["error"] }],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" },
+        "data": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string" }, "reason": { "type": "string" },
+            "itemId": { "type": "string" }, "path": { "type": "string" }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "notification": {
+      "type": "object",
+      "required": ["jsonrpc", "method", "params"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "method": { "enum": ["scan.progress", "scan.completed"] },
+        "params": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "method": { "const": "scan.progress" } } },
+      "then": { "properties": { "params": { "$ref": "#/$defs/scanProgress" } } },
+      "else": { "properties": { "params": { "$ref": "#/$defs/scanCompleted" } } }
+    },
+    "handshakeParams": {
+      "type": "object",
+      "required": ["protocolVersion"],
+      "properties": {
+        "protocolVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "clientVersion": { "type": "string" }, "locale": { "type": "string" }
+      }
+    },
+    "scanProgress": {
+      "type": "object",
+      "required": ["scanId", "stage", "clients", "scannedFileCount", "cleanableBytes"],
+      "properties": {
+        "scanId": { "type": "string" },
+        "stage": { "enum": ["scanningClients", "analyzingCacheFiles", "tallyingCleanableSpace"] },
+        "clients": { "type": "array", "items": { "type": "object" } },
+        "scannedFileCount": { "$ref": "#/$defs/count" }, "cleanableBytes": { "$ref": "#/$defs/count" }
+      }
+    },
+    "scanCompleted": {
+      "type": "object",
+      "required": ["scanId", "status", "reportRevision", "summary"],
+      "properties": {
+        "scanId": { "type": "string" }, "status": { "enum": ["completed", "cancelled", "failed"] },
+        "reportRevision": { "$ref": "#/$defs/count" }, "summary": { "type": ["object", "null"] },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "category": { "enum": ["sessions", "cache", "temporary", "logs", "custom", "protectedData"] },
+    "recommendation": { "enum": ["recommended", "reviewSuggested", "notRecommended"] },
+    "scope": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["all", "client", "clientProjects"] },
+        "clientId": { "type": "string", "minLength": 1 }, "projectId": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "client" } } }, "then": { "required": ["clientId"] } },
+        { "if": { "properties": { "kind": { "const": "clientProjects" } } }, "then": { "required": ["clientId", "projectId"] } }
+      ]
+    },
+    "filter": {
+      "type": "object",
+      "properties": {
+        "search": { "type": ["string", "null"] },
+        "category": { "anyOf": [{ "$ref": "#/$defs/category" }, { "type": "null" }] },
+        "recommendation": { "anyOf": [{ "$ref": "#/$defs/recommendation" }, { "type": "null" }] },
+        "age": { "enum": ["all", "olderThan7Days", "olderThan30Days", "olderThan90Days", null] }
+      }
+    },
+    "queryParams": {
+      "type": "object",
+      "required": ["scanId"],
+      "properties": {
+        "scanId": { "type": "string", "minLength": 1 },
+        "scope": { "anyOf": [{ "$ref": "#/$defs/scope" }, { "type": "null" }] },
+        "filter": { "anyOf": [{ "$ref": "#/$defs/filter" }, { "type": "null" }] },
+        "sort": { "enum": ["sizeDesc", "sizeAsc", "modifiedDesc", "modifiedAsc", "nameAsc", null] },
+        "offset": { "anyOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }] },
+        "limit": { "type": ["integer", "null"], "minimum": 1, "maximum": 200 }
+      }
+    },
+    "selectionParams": {
+      "type": "object",
+      "required": ["scanId", "op"],
+      "properties": {
+        "scanId": { "type": "string", "minLength": 1 },
+        "op": { "enum": ["toggle", "selectRecommendedInScope", "selectSection", "deselectSection", "toggleSection", "selectAllVisible", "invertVisible", "clearVisible", "clearAll"] },
+        "scope": { "anyOf": [{ "$ref": "#/$defs/scope" }, { "type": "null" }] },
+        "filter": { "anyOf": [{ "$ref": "#/$defs/filter" }, { "type": "null" }] },
+        "itemIds": { "type": "array", "maxItems": 500, "items": { "type": "string", "minLength": 1 } },
+        "recommendation": { "enum": ["recommended", "reviewSuggested"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "op": { "const": "toggle" } } }, "then": { "required": ["itemIds"] } },
+        { "if": { "properties": { "op": { "enum": ["selectSection", "deselectSection", "toggleSection"] } } }, "then": { "required": ["recommendation"] } }
+      ]
+    },
+    "executeTrashParams": {
+      "type": "object",
+      "required": ["scanId", "confirmationToken"],
+      "properties": {
+        "scanId": { "type": "string", "minLength": 1 }, "confirmationToken": { "type": "string", "minLength": 1 },
+        "acknowledgedNotRecommendedRisk": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "id", "clientId", "clientName", "ruleId", "displayName", "preferredTitle", "fileName", "path", "category",
+        "recommendation", "safetyNote", "requiresIndividualSelection", "bulkSelectable", "selected", "isRecentlyModified",
+        "isSessionArtifact", "isDirectory", "isCustom", "sizeBytes", "fileCount", "modifiedAt"
+      ],
+      "properties": {
+        "id": { "type": "string" }, "clientId": { "type": "string" }, "clientName": { "type": "string" },
+        "ruleId": { "type": "string" }, "displayName": { "type": "string" }, "preferredTitle": { "type": "string" },
+        "sessionTitle": { "type": "string" }, "sessionProjectName": { "type": "string" }, "fileName": { "type": "string" },
+        "path": { "type": "string" }, "category": { "$ref": "#/$defs/category" },
+        "recommendation": { "$ref": "#/$defs/recommendation" }, "safetyNote": { "type": "string" },
+        "hardProtectionReason": { "type": "string" }, "requiresIndividualSelection": { "type": "boolean" },
+        "bulkSelectable": { "type": "boolean" }, "selected": { "type": "boolean" }, "sourceBadge": { "type": "string" },
+        "isRecentlyModified": { "type": "boolean" }, "isSessionArtifact": { "type": "boolean" },
+        "isDirectory": { "type": "boolean" }, "isCustom": { "type": "boolean" },
+        "sizeBytes": { "$ref": "#/$defs/count" }, "fileCount": { "$ref": "#/$defs/count" },
+        "modifiedAt": { "type": "string", "format": "date-time" },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/item" } }
+      }
+    }
+  }
+}

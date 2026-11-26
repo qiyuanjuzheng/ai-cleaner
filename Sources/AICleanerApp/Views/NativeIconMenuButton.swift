@@ -47,7 +47,7 @@ enum ItemControlBarMenuFactory {
 
         menu.addItem(.sectionHeader(title: "时间范围"))
         for filter in ItemAgeFilter.allCases {
-            menu.addAction(filter.rawValue, checked: viewModel.selectedAgeFilter == filter) {
+            menu.addAction(filter.menuTitle, checked: viewModel.selectedAgeFilter == filter) {
                 viewModel.selectedAgeFilter = filter
             }
         }
@@ -55,7 +55,7 @@ enum ItemControlBarMenuFactory {
         menu.addItem(.separator())
         menu.addItem(.sectionHeader(title: "排序方式"))
         for order in ItemSortOrder.allCases {
-            menu.addAction(order.rawValue, checked: viewModel.sortOrder == order) {
+            menu.addAction(order.menuTitle, checked: viewModel.sortOrder == order) {
                 viewModel.sortOrder = order
             }
         }

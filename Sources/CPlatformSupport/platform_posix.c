@@ -340,6 +340,31 @@ bool aicl_list_directory(const char *utf8_path, aicl_dir_entry_cb cb, void *ctx)
     return complete;
 }
 
+void *aicl_data_directory_lock(const char *utf8_path) {
+    if (!utf8_path) return NULL;
+    int fd = open(utf8_path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid()
+        || flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return NULL;
+    }
+    int *handle = malloc(sizeof(*handle));
+    if (!handle) {
+        close(fd);
+        return NULL;
+    }
+    *handle = fd;
+    return handle;
+}
+
+void aicl_data_directory_unlock(void *handle) {
+    if (!handle) return;
+    close(*(int *)handle);
+    free(handle);
+}
+
 bool aicl_posix_is_sticky_trash_dir(const char *utf8_path) {
     if (!utf8_path) return false;
     struct stat st;

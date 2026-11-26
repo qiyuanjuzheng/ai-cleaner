@@ -82,6 +82,10 @@ void aicl_ro_file_close(aicl_ro_file_t *file);
 
 bool aicl_list_directory(const char *utf8_path, aicl_dir_entry_cb cb, void *ctx);
 
+/* Keep the returned handle open to hold the exclusive lock. */
+void *aicl_data_directory_lock(const char *utf8_path);
+void aicl_data_directory_unlock(void *handle);
+
 int32_t aicl_linux_trash_move(const char *source, const char *trash_root, const char *name,
                              const uint8_t *metadata, size_t length);
 bool aicl_posix_is_sticky_trash_dir(const char *utf8_path);

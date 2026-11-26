@@ -18,12 +18,7 @@ public struct ProjectProtectionStore: Sendable {
 
     /// 严格失败关闭（fail-closed）：文件不存在时返回空集合；若文件存在但无法解析则抛错，防止清理流程误放行受保护项目。
     public func load() throws -> Set<String> {
-        let fsPath = PlatformPath.fileSystemPath(for: storageURL)
-        guard FileManager.default.fileExists(atPath: fsPath) else {
-            return []
-        }
-        let data = try Data(contentsOf: storageURL)
-        return Set(try JSONDecoder().decode([String].self, from: data))
+        Set(try CoreStorageIO.readJSON([String].self, at: storageURL, quarantineOnCorruption: false) ?? [])
     }
 
     public func save(_ projects: Set<String>) throws {

@@ -19,16 +19,12 @@ public struct CleanupHistoryStore: Sendable {
 
     /// 读取全部历史清理记录（按时间正序）。若文件损坏则先备份保留再返回空数组（ADR 0001 第 7.3 节）。
     public func load() -> [CleanupHistoryRecord] {
-        guard let data = try? Data(contentsOf: storageURL) else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let records = try? decoder.decode([CleanupHistoryRecord].self, from: data) else {
-            CoreStorageIO.quarantineCorruptFile(at: storageURL)
-            return []
-        }
-        return records.sorted { $0.timestamp < $1.timestamp }
+        (try? loadChecked()) ?? []
+    }
+
+    public func loadChecked() throws -> [CleanupHistoryRecord] {
+        try (CoreStorageIO.readJSON([CleanupHistoryRecord].self, at: storageURL) ?? [])
+            .sorted { $0.timestamp < $1.timestamp }
     }
 
     /// 将一次成功的 `CleanupResult` 追加写入历史统计（若本次无实际移入条目则不写入）
@@ -44,7 +40,7 @@ public struct CleanupHistoryStore: Sendable {
     /// 追加单条历史记录并原子保存
     @discardableResult
     public func append(_ record: CleanupHistoryRecord) throws -> [CleanupHistoryRecord] {
-        var existing = load()
+        var existing = try loadChecked()
         existing.append(record)
         existing.sort { $0.timestamp < $1.timestamp }
         try save(existing)
@@ -54,7 +50,7 @@ public struct CleanupHistoryStore: Sendable {
     /// 删除单条统计记录（仅移除统计日志，绝不触碰任何磁盘或废纸篓文件）
     @discardableResult
     public func delete(id: UUID) throws -> [CleanupHistoryRecord] {
-        var existing = load()
+        var existing = try loadChecked()
         existing.removeAll { $0.id == id }
         try save(existing)
         return existing
@@ -62,6 +58,7 @@ public struct CleanupHistoryStore: Sendable {
 
     /// 清空全部统计记录（仅清空统计日志，绝不触碰任何磁盘或废纸篓文件）
     public func clearAll() throws {
+        _ = try loadChecked()
         try save([])
     }
 

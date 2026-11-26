@@ -8,6 +8,9 @@ on:
       - 'Package.swift'
       - 'Sources/**'
       - 'Tests/**'
+      - 'rules/**'
+      - 'protocol/**'
+      - 'scripts/generate-built-in-rules.py'
   push:
     branches: [main]
     paths:
@@ -15,12 +18,28 @@ on:
       - 'Package.swift'
       - 'Sources/**'
       - 'Tests/**'
+      - 'rules/**'
+      - 'protocol/**'
+      - 'scripts/generate-built-in-rules.py'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  rules-check:
+    name: Validate built-in rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: |
+          python3 -m venv .rules-venv
+          .rules-venv/bin/pip install --quiet jsonschema==4.23.0
+          .rules-venv/bin/python scripts/generate-built-in-rules.py --check
+
   macos:
     name: macOS Swift tests
     runs-on: macos-15

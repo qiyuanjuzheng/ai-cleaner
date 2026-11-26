@@ -1,0 +1,104 @@
+name: Real-OS rules verification (AICL-37 / AICL-38)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/rules-verify.yml'
+      - 'scripts/verify_rules_ci.py'
+      - 'rules/**'
+      - 'Sources/AICleanerCore/Rules/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rules-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-linux:
+    name: Linux · Real CLI install & aicleaner-core scan
+    runs-on: ubuntu-latest
+    container: swift:6.4.3-noble
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js and real CLI AI clients
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm python3 >/dev/null
+          mkdir -p /tmp/aicl-cli
+          for pkg in opencode-ai @openai/codex @earendil-works/pi-coding-agent @google/gemini-cli @anthropic-ai/claude-code @github/copilot; do
+            npm install --prefix /tmp/aicl-cli --no-audit --no-fund "$pkg" || echo "::warning::Failed to install $pkg"
+          done
+
+      - name: Build aicleaner-core sidecar
+        run: swift build --product aicleaner-core
+
+      - name: Run real clients and scan with aicleaner-core
+        run: |
+          bin="$(swift build --show-bin-path)/aicleaner-core"
+          python3 scripts/verify_rules_ci.py \
+            --sidecar "$bin" \
+            --npm-bin /tmp/aicl-cli/node_modules/.bin \
+            --out verify-linux-out
+          cat verify-linux-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: rules-verify-linux
+          path: verify-linux-out/**
+
+  verify-windows:
+    name: Windows · Real CLI install & aicleaner-core scan
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
+        with:
+          swift-version: swift-6.4.3-release
+          swift-build: 6.4.3-RELEASE
+
+      - name: Install real CLI AI clients
+        run: |
+          $cliDir = Join-Path $env:RUNNER_TEMP "aicl-cli"
+          New-Item -ItemType Directory -Force -Path $cliDir | Out-Null
+          foreach ($pkg in @("opencode-ai", "@openai/codex", "@earendil-works/pi-coding-agent", "@google/gemini-cli", "@anthropic-ai/claude-code", "@github/copilot")) {
+            npm install --prefix $cliDir --no-audit --no-fund $pkg
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Failed to install $pkg" }
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Build aicleaner-core sidecar
+        run: swift build --product aicleaner-core
+
+      - name: Run real clients and scan with aicleaner-core
+        run: |
+          $binDir = (swift build --show-bin-path).Trim()
+          $bin = Join-Path $binDir "aicleaner-core.exe"
+          $npmBin = Join-Path $env:RUNNER_TEMP "aicl-cli\node_modules\.bin"
+          python scripts/verify_rules_ci.py `
+            --sidecar $bin `
+            --npm-bin $npmBin `
+            --use-real-home `
+            --out verify-windows-out
+          Get-Content verify-windows-out/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: rules-verify-windows
+          path: verify-windows-out/**

@@ -4,9 +4,10 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: CleanerViewModel
+    let diskUsage: DiskUsageRefreshCoordinator
     @State private var hasVisitedHistory: Bool = false
     @State private var hasVisitedExcluded: Bool = false
-    @State private var isWindowVisibleOnScreen: Bool = true
+    @State private var isWindowVisibleOnScreen: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -16,7 +17,7 @@ struct ContentView: View {
         let isListPage = viewModel.sidebarSelection.isListScope
 
         NavigationSplitView {
-            SidebarView(viewModel: viewModel)
+            SidebarView(viewModel: viewModel, diskUsageState: diskUsage.state)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 252, max: 300)
         } detail: {
             ZStack(alignment: .bottom) {
@@ -24,6 +25,10 @@ struct ContentView: View {
                     if isWindowVisibleOnScreen != isVisible {
                         isWindowVisibleOnScreen = isVisible
                     }
+                    diskUsage.setWindowActivity(
+                        isApplicationActive: NSApplication.shared.isActive,
+                        isWindowVisible: isVisible
+                    )
                 }
                 .frame(width: 0, height: 0)
                 .allowsHitTesting(false)
@@ -162,6 +167,10 @@ struct ContentView: View {
             )
         }
         .onAppear {
+            diskUsage.setWindowActivity(
+                isApplicationActive: NSApplication.shared.isActive,
+                isWindowVisible: isWindowVisibleOnScreen
+            )
             if viewModel.sidebarSelection == .history {
                 hasVisitedHistory = true
             }
@@ -169,6 +178,20 @@ struct ContentView: View {
                 hasVisitedExcluded = true
             }
             applyWindowAppearance(viewModel.appearanceMode)
+        }
+        .onDisappear {
+            diskUsage.setWindowActivity(isApplicationActive: false, isWindowVisible: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            diskUsage.setWindowActivity(isApplicationActive: true, isWindowVisible: isWindowVisibleOnScreen)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            diskUsage.setWindowActivity(isApplicationActive: false, isWindowVisible: isWindowVisibleOnScreen)
+        }
+        .onChange(of: viewModel.lastCleanupResult?.completedAt) { _, _ in
+            if !viewModel.isCleaning, let result = viewModel.lastCleanupResult, result.trashedCount > 0 {
+                diskUsage.refreshAfterCleanup()
+            }
         }
         .onChange(of: viewModel.sidebarSelection) { _, newValue in
             if newValue == .history && !hasVisitedHistory {

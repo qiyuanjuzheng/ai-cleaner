@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 成功移入废纸篓的条目记录
 public struct TrashedItemRecord: Identifiable, Hashable, Sendable {

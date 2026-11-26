@@ -1,8 +1,8 @@
-import Darwin
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
-
-@_silgen_name("flock")
-private func bsdFlock(_ fd: Int32, _ operation: Int32) -> Int32
+#endif
 
 /// `/tmp`（`/private/tmp`）与 macOS 系统用户临时目录（`DARWIN_USER_TEMP_DIR` / `NSTemporaryDirectory()`）
 /// 的分层扫描结果：
@@ -35,19 +35,6 @@ public struct TempDirectoryScanResult: Sendable {
 public struct TempDirectoryScanner: Sendable {
     public static let otherAITempClientID = "other-ai-temp"
     public static let unattributedTempClientID = "system-tmp-unattributed"
-    public static let defaultSystemTempRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
-
-    public static var defaultUserTempRoot: URL {
-        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-        let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
-        if length > 0 && length <= buffer.count {
-            let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
-            if let path = String(bytes: bytes, encoding: .utf8), !path.isEmpty {
-                return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-            }
-        }
-        return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).standardizedFileURL
-    }
 
     public static func otherAITempProfile() -> AIClientProfile {
         AIClientProfile(
@@ -360,27 +347,37 @@ public struct TempDirectoryScanner: Sendable {
         "powerlog"
     ]
 
+    public let platform: any PlatformAdapter
     public let safetyGuard: SafetyGuard
     public let sizer: DirectorySizer
     public let cooldownHours: Int
-    public let currentUID: uid_t
+    public let currentPrincipal: Principal
     public let activeTempDirectoryPath: String?
-    public let ownerUIDResolver: (@Sendable (URL) -> uid_t?)?
+    public let ownerResolver: (@Sendable (URL) -> Principal?)?
 
     public init(
         safetyGuard: SafetyGuard,
-        sizer: DirectorySizer = DirectorySizer(),
+        sizer: DirectorySizer? = nil,
         cooldownHours: Int = 24,
-        currentUID: uid_t = getuid(),
-        activeTempDirectoryPath: String? = ProcessInfo.processInfo.environment["TMPDIR"],
-        ownerUIDResolver: (@Sendable (URL) -> uid_t?)? = nil
+        currentPrincipal: Principal? = nil,
+        activeTempDirectoryPath: String? = nil,
+        useDefaultActiveTempPath: Bool = true,
+        ownerResolver: (@Sendable (URL) -> Principal?)? = nil
     ) {
+        let platform = safetyGuard.platform
+        self.platform = platform
         self.safetyGuard = safetyGuard
-        self.sizer = sizer
+        self.sizer = sizer ?? DirectorySizer(platform: platform)
         self.cooldownHours = max(1, cooldownHours)
-        self.currentUID = currentUID
-        self.activeTempDirectoryPath = activeTempDirectoryPath
-        self.ownerUIDResolver = ownerUIDResolver
+        self.currentPrincipal = currentPrincipal ?? platform.currentPrincipal
+        if let activeTempDirectoryPath {
+            self.activeTempDirectoryPath = activeTempDirectoryPath
+        } else if useDefaultActiveTempPath {
+            self.activeTempDirectoryPath = platform.environmentVariable("TMPDIR")
+        } else {
+            self.activeTempDirectoryPath = nil
+        }
+        self.ownerResolver = ownerResolver
     }
 
     /// 判断顶层文件/目录名是否命中第一层高置信度 AI 特征规则，返回对应客户端 ID（含 `other-ai-temp`）。
@@ -412,9 +409,11 @@ public struct TempDirectoryScanner: Sendable {
         let activeTempCanonicalPath = canonicalOptionalDirectoryPath(activeTempDirectoryPath, fileManager: fileManager)
         let selfProtectedPaths = currentProcessProtectedPaths()
 
-        let canonicalSystemRoot = systemTempRoot.flatMap { canonicalExistingDirectory($0, fileManager: fileManager) }
-        var canonicalUserRoot = userTempRoot.flatMap { canonicalExistingDirectory($0, fileManager: fileManager) }
-        if let sys = canonicalSystemRoot, let usr = canonicalUserRoot, sys.path == usr.path {
+        let canonicalSystemRoot = systemTempRoot.flatMap { canonicalExistingDirectory($0) }
+        var canonicalUserRoot = userTempRoot.flatMap { canonicalExistingDirectory($0) }
+        if let sys = canonicalSystemRoot, let usr = canonicalUserRoot,
+           PlatformPath.comparisonKey(PlatformPath.normalize(sys), caseInsensitive: platform.pathsAreCaseInsensitive)
+           == PlatformPath.comparisonKey(PlatformPath.normalize(usr), caseInsensitive: platform.pathsAreCaseInsensitive) {
             canonicalUserRoot = nil
         }
 
@@ -435,11 +434,7 @@ public struct TempDirectoryScanner: Sendable {
 
         for root in layer1Roots {
             if Task.isCancelled { break }
-            guard let entries = try? fileManager.contentsOfDirectory(
-                at: root.url,
-                includingPropertiesForKeys: nil,
-                options: []
-            ) else {
+            guard let entries = try? platform.contentsOfDirectory(at: root.url) else {
                 continue
             }
 
@@ -451,9 +446,12 @@ public struct TempDirectoryScanner: Sendable {
                     continue
                 }
 
-                let canonicalPath = entryURL.path
+                let canonicalKey = PlatformPath.comparisonKey(
+                    PlatformPath.normalize(entryURL),
+                    caseInsensitive: platform.pathsAreCaseInsensitive
+                )
                 // 无论后续是否被排除、活跃锁或安全护栏跳过，已命中第一层命名特征的条目绝不落入第二层未归属区
-                guard claimedCanonicalPaths.insert(canonicalPath).inserted else {
+                guard claimedCanonicalPaths.insert(canonicalKey).inserted else {
                     continue
                 }
 
@@ -519,20 +517,19 @@ public struct TempDirectoryScanner: Sendable {
             }
         }
 
-        // MARK: 第二层扫描（仅 /private/tmp 顶层未归属的当前用户非空普通项，严格仅手选）
+        // MARK: 第二层扫描（仅系统共享临时目录顶层未归属的当前用户非空普通项，严格仅手选）
         if let systemRoot = canonicalSystemRoot, !Task.isCancelled,
-           let entries = try? fileManager.contentsOfDirectory(
-               at: systemRoot,
-               includingPropertiesForKeys: nil,
-               options: []
-           ) {
+           let entries = try? platform.contentsOfDirectory(at: systemRoot) {
             for rawEntryURL in entries {
                 if Task.isCancelled { break }
                 let entryURL = rawEntryURL.standardizedFileURL
-                let canonicalPath = entryURL.path
+                let canonicalKey = PlatformPath.comparisonKey(
+                    PlatformPath.normalize(entryURL),
+                    caseInsensitive: platform.pathsAreCaseInsensitive
+                )
 
                 // 与第一层严格去重
-                if claimedCanonicalPaths.contains(canonicalPath) {
+                if claimedCanonicalPaths.contains(canonicalKey) {
                     continue
                 }
 
@@ -567,7 +564,7 @@ public struct TempDirectoryScanner: Sendable {
                     continue
                 }
 
-                guard claimedCanonicalPaths.insert(canonicalPath).inserted else {
+                guard claimedCanonicalPaths.insert(canonicalKey).inserted else {
                     continue
                 }
 
@@ -631,26 +628,30 @@ public struct TempDirectoryScanner: Sendable {
         fileManager: FileManager,
         skippedProtectedCount: inout Int
     ) -> PathInspectionResult? {
-        let path = entryURL.path
-        let fileName = entryURL.lastPathComponent
+        let normalizedPath = PlatformPath.normalize(entryURL)
+        let fileName = PlatformPath.lastPathComponent(normalizedPath)
         let lowerName = fileName.lowercased()
 
-        // 1. POSIX lstat：原子校验文件类型与属主，严禁穿透符号链接
-        var st = stat()
-        guard lstat(path, &st) == 0 else {
+        // 1. 经由 PlatformAdapter 原子校验文件类型与属主，绝不穿透符号链接或 Windows 重解析点/目录联接
+        guard let identity = try? platform.identity(at: entryURL) else {
             return nil
         }
 
-        let modeType = st.st_mode & S_IFMT
-        // 绝对跳过符号链接、Socket、FIFO、字符/块设备等特殊节点
-        guard modeType == S_IFREG || modeType == S_IFDIR else {
+        // 绝对跳过符号链接、Windows 重解析点/junction、Socket、FIFO、字符/块设备等特殊节点
+        guard identity.kind == .regular || identity.kind == .directory else {
             skippedProtectedCount += 1
             return nil
         }
 
-        // 仅限当前用户拥有的条目（绝对跳过 root 或其他用户）
-        let ownerUID = ownerUIDResolver?(entryURL) ?? st.st_uid
-        guard ownerUID == currentUID else {
+        // 跳过 Windows 隐藏或系统属性标记的文件/目录
+        if identity.isHiddenOrSystem {
+            skippedProtectedCount += 1
+            return nil
+        }
+
+        // 仅限当前用户主体拥有的条目（绝对跳过 root / SYSTEM 或其他用户）
+        let owner = ownerResolver?(entryURL) ?? identity.owner
+        guard owner == currentPrincipal else {
             skippedProtectedCount += 1
             return nil
         }
@@ -662,27 +663,27 @@ public struct TempDirectoryScanner: Sendable {
         }
 
         // 2. 活跃进程保护：跳过当前应用自身与当前运行环境 TMPDIR
-        if isCurrentAppEntry(lowerName: lowerName, canonicalPath: path, selfProtectedPaths: selfProtectedPaths) {
+        if isCurrentAppEntry(lowerName: lowerName, canonicalPath: normalizedPath, selfProtectedPaths: selfProtectedPaths) {
             skippedProtectedCount += 1
             return nil
         }
 
         if let activeTempCanonicalPath,
-           path == activeTempCanonicalPath || activeTempCanonicalPath.hasPrefix(path + "/") {
+           PlatformPath.isEqualOrDescendant(
+               activeTempCanonicalPath,
+               of: normalizedPath,
+               caseInsensitive: platform.pathsAreCaseInsensitive
+           ) {
             skippedProtectedCount += 1
             return nil
         }
 
         // 3. 顶层锁文件或近期锁目录直接跳过
-        let entryMTime = Date(
-            timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec)
-                + TimeInterval(st.st_mtimespec.tv_nsec) / 1_000_000_000.0
-        )
-        if Self.isActiveLockEntry(
-            path: path,
+        if isActiveLockEntry(
+            url: entryURL,
             lowerName: lowerName,
-            isDirectory: modeType == S_IFDIR,
-            modifiedAt: entryMTime,
+            isDirectory: identity.kind == .directory,
+            modifiedAt: identity.modifiedAt,
             cooldownCutoff: cooldownCutoff
         ) {
             skippedProtectedCount += 1
@@ -700,24 +701,23 @@ public struct TempDirectoryScanner: Sendable {
             url: entryURL,
             safetyGuard: safetyGuard,
             fileManager: fileManager,
-            descendantValidator: { childURL, values in
+            descendantValidator: { childURL, childIdentity in
                 let childName = childURL.lastPathComponent.lowercased()
                 if childName.hasSuffix(".sock") {
                     return "\(childURL.lastPathComponent)：包含 Unix Domain Socket"
                 }
-                if values.isSymbolicLink == true {
-                    let resolved = childURL.resolvingSymlinksInPath().standardizedFileURL
+                if childIdentity.kind.isLinkOrReparsePoint {
+                    let resolved = platform.resolveSymlinks(at: childURL)
                     if !safetyGuard.validateTarget(resolved, fileManager: fileManager).isAllowed {
-                        return "\(childURL.lastPathComponent)：符号链接指向受保护路径"
+                        return "\(childURL.lastPathComponent)：符号链接或重解析点指向受保护路径"
                     }
                 }
-                let childIsDir = (values.isDirectory ?? false) && !(values.isSymbolicLink ?? false)
-                let childMTime = values.contentModificationDate ?? Date()
-                if Self.isActiveLockEntry(
-                    path: childURL.path,
+                let childIsDir = childIdentity.kind == .directory
+                if isActiveLockEntry(
+                    url: childURL,
                     lowerName: childName,
                     isDirectory: childIsDir,
-                    modifiedAt: childMTime,
+                    modifiedAt: childIdentity.modifiedAt,
                     cooldownCutoff: cooldownCutoff
                 ) {
                     return "\(childURL.lastPathComponent)：包含活跃锁文件"
@@ -736,75 +736,71 @@ public struct TempDirectoryScanner: Sendable {
         return inspection
     }
 
-    private func canonicalExistingDirectory(_ url: URL, fileManager: FileManager) -> URL? {
-        let resolved = url.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL
-        var isDir: ObjCBool = false
-        guard fileManager.fileExists(atPath: resolved.path, isDirectory: &isDir), isDir.boolValue else {
+    private func canonicalExistingDirectory(_ url: URL) -> URL? {
+        let resolved = platform.resolveSymlinks(at: url)
+        guard let identity = try? platform.identity(at: resolved),
+              identity.kind == .directory else {
             return nil
         }
         return resolved
     }
 
     private func canonicalOptionalDirectoryPath(_ rawPath: String?, fileManager: FileManager) -> String? {
-        guard let rawPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPath.isEmpty else {
+        guard let rawPath = rawPath?.trimmedWhitespaceAndNewlines(), !rawPath.isEmpty else {
             return nil
         }
-        var current = URL(fileURLWithPath: rawPath).standardizedFileURL
-        var trailingComponents: [String] = []
-        while current.path != "/" && !fileManager.fileExists(atPath: current.path) {
-            trailingComponents.append(current.lastPathComponent)
-            current = current.deletingLastPathComponent()
+        let url = URL(fileURLWithPath: rawPath, isDirectory: true)
+        if (try? platform.identity(at: url)) != nil {
+            return PlatformPath.normalize(platform.resolveSymlinks(at: url))
         }
-        var resolved = current.resolvingSymlinksInPath().standardizedFileURL
-        for component in trailingComponents.reversed() {
-            resolved = resolved.appendingPathComponent(component)
-        }
-        return Self.stripTrailingSlash(resolved.standardizedFileURL.path)
+        return PlatformPath.normalize(SafetyGuard.normalizeTempPath(url, platform: platform))
     }
 
     private func currentProcessProtectedPaths() -> [String] {
         var paths: [String] = []
-        if let executableURL = Bundle.main.executableURL {
-            paths.append(Self.stripTrailingSlash(executableURL.resolvingSymlinksInPath().standardizedFileURL.path))
+        if let executableURL = platform.currentExecutableURL {
+            paths.append(PlatformPath.normalize(platform.resolveSymlinks(at: executableURL)))
         }
         let cwd = FileManager.default.currentDirectoryPath
         if !cwd.isEmpty {
-            paths.append(Self.stripTrailingSlash(URL(fileURLWithPath: cwd).resolvingSymlinksInPath().standardizedFileURL.path))
+            paths.append(PlatformPath.normalize(platform.resolveSymlinks(at: URL(fileURLWithPath: cwd))))
         }
         return paths
     }
 
     private func isCurrentAppEntry(lowerName: String, canonicalPath: String, selfProtectedPaths: [String]) -> Bool {
-        if lowerName.hasPrefix("ai-cleaner") || lowerName.hasPrefix("aicleaner") || lowerName.hasPrefix("com.aicleaner") {
-            return true
-        }
-        if let bundleID = Bundle.main.bundleIdentifier?.lowercased(),
-           !bundleID.isEmpty,
-           !bundleID.contains("xctest"),
-           (lowerName == bundleID || lowerName.hasPrefix(bundleID + ".") || lowerName.hasPrefix(bundleID + "-")) {
-            return true
+        for rawID in platform.selfIdentifiers {
+            let id = rawID.lowercased()
+            guard !id.isEmpty, !id.contains("xctest") else { continue }
+            if lowerName == id || lowerName.hasPrefix(id + ".") || lowerName.hasPrefix(id + "-") || lowerName.hasPrefix(id) {
+                return true
+            }
         }
         for protectedPath in selfProtectedPaths {
-            if protectedPath == canonicalPath || protectedPath.hasPrefix(canonicalPath + "/") {
+            if PlatformPath.isEqualOrDescendant(
+                protectedPath,
+                of: canonicalPath,
+                caseInsensitive: platform.pathsAreCaseInsensitive
+            ) {
                 return true
             }
         }
         return false
     }
 
-    private static func isActiveLockEntry(
-        path: String,
+    private func isActiveLockEntry(
+        url: URL,
         lowerName: String,
         isDirectory: Bool,
         modifiedAt: Date,
         cooldownCutoff: Date
     ) -> Bool {
-        if alwaysActiveLockFileNames.contains(lowerName) {
+        if Self.alwaysActiveLockFileNames.contains(lowerName) {
             return true
         }
-        let isLockLike = lockExactFileNames.contains(lowerName)
+        let isLockLike = Self.lockExactFileNames.contains(lowerName)
             || lowerName.hasPrefix(".lock")
-            || lockFileSuffixes.contains(where: { lowerName.hasSuffix($0) })
+            || Self.lockFileSuffixes.contains(where: { lowerName.hasSuffix($0) })
         guard isLockLike else { return false }
 
         // 近期修改的锁文件或锁目录视为活跃锁
@@ -814,36 +810,8 @@ public struct TempDirectoryScanner: Sendable {
 
         guard !isDirectory else { return false }
 
-        // 即使 mtime 较旧，若当前仍持有 OS 级文件锁（flock 或 fcntl），仍视为活跃锁
-        return hasActiveOSFileLock(atPath: path)
-    }
-
-    private static func hasActiveOSFileLock(atPath path: String) -> Bool {
-        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-
-        // 1. 检测跨进程 POSIX fcntl 写锁（纯只读查询）
-        var fl = flock()
-        fl.l_type = Int16(F_WRLCK)
-        fl.l_whence = Int16(SEEK_SET)
-        fl.l_start = 0
-        fl.l_len = 0
-        if fcntl(fd, F_GETLK, &fl) == 0 && fl.l_type != Int16(F_UNLCK) {
-            return true
-        }
-
-        // 2. 检测 BSD flock 排他锁（尝试非阻塞共享读锁，若被排他占用立即返回 EWOULDBLOCK）
-        if bsdFlock(fd, LOCK_SH | LOCK_NB) != 0 {
-            return errno == EWOULDBLOCK || errno == EAGAIN
-        }
-        _ = bsdFlock(fd, LOCK_UN)
-        return false
-    }
-
-    private static func stripTrailingSlash(_ path: String) -> String {
-        guard path.count > 1, path.hasSuffix("/") else { return path }
-        return String(path.dropLast())
+        // 即使 mtime 较旧，若当前仍持有 OS 级文件锁（POSIX fcntl/flock 或 Windows 共享锁），仍视为活跃锁
+        return platform.hasActiveFileLock(at: url)
     }
 
     private static func defaultItemSort(_ lhs: CleanableItem, _ rhs: CleanableItem) -> Bool {

@@ -50,7 +50,7 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         try sandbox.createFile(relativeToHome: ".workbuddy/binaries/runtime.bin", byteCount: 10_000)
         try sandbox.createFile(relativeToHome: ".workbuddy/skills/my-skill/SKILL.md", byteCount: 400)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         let workBuddy = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "workbuddy" }))
@@ -69,7 +69,7 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         try sandbox.createFile(relativeToHome: "DoubaoWork/skills/work-skill/SKILL.md", byteCount: 200)
         try sandbox.createFile(relativeToHome: "Library/Application Support/jianyin_agent/GPUCache/data_0", byteCount: 2_500)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         let doubao = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "doubao" }))
@@ -123,7 +123,7 @@ final class RecommendationAndDomesticClientsTests: XCTestCase {
         for path in paths {
             try sandbox.createFile(relativeToHome: path, byteCount: 64)
         }
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let items = Dictionary(uniqueKeysWithValues: report.allProtectedItems.map { ($0.ruleID, $0) })
 
         let hardLocked: [String: String] = [

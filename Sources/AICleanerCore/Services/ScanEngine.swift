@@ -1,6 +1,9 @@
-import Darwin
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
-import os
+#endif
+import Dispatch
 
 /// 抽象只读扫描引擎执行器，生产环境默认由 `ScanEngine` 实现，
 /// 单元测试可注入计数或桩对象以验证扫描触发次数与边界行为。
@@ -58,70 +61,83 @@ public struct ScanEngine: ScanPerforming, Sendable {
     public let systemTempRoot: URL?
     /// 当前用户系统临时目录根路径（生产默认 `DARWIN_USER_TEMP_DIR` / `NSTemporaryDirectory()`，测试环境可注入隔离目录或传 `nil` 禁用）
     public let userTempRoot: URL?
-    /// 当前用户 UID（默认 `getuid()`，测试可注入模拟 UID 验证多用户过滤）
-    public let currentUID: uid_t
+    public let platform: any PlatformAdapter
+    public let currentPrincipal: Principal
     /// 当前运行环境 `TMPDIR`（用于活跃目录保护，测试可注入模拟路径）
     public let activeTempDirectoryPath: String?
     /// 可选固定参考时间（便于单元测试确定性验证冷却期与旧会话阈值）
     public let fixedNow: Date?
-    /// 可选文件属主 UID 解析器（默认使用 `lstat` 读取真实 `st_uid`，测试可注入模拟多用户属主）
-    public let ownerUIDResolver: (@Sendable (URL) -> uid_t?)?
+    private let ownerResolver: (@Sendable (URL) -> Principal?)?
 
-    /// 完整依赖注入初始化器：支持显式传入模拟的 `systemTempRoot`、`userTempRoot`、`currentUID` 与参考时间 `now`。
+    /// 可注入平台及扫描根目录，便于在隔离目录中测试。
     public init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        builtInProfiles: [AIClientProfile] = BuiltInClientRules.allProfiles,
+        homeDirectory: URL? = nil,
+        builtInProfiles: [AIClientProfile]? = nil,
         safetyGuard: SafetyGuard? = nil,
-        sizer: DirectorySizer = DirectorySizer(),
-        sessionReader: SessionMetadataReader = SessionMetadataReader(),
+        sizer: DirectorySizer? = nil,
+        sessionReader: SessionMetadataReader? = nil,
         staleSessionDays: Int = 14,
         tempCooldownHours: Int = 24,
         systemTempRoot: URL?,
         userTempRoot: URL? = nil,
-        currentUID: uid_t = getuid(),
-        activeTempDirectoryPath: String? = ProcessInfo.processInfo.environment["TMPDIR"],
+        currentUID: UInt32? = nil,
+        activeTempDirectoryPath: String? = nil,
         now: Date? = nil,
-        ownerUIDResolver: (@Sendable (URL) -> uid_t?)? = nil
+        ownerUIDResolver: (@Sendable (URL) -> UInt32?)? = nil,
+        platform: any PlatformAdapter = HostPlatformAdapter.shared
     ) {
-        self.homeDirectory = homeDirectory.standardizedFileURL
-        self.builtInProfiles = builtInProfiles
-        self.safetyGuard = safetyGuard ?? SafetyGuard(homeDirectory: self.homeDirectory)
-        self.sizer = sizer
-        self.sessionReader = sessionReader
+        let base = safetyGuard?.platform ?? platform
+        self.platform = base
+        self.homeDirectory = (homeDirectory ?? base.homeDirectory).standardizedFileURL
+        let guardToUse = safetyGuard ?? SafetyGuard(platform: base, homeDirectory: self.homeDirectory)
+        self.safetyGuard = guardToUse
+        self.builtInProfiles = builtInProfiles ?? (base.platform == .macos
+            ? BuiltInClientRules.allProfiles
+            : BuiltInClientRules.profiles(for: base, safetyGuard: guardToUse))
+        self.sizer = sizer ?? DirectorySizer(platform: base)
+        self.sessionReader = sessionReader ?? SessionMetadataReader(platform: base)
         self.staleSessionDays = staleSessionDays
         self.tempCooldownHours = max(1, tempCooldownHours)
         self.systemTempRoot = systemTempRoot?.standardizedFileURL
         self.userTempRoot = userTempRoot?.standardizedFileURL
-        self.currentUID = currentUID
+        self.currentPrincipal = currentUID.map(Principal.uid) ?? base.currentPrincipal
         self.activeTempDirectoryPath = activeTempDirectoryPath
         self.fixedNow = now
-        self.ownerUIDResolver = ownerUIDResolver
+        if let ownerUIDResolver {
+            self.ownerResolver = { url in ownerUIDResolver(url).map(Principal.uid) }
+        } else {
+            self.ownerResolver = nil
+        }
     }
 
-    /// 默认初始化器：仅当使用真实宿主用户主目录时自动启用 `/private/tmp` 与 `DARWIN_USER_TEMP_DIR` 扫描；
-    /// 当传入沙箱 `homeDirectory` 且未显式注入临时目录时默认禁用真实临时目录，防止测试或预览误触宿主机 `/tmp`。
+    /// 使用真实用户主目录时启用本机临时目录扫描。
     public init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        builtInProfiles: [AIClientProfile] = BuiltInClientRules.allProfiles,
+        homeDirectory: URL? = nil,
+        builtInProfiles: [AIClientProfile]? = nil,
         safetyGuard: SafetyGuard? = nil,
-        sizer: DirectorySizer = DirectorySizer(),
-        sessionReader: SessionMetadataReader = SessionMetadataReader(),
+        sizer: DirectorySizer? = nil,
+        sessionReader: SessionMetadataReader? = nil,
         staleSessionDays: Int = 14,
-        tempCooldownHours: Int = 24
+        tempCooldownHours: Int = 24,
+        platform: any PlatformAdapter = HostPlatformAdapter.shared
     ) {
-        let normalizedHome = homeDirectory.standardizedFileURL
-        let realHome = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
-        let isRealUserHome = normalizedHome.resolvingSymlinksInPath().path == realHome.resolvingSymlinksInPath().path
+        let base = safetyGuard?.platform ?? platform
+        let home = homeDirectory ?? base.homeDirectory
+        let isRealUserHome = PlatformPath.normalize(base.resolveSymlinks(at: home))
+            == PlatformPath.normalize(base.resolveSymlinks(at: base.homeDirectory))
+        let roots = isRealUserHome ? base.temporaryRoots() : nil
         self.init(
-            homeDirectory: normalizedHome,
+            homeDirectory: home,
             builtInProfiles: builtInProfiles,
             safetyGuard: safetyGuard,
             sizer: sizer,
             sessionReader: sessionReader,
             staleSessionDays: staleSessionDays,
             tempCooldownHours: tempCooldownHours,
-            systemTempRoot: isRealUserHome ? TempDirectoryScanner.defaultSystemTempRoot : nil,
-            userTempRoot: isRealUserHome ? TempDirectoryScanner.defaultUserTempRoot : nil
+            systemTempRoot: roots?.shared,
+            userTempRoot: roots?.user,
+            activeTempDirectoryPath: base.environmentVariable("TMPDIR"),
+            platform: base
         )
     }
 
@@ -147,9 +163,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
         onProgress: ScanProgressHandler? = nil
     ) -> ScanReport {
         let referenceNow = now ?? fixedNow ?? Date()
-        let excludedMatcher = ExcludedItemMatcher(records: excludedItems)
+        let excludedMatcher = ExcludedItemMatcher(records: excludedItems, caseInsensitive: platform.pathsAreCaseInsensitive)
         let progress = onProgress.map { ScanProgressEmitter(handler: $0) }
-        let resultsLock = OSAllocatedUnfairLock(
+        let resultsLock = CoreLock(
             initialState: [ClientScanSummary?](repeating: nil, count: builtInProfiles.count)
         )
 
@@ -181,9 +197,10 @@ public struct ScanEngine: ScanPerforming, Sendable {
                 safetyGuard: safetyGuard,
                 sizer: sizer,
                 cooldownHours: tempCooldownHours,
-                currentUID: currentUID,
+                currentPrincipal: currentPrincipal,
                 activeTempDirectoryPath: activeTempDirectoryPath,
-                ownerUIDResolver: ownerUIDResolver
+                useDefaultActiveTempPath: false,
+                ownerResolver: ownerResolver
             )
             tempScanResult = tempScanner.scan(
                 systemTempRoot: systemTempRoot,
@@ -208,10 +225,10 @@ public struct ScanEngine: ScanPerforming, Sendable {
             if extraTempItems.isEmpty {
                 mergedSummary = result
             } else {
-                var seenPaths = Set(result.items.map { $0.url.resolvingSymlinksInPath().standardizedFileURL.path })
+                var seenPaths = Set(result.items.map { PlatformPath.normalize(platform.resolveSymlinks(at: $0.url)) })
                 var mergedItems = result.items
                 for item in extraTempItems {
-                    let canonical = item.url.resolvingSymlinksInPath().standardizedFileURL.path
+                    let canonical = PlatformPath.normalize(platform.resolveSymlinks(at: item.url))
                     if seenPaths.insert(canonical).inserted {
                         mergedItems.append(item)
                     }
@@ -262,7 +279,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
             if lhs.protectedSizeBytes != rhs.protectedSizeBytes {
                 return lhs.protectedSizeBytes > rhs.protectedSizeBytes
             }
-            return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
+            return CoreTextCompare.caseInsensitiveAscending(lhs.profile.name, rhs.profile.name)
         }
 
         // 3. 追加系统临时目录独立分组（「其他 AI 临时文件（/tmp）」与「/tmp 未归属临时项」）
@@ -363,10 +380,10 @@ public struct ScanEngine: ScanPerforming, Sendable {
                 || SessionMetadataReader.exclusiveArtifactRuleIDs.contains(rule.id))
             let excludedMatcher = isProjectRule ? ExcludedItemMatcher() : userExclusions
             let targetURL = rule.resolveURL(homeDirectory: homeDirectory)
-            var isDir: ObjCBool = false
-            guard fileManager.fileExists(atPath: targetURL.path, isDirectory: &isDir) else {
+            guard let targetIdentity = try? platform.identity(at: targetURL) else {
                 continue
             }
+            let isDirectory = targetIdentity.kind == .directory
 
             // 首个真实存在的规则目标即认定客户端安装在本机：先弹「检测中」占位卡片
             if !hasDetectedClient {
@@ -501,7 +518,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     continue
                 }
 
-                guard isDir.boolValue else {
+                guard isDirectory else {
                     let fileCheck = safetyGuard.validateTarget(targetURL, fileManager: fileManager)
                     guard fileCheck.isAllowed,
                           let inspection = sizer.inspect(url: targetURL, safetyGuard: safetyGuard, fileManager: fileManager) else {
@@ -543,11 +560,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     continue
                 }
 
-                guard let children = try? fileManager.contentsOfDirectory(
-                    at: targetURL,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                    options: []
-                ) else {
+                guard let children = try? platform.contentsOfDirectory(at: targetURL) else {
                     continue
                 }
 
@@ -582,7 +595,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     let canonicalPath = childURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                    let snapshot = isProjectRule ? FileCleanupSnapshot.capture(at: childURL, fileManager: fileManager) : nil
+                    let snapshot = isProjectRule ? FileCleanupSnapshot.capture(at: childURL, platform: platform) : nil
                     let metadata: SessionItemMetadata
                     if rule.category == .sessions {
                         metadata = sessionReader.flatSessionMetadata(
@@ -650,32 +663,20 @@ public struct ScanEngine: ScanPerforming, Sendable {
 
             case .projectSessions:
                 let containerCheck = safetyGuard.validateBuiltInContainer(targetURL)
-                guard containerCheck.isAllowed, isDir.boolValue else {
+                guard containerCheck.isAllowed, isDirectory else {
                     skippedProtectedCount += 1
                     continue
                 }
 
-                guard let projectDirs = try? fileManager.contentsOfDirectory(
-                    at: targetURL,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                    options: []
-                ) else {
+                guard let projectDirs = try? platform.contentsOfDirectory(at: targetURL) else {
                     continue
                 }
 
                 for projectDirURL in projectDirs {
                     if Task.isCancelled { break }
                     if excludedMatcher.isExcluded(projectDirURL) { continue }
-                    let values = try? projectDirURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                    guard (values?.isDirectory ?? false) && !(values?.isSymbolicLink ?? false) else {
-                        continue
-                    }
-
-                    guard let rawSessionEntries = try? fileManager.contentsOfDirectory(
-                        at: projectDirURL,
-                        includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                        options: []
-                    ) else {
+                    guard (try? platform.identity(at: projectDirURL))?.kind == .directory,
+                          let rawSessionEntries = try? platform.contentsOfDirectory(at: projectDirURL) else {
                         continue
                     }
 
@@ -720,7 +721,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                         let canonicalPath = sessionURL.standardizedFileURL.path
                         guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                        let snapshot = FileCleanupSnapshot.capture(at: sessionURL, fileManager: fileManager)
+                        let snapshot = FileCleanupSnapshot.capture(at: sessionURL, platform: platform)
                         let metadata = sessionReader.projectSessionMetadata(
                             itemURL: sessionURL,
                             projectFolderName: projectFolderName,
@@ -770,37 +771,25 @@ public struct ScanEngine: ScanPerforming, Sendable {
 
             case .recursiveFiles:
                 let containerCheck = safetyGuard.validateBuiltInContainer(targetURL)
-                guard containerCheck.isAllowed, isDir.boolValue else {
+                guard containerCheck.isAllowed, isDirectory else {
                     skippedProtectedCount += 1
                     continue
                 }
 
-                let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey]
-                guard let enumerator = fileManager.enumerator(
-                    at: targetURL,
-                    includingPropertiesForKeys: keys,
-                    options: [.skipsHiddenFiles]
-                ) else {
-                    continue
-                }
-
                 let loweredSuffixes = rule.allowedFileSuffixes.map { $0.lowercased() }
+                var pending = (try? platform.contentsOfDirectory(at: targetURL))?.reversed().map { $0 } ?? []
 
-                while let fileURL = autoreleasepool(invoking: { enumerator.nextObject() as? URL }) {
+                while let fileURL = pending.popLast() {
                     if Task.isCancelled { break }
-
-                    let values = try? fileURL.resourceValues(forKeys: Set(keys))
-                    if values?.isSymbolicLink ?? false {
-                        continue
-                    }
-                    if values?.isDirectory ?? false {
-                        if excludedMatcher.isExcluded(fileURL) {
-                            enumerator.skipDescendants()
+                    guard !fileURL.lastPathComponent.hasPrefix("."), !excludedMatcher.isExcluded(fileURL),
+                          let identity = try? platform.identity(at: fileURL), !identity.isHiddenOrSystem else { continue }
+                    if identity.kind == .directory {
+                        if let children = try? platform.contentsOfDirectory(at: fileURL) {
+                            pending.append(contentsOf: children.reversed())
                         }
                         continue
                     }
-                    guard values?.isRegularFile == true else { continue }
-                    if excludedMatcher.isExcluded(fileURL) { continue }
+                    guard identity.kind == .regular else { continue }
 
                     let fileName = fileURL.lastPathComponent
                     if fileName == ".DS_Store" { continue }
@@ -829,7 +818,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     let canonicalPath = fileURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
-                    let snapshot = isProjectRule ? FileCleanupSnapshot.capture(at: fileURL, fileManager: fileManager) : nil
+                    let snapshot = isProjectRule ? FileCleanupSnapshot.capture(at: fileURL, platform: platform) : nil
                     let metadata = sessionReader.flatSessionMetadata(
                         itemURL: fileURL,
                         isDirectory: false,
@@ -892,7 +881,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
             if lhs.sizeBytes != rhs.sizeBytes {
                 return lhs.sizeBytes > rhs.sizeBytes
             }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            return CoreTextCompare.caseInsensitiveAscending(lhs.displayName, rhs.displayName)
         }
 
         // 本机检测到的客户端把卡片从「检测中」刷新为已量出的体积（与结果页 totalSizeBytes 同口径）

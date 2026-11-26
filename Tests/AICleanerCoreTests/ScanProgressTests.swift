@@ -1,12 +1,11 @@
 import AICleanerCore
 import Foundation
-import os
 import XCTest
 
 final class ScanProgressTests: XCTestCase {
     /// 线程安全事件收集器：emitter 回调来自并发扫描线程，不允许裸捕获局部变量
     private final class EventCollector: @unchecked Sendable {
-        private let lock = OSAllocatedUnfairLock(initialState: [ScanProgressEvent]())
+        private let lock = CoreLock(initialState: [ScanProgressEvent]())
 
         var events: [ScanProgressEvent] {
             lock.withLock { $0 }
@@ -154,8 +153,8 @@ final class ScanProgressTests: XCTestCase {
         try sandbox.createFile(relativeToHome: ".codex/cache/.env", byteCount: 64)
         // 本机不存在的客户端（如 Windsurf）不应出现卡片
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
-        let eventsLock = OSAllocatedUnfairLock(initialState: [ScanProgressEvent]())
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
+        let eventsLock = CoreLock(initialState: [ScanProgressEvent]())
         let report = engine.scan(onProgress: { event in
             eventsLock.withLock { $0.append(event) }
         })

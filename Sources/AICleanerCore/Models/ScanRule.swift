@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 规则的扫描粒度
 public enum ScanTargetMode: String, Codable, Hashable, Sendable {
@@ -64,7 +68,7 @@ public struct ScanRule: Identifiable, Codable, Hashable, Sendable {
 
     /// 基于给定的用户主目录解析实际文件系统路径
     public func resolveURL(homeDirectory: URL) -> URL {
-        if path.hasPrefix("/") {
+        if PlatformPath.isAbsolute(path) {
             return URL(fileURLWithPath: path).standardizedFileURL
         }
         if path.hasPrefix("~/") {

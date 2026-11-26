@@ -1,22 +1,23 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
-/// 持久化管理历史清理空间统计记录（存储于独立 JSON 文件，支持测试与沙箱路径注入）。
+/// 持久化管理历史清理空间统计记录（存储于独立 JSON 文件，支持平台适配器与沙箱路径注入）。
 public struct CleanupHistoryStore: Sendable {
     public let storageURL: URL
 
-    public init(storageURL: URL? = nil) {
-        if let storageURL {
-            self.storageURL = storageURL
-        } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-            self.storageURL = appSupport
-                .appendingPathComponent("AICleaner", isDirectory: true)
-                .appendingPathComponent("cleanup-history.json")
-        }
+    public init(storageURL: URL) {
+        self.storageURL = storageURL
     }
 
-    /// 读取全部历史清理记录（按时间正序）
+    public init(platform: any PlatformAdapter = HostPlatformAdapter.shared) {
+        self.storageURL = platform.userDataDirectory()
+            .appendingPathComponent("cleanup-history.json")
+    }
+
+    /// 读取全部历史清理记录（按时间正序）。若文件损坏则先备份保留再返回空数组（ADR 0001 第 7.3 节）。
     public func load() -> [CleanupHistoryRecord] {
         guard let data = try? Data(contentsOf: storageURL) else {
             return []
@@ -24,6 +25,7 @@ public struct CleanupHistoryStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let records = try? decoder.decode([CleanupHistoryRecord].self, from: data) else {
+            CoreStorageIO.quarantineCorruptFile(at: storageURL)
             return []
         }
         return records.sorted { $0.timestamp < $1.timestamp }

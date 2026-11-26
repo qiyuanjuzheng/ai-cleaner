@@ -1,5 +1,8 @@
-import Darwin
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 安全策略判定结果
 public enum SafetyDecision: Equatable, Sendable {
@@ -22,21 +25,25 @@ public enum SafetyDecision: Equatable, Sendable {
 /// 2. 明确排除登录态、凭据、API Key、核心配置、用户知识库及主数据库文件；
 /// 3. 在扫描与移入废纸篓前双重校验，并拦截指向受保护路径的符号链接。
 public struct SafetyGuard: Sendable {
+    public let platform: any PlatformAdapter
     public let homeDirectory: URL
 
     private let homePathVariants: Set<String>
     private let lowerHomePathVariants: Set<String>
     private let cachesPathPrefixes: [String]
+    private let lowerCachesPathPrefixes: [String]
 
-    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
-        let standardized = homeDirectory.standardizedFileURL
-        self.homeDirectory = standardized
+    public init(platform: any PlatformAdapter = HostPlatformAdapter.shared, homeDirectory: URL? = nil) {
+        self.platform = platform
+        let resolvedInput = (homeDirectory ?? platform.homeDirectory).standardizedFileURL
+        self.homeDirectory = resolvedInput
 
-        let rawHome = Self.normalizePath(standardized.path)
-        let resolvedHome = Self.normalizePath(standardized.resolvingSymlinksInPath().standardizedFileURL.path)
+        let rawHome = PlatformPath.normalize(resolvedInput)
+        let resolvedHome = PlatformPath.normalize(platform.resolveSymlinks(at: resolvedInput))
         self.homePathVariants = Set([rawHome, resolvedHome])
         self.lowerHomePathVariants = Set(self.homePathVariants.map { $0.lowercased() })
         self.cachesPathPrefixes = Array(self.homePathVariants).map { "\($0)/Library/Caches/" }
+        self.lowerCachesPathPrefixes = Array(self.lowerHomePathVariants).map { "\($0)/library/caches/" }
     }
 
     /// 校验内置规则在展开子会话或子项时的容器目录本身是否安全（严禁进入系统核心目录或隐私敏感子树，
@@ -71,65 +78,90 @@ public struct SafetyGuard: Sendable {
         validateTarget(url, allowUserOverride: true)
     }
 
-    /// 规范化 `/tmp` 符号链接路径（将 `/tmp/...` 及直接符号链接父目录解析为真实父路径，同时保留末级符号链接身份不穿透）。
-    public static func normalizeTempPath(_ url: URL) -> URL {
+    /// 规范化临时目录与祖先符号链接路径（保留末级节点符号链接/重解析点身份不穿透）。
+    /// `/tmp` → `/private/tmp` 映射仅适用于 macOS；Linux 的 `/tmp` 与 Windows 路径按自身语义解析祖先目录。
+    public static func normalizeTempPath(
+        _ url: URL,
+        platform: (any PlatformAdapter)? = nil
+    ) -> URL {
+        let platform = platform ?? HostPlatformAdapter.shared
         let standardized = url.standardizedFileURL
-        let path = standardized.path
-        if path == "/tmp" {
-            return URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let normalizedPath = PlatformPath.normalize(standardized)
+
+        var workingURL = standardized
+        if platform.platform == .macos {
+            if normalizedPath == "/tmp" {
+                workingURL = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            } else if normalizedPath.hasPrefix("/tmp/") {
+                workingURL = URL(fileURLWithPath: "/private" + normalizedPath).standardizedFileURL
+            }
         }
-        if path.hasPrefix("/tmp/") {
-            return URL(fileURLWithPath: "/private" + path).standardizedFileURL
+
+        let resolved = PlatformPath.resolveExistingAncestors(for: workingURL, platform: platform)
+        if platform.platform == .macos {
+            // System Foundation may collapse /private/tmp to /tmp for the directory itself.
+            let path = PlatformPath.fileSystemPath(for: resolved)
+            if path == "/tmp" || path.hasPrefix("/tmp/") {
+                return URL(fileURLWithPath: "/private" + path, isDirectory: resolved.hasDirectoryPath)
+            }
         }
-        let parent = standardized.deletingLastPathComponent()
-        let parentIsSymlink = (try? parent.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
-        if parentIsSymlink {
-            let resolvedParent = parent.resolvingSymlinksInPath().standardizedFileURL
-            return resolvedParent.appendingPathComponent(standardized.lastPathComponent).standardizedFileURL
-        }
-        return standardized
+        return resolved
     }
 
     private func validateTarget(_ url: URL, allowUserOverride: Bool) -> SafetyDecision {
         let pathCheck = validateBasePath(url, allowHomeSubdirectoryRoots: false)
         guard pathCheck.isAllowed else { return pathCheck }
 
-        let specialNodeCheck = Self.validateSpecialNode(atPath: url.path)
-        guard specialNodeCheck.isAllowed else { return specialNodeCheck }
+        let identity = try? platform.identity(at: url)
+        if let identity {
+            let specialNodeCheck = Self.validateSpecialNode(identity: identity, url: url)
+            guard specialNodeCheck.isAllowed else { return specialNodeCheck }
+        }
 
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        if values?.isSymbolicLink == true {
-            let resolved = url.resolvingSymlinksInPath().standardizedFileURL
-            let parentPath = Self.normalizePath(url.deletingLastPathComponent().resolvingSymlinksInPath().path)
-            let resolvedPath = Self.normalizePath(resolved.path)
-            guard resolvedPath.hasPrefix(parentPath + "/") || resolvedPath == parentPath else {
+        let isLinkOrReparse = identity?.kind.isLinkOrReparsePoint ?? false
+        if isLinkOrReparse {
+            let resolved = platform.resolveSymlinks(at: url)
+            let parentPath = PlatformPath.normalize(
+                platform.resolveSymlinks(at: url.deletingLastPathComponent())
+            )
+            let resolvedPath = PlatformPath.normalize(resolved)
+            guard PlatformPath.isEqualOrDescendant(
+                resolvedPath,
+                of: parentPath,
+                caseInsensitive: platform.pathsAreCaseInsensitive
+            ) else {
+                if case .reparsePoint = identity?.kind {
+                    return .blocked(reason: "跳过指向扫描目录外部的重解析点/目录联接")
+                }
                 return .blocked(reason: "跳过指向扫描目录外部的符号链接")
             }
 
-            let resolvedSpecialCheck = Self.validateSpecialNode(atPath: resolved.path)
-            guard resolvedSpecialCheck.isAllowed else { return resolvedSpecialCheck }
+            if let resolvedIdentity = try? platform.identity(at: resolved) {
+                let resolvedSpecialCheck = Self.validateSpecialNode(identity: resolvedIdentity, url: resolved)
+                guard resolvedSpecialCheck.isAllowed else { return resolvedSpecialCheck }
 
-            if !allowUserOverride {
-                let resolvedIsDir = (try? resolved.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                let check = validateEntry(url: resolved, isDirectory: resolvedIsDir)
-                if let reason = check.blockReason {
-                    return .blocked(reason: "符号链接指向受保护条目：\(reason)")
+                if !allowUserOverride {
+                    let check = validateEntry(url: resolved, isDirectory: resolvedIdentity.kind == .directory)
+                    if let reason = check.blockReason {
+                        return .blocked(reason: "符号链接指向受保护条目：\(reason)")
+                    }
                 }
             }
         }
 
-        return allowUserOverride ? .allowed : validateSoftProtection(url: url, isDirectory: values?.isDirectory ?? false)
+        let isDirectory = identity?.kind == .directory
+        return allowUserOverride ? .allowed : validateSoftProtection(url: url, isDirectory: isDirectory)
     }
 
     /// 校验单个文件或子目录的名称与扩展名是否属于受保护资产
     public func validateEntry(url: URL, isDirectory: Bool) -> SafetyDecision {
-        let hardCheck = validateHardProtection(path: url.path)
+        let hardCheck = validateHardProtection(path: PlatformPath.normalize(url))
         guard hardCheck.isAllowed else { return hardCheck }
         return validateSoftProtection(url: url, isDirectory: isDirectory)
     }
 
     private func validateSoftProtection(url: URL, isDirectory: Bool) -> SafetyDecision {
-        let fileName = url.lastPathComponent
+        let fileName = PlatformPath.lastPathComponent(PlatformPath.normalize(url))
         let lowerName = fileName.lowercased()
 
         if lowerName.isEmpty || lowerName == "." || lowerName == ".." {
@@ -152,7 +184,7 @@ public struct SafetyGuard: Sendable {
                 return .blocked(reason: "受保护的核心配置文件：\(fileName)")
             }
 
-            let ext = (Self.databaseBaseName(lowerName) as NSString).pathExtension
+            let ext = PlatformPath.pathExtension(Self.databaseBaseName(lowerName))
             if Self.protectedDatabaseExtensions.contains(ext) {
                 // 仅允许 macOS ~/Library/Caches/ 下由 URLCache 生成的临时 Cache.db* 文件
                 if isMacOSURLCacheFile(url: url, lowerFileName: lowerName) {
@@ -166,6 +198,7 @@ public struct SafetyGuard: Sendable {
     }
 
     /// 清理前复核目标与目录后代。显式覆盖只跳过可覆盖的名称与扩展名规则。
+    /// 使用 `PlatformAdapter` 逐层显式遍历，绝不穿透符号链接或 Windows 重解析点/目录联接。
     public func validateTargetRecursively(
         _ url: URL,
         fileManager: FileManager = .default,
@@ -174,63 +207,66 @@ public struct SafetyGuard: Sendable {
         let baseDecision = validateTarget(url, allowUserOverride: allowUserOverride)
         guard baseDecision.isAllowed else { return baseDecision }
 
-        var isDir: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue,
-              (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+        guard let rootIdentity = try? platform.identity(at: url),
+              rootIdentity.kind == .directory else {
             return .allowed
         }
 
-        var enumerationFailed = false
-        guard let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileResourceTypeKey],
-            options: [],
-            errorHandler: { _, _ in
-                enumerationFailed = true
-                return false
+        var directoryStack: [URL] = [url]
+        while let currentDir = directoryStack.popLast() {
+            guard let children = try? platform.contentsOfDirectory(at: currentDir) else {
+                return .blocked(reason: "无法检查目录内容")
             }
-        ) else {
-            return .blocked(reason: "无法检查目录内容")
+
+            for childURL in children {
+                guard let childIdentity = try? platform.identity(at: childURL) else {
+                    return .blocked(reason: "无法检查目录内的条目：\(childURL.lastPathComponent)")
+                }
+
+                if let reason = Self.validateSpecialNode(identity: childIdentity, url: childURL).blockReason {
+                    return .blocked(reason: "目录内包含受保护内容：\(reason)")
+                }
+
+                let childNormalizedPath = PlatformPath.normalize(childURL)
+                let childIsLink = childIdentity.kind.isLinkOrReparsePoint
+                let childIsRealDir = childIdentity.kind == .directory
+                let decision = allowUserOverride
+                    ? validateHardProtection(path: childNormalizedPath)
+                    : validateEntry(url: childURL, isDirectory: childIsRealDir)
+                if let reason = decision.blockReason {
+                    return .blocked(reason: "目录内包含受保护内容：\(reason)")
+                }
+
+                if childIsLink {
+                    let resolved = platform.resolveSymlinks(at: childURL)
+                    let resolvedNormalized = PlatformPath.normalize(resolved)
+                    if let reason = validateHardProtection(path: resolvedNormalized).blockReason {
+                        return .blocked(reason: "目录内的符号链接指向受保护内容：\(reason)")
+                    }
+                    if let resolvedIdentity = try? platform.identity(at: resolved),
+                       let reason = Self.validateSpecialNode(identity: resolvedIdentity, url: resolved).blockReason {
+                        return .blocked(reason: "目录内的符号链接指向特殊系统节点：\(reason)")
+                    }
+                    // 绝不递归进入符号链接或 Windows 重解析点/目录联接
+                    continue
+                }
+
+                if childIsRealDir {
+                    directoryStack.append(childURL)
+                }
+            }
         }
 
-        for case let childURL as URL in enumerator {
-            guard let values = try? childURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileResourceTypeKey]) else {
-                return .blocked(reason: "无法检查目录内的条目：\(childURL.lastPathComponent)")
-            }
-            if let resourceType = values.fileResourceType,
-               Self.isSpecialResourceType(resourceType) {
-                return .blocked(reason: "目录内包含特殊系统节点（Socket/FIFO/设备文件）：\(childURL.lastPathComponent)")
-            }
-            if let reason = Self.validateSpecialNode(atPath: childURL.path).blockReason {
-                return .blocked(reason: "目录内包含受保护内容：\(reason)")
-            }
-            let isSymlink = values.isSymbolicLink == true
-            let decision = allowUserOverride
-                ? validateHardProtection(path: childURL.path)
-                : validateEntry(url: childURL, isDirectory: values.isDirectory == true && !isSymlink)
-            if let reason = decision.blockReason {
-                return .blocked(reason: "目录内包含受保护内容：\(reason)")
-            }
-            if isSymlink {
-                let resolved = childURL.resolvingSymlinksInPath()
-                if let reason = validateHardProtection(path: resolved.path).blockReason {
-                    return .blocked(reason: "目录内的符号链接指向受保护内容：\(reason)")
-                }
-                if let reason = Self.validateSpecialNode(atPath: resolved.path).blockReason {
-                    return .blocked(reason: "目录内的符号链接指向特殊系统节点：\(reason)")
-                }
-            }
-        }
-
-        return enumerationFailed ? .blocked(reason: "无法完整检查目录内容") : .allowed
+        return .allowed
     }
 
     // MARK: - Private Helpers
 
     private func validateHardProtection(path: String) -> SafetyDecision {
-        let lowerPath = path.lowercased()
+        let normalizedPath = PlatformPath.normalize(path)
+        let lowerPath = normalizedPath.lowercased()
         let components = lowerPath.split(separator: "/")
-        let fileName = (path as NSString).lastPathComponent
+        let fileName = PlatformPath.lastPathComponent(normalizedPath)
         let baseName = Self.databaseBaseName(fileName.lowercased())
 
         if let component = components.first(where: { Self.hardProtectedStorageNames.contains(String($0)) }) {
@@ -253,25 +289,16 @@ public struct SafetyGuard: Sendable {
         if Self.credentialFileNames.contains(baseName)
             || Self.credentialFilePrefixes.contains(where: { baseName.hasPrefix($0) })
             || Self.credentialKeywords.contains(where: { baseName.contains($0) })
-            || Self.credentialExtensions.contains((baseName as NSString).pathExtension) {
+            || Self.credentialExtensions.contains(PlatformPath.pathExtension(baseName)) {
             return .blocked(reason: "已锁定登录凭据或密钥：\(fileName)")
         }
 
         return .allowed
     }
 
-    private static func isSpecialResourceType(_ type: URLFileResourceType) -> Bool {
-        type == .socket || type == .namedPipe || type == .characterSpecial || type == .blockSpecial
-    }
-
-    private static func validateSpecialNode(atPath path: String) -> SafetyDecision {
-        var st = stat()
-        guard lstat(path, &st) == 0 else {
-            return .allowed
-        }
-        let modeType = st.st_mode & S_IFMT
-        if modeType == S_IFSOCK || modeType == S_IFIFO || modeType == S_IFCHR || modeType == S_IFBLK {
-            let name = (path as NSString).lastPathComponent
+    private static func validateSpecialNode(identity: FileIdentity, url: URL) -> SafetyDecision {
+        if identity.kind.isSpecialNode {
+            let name = PlatformPath.lastPathComponent(PlatformPath.normalize(url))
             return .blocked(reason: "特殊系统节点（Socket/FIFO/设备文件）不允许清理：\(name)")
         }
         return .allowed
@@ -288,11 +315,12 @@ public struct SafetyGuard: Sendable {
         }
 
         let candidates = pathCandidates(for: url)
+        let caseInsensitive = platform.pathsAreCaseInsensitive
         for path in candidates {
             let hardCheck = validateHardProtection(path: path)
             guard hardCheck.isAllowed else { return hardCheck }
 
-            if path.isEmpty || Self.blockedExactSystemPaths.contains(path) {
+            if path.isEmpty || PlatformPath.isRoot(path) || Self.blockedExactSystemPaths.contains(path) {
                 return .blocked(reason: "系统根目录或核心路径不允许操作：\(path)")
             }
 
@@ -300,22 +328,31 @@ public struct SafetyGuard: Sendable {
                 return .blocked(reason: "系统受保护目录不允许操作：\(path)")
             }
 
-            if homePathVariants.contains(path) {
+            if caseInsensitive {
+                if lowerHomePathVariants.contains(path.lowercased()) {
+                    return .blocked(reason: "用户主目录不允许作为清理目标")
+                }
+            } else if homePathVariants.contains(path) {
                 return .blocked(reason: "用户主目录不允许作为清理目标")
             }
 
-            for home in homePathVariants {
+            let homesToCheck = caseInsensitive ? lowerHomePathVariants : homePathVariants
+            let comparablePath = caseInsensitive ? path.lowercased() : path
+
+            for home in homesToCheck {
                 for relativeSensitive in Self.blockedSensitiveUserSubtrees {
-                    let full = "\(home)/\(relativeSensitive)"
-                    if path == full || path.hasPrefix(full + "/") {
+                    let rel = caseInsensitive ? relativeSensitive.lowercased() : relativeSensitive
+                    let full = "\(home)/\(rel)"
+                    if comparablePath == full || comparablePath.hasPrefix(full + "/") {
                         return .blocked(reason: "系统或隐私敏感目录受保护，禁止扫描与清理：~/\(relativeSensitive)")
                     }
                 }
 
                 if !allowHomeSubdirectoryRoots {
                     for relativeRoot in Self.blockedExactUserRoots {
-                        let full = "\(home)/\(relativeRoot)"
-                        if path == full {
+                        let rel = caseInsensitive ? relativeRoot.lowercased() : relativeRoot
+                        let full = "\(home)/\(rel)"
+                        if comparablePath == full {
                             return .blocked(reason: "不能直接清理整个目录，请仅选择其缓存或日志子目录：~/\(relativeRoot)")
                         }
                     }
@@ -327,8 +364,8 @@ public struct SafetyGuard: Sendable {
     }
 
     private func pathCandidates(for url: URL) -> [String] {
-        let raw = Self.normalizePath(url.standardizedFileURL.path)
-        let resolved = Self.normalizePath(url.resolvingSymlinksInPath().standardizedFileURL.path)
+        let raw = PlatformPath.normalize(url)
+        let resolved = PlatformPath.normalize(platform.resolveSymlinks(at: url))
         if raw == resolved {
             return [raw]
         }
@@ -337,6 +374,12 @@ public struct SafetyGuard: Sendable {
 
     private func isInsideMacOSCachesDirectory(url: URL) -> Bool {
         let candidates = pathCandidates(for: url)
+        if platform.pathsAreCaseInsensitive {
+            return candidates.contains { candidate in
+                let lower = candidate.lowercased()
+                return lowerCachesPathPrefixes.contains { lower.hasPrefix($0) }
+            }
+        }
         return candidates.contains { candidate in
             cachesPathPrefixes.contains { candidate.hasPrefix($0) }
         }
@@ -346,13 +389,12 @@ public struct SafetyGuard: Sendable {
         guard Self.databaseBaseName(lowerFileName) == "cache.db" else {
             return false
         }
-        let resolvedPath = Self.normalizePath(url.resolvingSymlinksInPath().standardizedFileURL.path)
+        let resolvedPath = PlatformPath.normalize(platform.resolveSymlinks(at: url))
+        if platform.pathsAreCaseInsensitive {
+            let lower = resolvedPath.lowercased()
+            return lowerCachesPathPrefixes.contains { lower.hasPrefix($0) }
+        }
         return cachesPathPrefixes.contains { resolvedPath.hasPrefix($0) }
-    }
-
-    private static func normalizePath(_ path: String) -> String {
-        guard path.count > 1, path.hasSuffix("/") else { return path }
-        return String(path.dropLast())
     }
 
     // MARK: - Policy Constants

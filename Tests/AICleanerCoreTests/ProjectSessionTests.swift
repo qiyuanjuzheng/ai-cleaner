@@ -27,7 +27,7 @@ final class ProjectSessionTests: XCTestCase {
         _ = try sandbox.createFile(relativeToHome: ".codex/generated_images/shared-\(codexID)/image.png", byteCount: 15)
         _ = try sandbox.createFile(relativeToHome: ".codex/generated_images/\(indexedID)/image.png", byteCount: 15)
 
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let catalog = ProjectSessionCatalog(items: report.projectItems)
         let projects = Dictionary(uniqueKeysWithValues: catalog.projects.map { ($0.id, Set($0.sessions.map(\.url.path))) })
         XCTAssertEqual(projects[.workspace("/work/products/demo")], [codex.path, primary.path, indexed.path])
@@ -51,7 +51,7 @@ final class ProjectSessionTests: XCTestCase {
         let backup = try sandbox.createFile(relativeToHome: ".claude/file-history/\(sessionID)/snapshot", byteCount: 10)
         _ = try sandbox.createFile(relativeToHome: ".claude/file-history/shared-\(sessionID)/snapshot", byteCount: 10)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
         let catalog = ProjectSessionCatalog(items: report.projectItems)
         let item = try XCTUnwrap(report.allItems.first { $0.url.path == session.path })
@@ -69,7 +69,7 @@ final class ProjectSessionTests: XCTestCase {
         let store = ProjectProtectionStore(storageURL: sandbox.rootURL.appendingPathComponent("projects.json"))
         try store.save(["/work/demo"])
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let original = engine.scan()
         let sessionItem = try XCTUnwrap(original.allItems.first { $0.url.path == session.path })
         let report = engine.scan(excludedItems: [.from(item: sessionItem)])

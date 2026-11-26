@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// AI 客户端（或自定义目录 / 系统临时目录分组）的规则配置画像
 public struct AIClientProfile: Identifiable, Codable, Hashable, Sendable {
@@ -85,7 +89,7 @@ public struct CustomScanDirectory: Identifiable, Codable, Hashable, Sendable {
     ) {
         self.id = id
         self.displayName = displayName
-        self.path = URL(fileURLWithPath: path).standardizedFileURL.path
+        self.path = PlatformPath.normalize(path)
         self.category = category
         self.mode = mode
         self.createdAt = createdAt

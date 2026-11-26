@@ -18,12 +18,18 @@ final class SafetyGuardTests: XCTestCase {
     }
 
     func testBlocksSystemAndHomeRootPaths() {
-        let blockedURLs: [URL] = [
+        #if os(Windows)
+        let systemURLs = [HostPlatformAdapter.shared.startupVolumeURL]
+        #else
+        let systemURLs = [
             URL(fileURLWithPath: "/"),
             URL(fileURLWithPath: "/System"),
             URL(fileURLWithPath: "/System/Library"),
             URL(fileURLWithPath: "/usr/bin"),
-            URL(fileURLWithPath: "/etc/hosts"),
+            URL(fileURLWithPath: "/etc/hosts")
+        ]
+        #endif
+        let blockedURLs = systemURLs + [
             sandbox.homeURL,
             sandbox.homeURL.appendingPathComponent("Desktop"),
             sandbox.homeURL.appendingPathComponent("Documents"),

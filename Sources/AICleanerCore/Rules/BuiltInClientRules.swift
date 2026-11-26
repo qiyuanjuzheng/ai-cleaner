@@ -16,6 +16,36 @@ public enum BuiltInClientRules {
         }
     }()
 
+    /// 按目标平台的 `PlatformAdapter` 解析内置规则包并执行 `SafetyGuard.validateBuiltInContainer` 校验。
+    public static func profiles(
+        for platform: any PlatformAdapter,
+        safetyGuard: SafetyGuard? = nil
+    ) -> [AIClientProfile] {
+        do {
+            let guardToUse = safetyGuard ?? SafetyGuard(platform: platform)
+            return try BuiltInRuleCatalog.load(
+                platform: BuiltInRuleCatalog.Platform(platform.platform),
+                resolving: { root, relativePath in
+                    guard let placeholder = PathPlaceholder(rawValue: root),
+                          let baseURL = platform.resolve(placeholder) else {
+                        return nil
+                    }
+                    return PlatformPath.normalize(baseURL.appendingPathComponent(relativePath))
+                },
+                safetyGuard: guardToUse
+            )
+        } catch {
+            CoreLogger.shared.error(
+                "内置规则清单解码失败",
+                metadata: [
+                    "platform": .string(platform.platform.rawValue),
+                    "error": .string(String(describing: error))
+                ]
+            )
+            return []
+        }
+    }
+
     private static let byID = Dictionary(uniqueKeysWithValues: allProfiles.map { ($0.id, $0) })
 
     public static let claudeCode = profile(withID: "claude-code")

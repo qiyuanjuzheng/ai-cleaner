@@ -1,54 +1,46 @@
-import Darwin
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
-/// Captures the scanned entry and, for a directory, its contents without following symlinks.
+/// 通过 `PlatformAdapter` 捕获扫描条目及其目录后代的文件身份快照（绝不穿透符号链接或 Windows 重解析点）。
 public struct FileCleanupSnapshot: Hashable, Sendable {
-    private struct Entry: Hashable {
-        struct Time: Hashable, Comparable {
-            let seconds: Int
-            let nanoseconds: Int
-
-            init(_ value: timespec) {
-                seconds = value.tv_sec
-                nanoseconds = value.tv_nsec
-            }
-
-            static func < (lhs: Self, rhs: Self) -> Bool {
-                (lhs.seconds, lhs.nanoseconds) < (rhs.seconds, rhs.nanoseconds)
-            }
-
-            var date: Date {
-                Date(timeIntervalSince1970: Double(seconds) + Double(nanoseconds) / 1_000_000_000)
-            }
+    private struct Entry: Hashable, Sendable {
+        struct Identity: Hashable, Sendable {
+            let volumeID: UInt64
+            let fileID: UInt64
+            let fileIDHigh: UInt64
+            /// 有 birthtime 时优先比对创建时间戳；Linux 等读不到 birthtime 的平台回退比对 ctime（ADR 0001 第 5.2 节）。
+            let creationAnchor: FileTimestamp?
         }
 
         let identity: Identity
-        let mode: mode_t
-        let size: off_t
-        let changed: Time
-        let modified: Time
+        let kind: FileKind
+        let size: Int64
+        let changed: FileTimestamp?
+        let modified: FileTimestamp
 
-        struct Identity: Hashable {
-            let device: dev_t
-            let inode: ino_t
-            let created: Time
+        init?(at url: URL, platform: any PlatformAdapter) {
+            guard let info = try? platform.identity(at: url),
+                  (info.fileID != 0 || info.fileIDHigh != 0) else {
+                return nil
+            }
+            let anchor = info.createdTimestamp ?? info.changedTimestamp
+            self.identity = Identity(
+                volumeID: info.volumeID,
+                fileID: info.fileID,
+                fileIDHigh: info.fileIDHigh,
+                creationAnchor: anchor
+            )
+            self.kind = info.kind
+            self.size = info.size
+            self.changed = info.changedTimestamp
+            self.modified = info.modifiedTimestamp
         }
 
-        init?(at url: URL) {
-            var info = stat()
-            guard url.withUnsafeFileSystemRepresentation({ path in
-                path.map { lstat($0, &info) } == 0
-            }), info.st_ino != 0 else { return nil }
-
-            identity = Identity(device: info.st_dev, inode: info.st_ino, created: Time(info.st_birthtimespec))
-            mode = info.st_mode
-            size = info.st_size
-            changed = Time(info.st_ctimespec)
-            modified = Time(info.st_mtimespec)
-        }
-
-        var isDirectory: Bool { mode & S_IFMT == S_IFDIR }
-        var isRegularFile: Bool { mode & S_IFMT == S_IFREG }
+        var isDirectory: Bool { kind == .directory }
+        var isRegularFile: Bool { kind == .regular }
     }
 
     private let root: Entry
@@ -56,34 +48,50 @@ public struct FileCleanupSnapshot: Hashable, Sendable {
     /// Directory-backed sessions use the latest modification time of their regular files.
     public let modifiedAt: Date?
 
-    public static func capture(at rawURL: URL, fileManager: FileManager = .default) -> Self? {
-        let url = SafetyGuard.normalizeTempPath(rawURL).standardizedFileURL
-        guard let root = Entry(at: url) else { return nil }
-        var latest: Entry.Time? = root.isRegularFile ? root.modified : nil
-        var descendants: [String: Entry] = [:]
-        if root.isDirectory {
-            var enumerationFailed = false
-            guard let enumerator = fileManager.enumerator(
-                at: url, includingPropertiesForKeys: [], errorHandler: { _, _ in
-                    enumerationFailed = true
-                    return false
-                }
-            ) else { return nil }
+    public static func capture(at url: URL, fileManager: FileManager = .default) -> Self? {
+        capture(at: url, platform: HostPlatformAdapter.shared)
+    }
 
-            for case let child as URL in enumerator {
-                guard !Task.isCancelled, let entry = Entry(at: child) else { return nil }
-                if entry.isRegularFile {
-                    latest = max(latest ?? entry.modified, entry.modified)
+    public static func capture(
+        at rawURL: URL,
+        platform: any PlatformAdapter
+    ) -> Self? {
+        let url = SafetyGuard.normalizeTempPath(rawURL, platform: platform).standardizedFileURL
+        guard let root = Entry(at: url, platform: platform) else { return nil }
+        var latest: FileTimestamp? = root.isRegularFile ? root.modified : nil
+        var descendants: [String: Entry] = [:]
+
+        if root.isDirectory {
+            var stack: [URL] = [url]
+            while let currentDir = stack.popLast() {
+                guard !Task.isCancelled,
+                      let children = try? platform.contentsOfDirectory(at: currentDir) else {
+                    return nil
                 }
-                descendants[child.path] = entry
+                for child in children {
+                    guard !Task.isCancelled,
+                          let entry = Entry(at: child, platform: platform) else {
+                        return nil
+                    }
+                    if entry.isRegularFile {
+                        latest = max(latest ?? entry.modified, entry.modified)
+                    }
+                    descendants[PlatformPath.normalize(child)] = entry
+                    if entry.isDirectory {
+                        stack.append(child)
+                    }
+                }
             }
-            guard !enumerationFailed, Entry(at: url) == root else { return nil }
+            guard Entry(at: url, platform: platform) == root else { return nil }
         }
+
         return Self(root: root, descendants: descendants, modifiedAt: latest?.date)
     }
 
-    func changeReason(at url: URL) -> String? {
-        guard let current = Self.capture(at: url) else { return "无法重新验证条目的文件身份或修改时间，请重新扫描" }
+    func changeReason(at url: URL, platform: any PlatformAdapter) -> String? {
+        guard let current = Self.capture(at: url, platform: platform) else {
+            return "无法重新验证条目的文件身份或修改时间，请重新扫描"
+        }
         if current.root.identity != root.identity {
             return "条目已被替换，请重新扫描"
         }

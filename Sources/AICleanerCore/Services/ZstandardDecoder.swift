@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 严格只读、零外部依赖的纯 Swift Zstandard（RFC 8878）流式头部解压器。
 /// 面向 Codex（`.jsonl.zst`）与 DeepSeek Harness（`.jsonl.zstd`）等压缩会话归档，
@@ -72,22 +76,14 @@ public enum ZstandardDecoder {
         at url: URL,
         maxCompressedBytes: Int = 262_144,
         maxOutputBytes: Int = 393_216,
+        platform: (any PlatformAdapter)? = nil,
         shouldStop: (([UInt8]) -> Bool)? = nil
     ) -> Data? {
         guard maxCompressedBytes > 0, maxOutputBytes > 0 else { return nil }
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-              values.isRegularFile == true,
-              values.isSymbolicLink != true else {
-            return nil
-        }
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            return nil
-        }
-        defer { try? handle.close() }
-
-        guard let compressed = try? handle.read(upToCount: maxCompressedBytes), !compressed.isEmpty else {
-            return nil
-        }
+        let platform = platform ?? HostPlatformAdapter.shared
+        guard let reader = platform.openReadOnlyRegularFile(at: url) else { return nil }
+        defer { reader.close() }
+        guard let compressed = reader.read(upToCount: maxCompressedBytes), !compressed.isEmpty else { return nil }
         return decompressPrefix(from: compressed, maxOutputBytes: maxOutputBytes, shouldStop: shouldStop)
     }
 

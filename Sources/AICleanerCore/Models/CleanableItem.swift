@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 单条实际存在于本机的扫描条目（含可清理项与透明展示的「不建议清理」受保护项）
 public struct CleanableItem: Identifiable, Hashable, Sendable {
@@ -44,10 +48,10 @@ public struct CleanableItem: Identifiable, Hashable, Sendable {
     /// 面向界面与排除记录的统一首选标题：会话条目优先使用保存的会话标题，避免退化为裸 UUID 文件名
     public var preferredDisplayTitle: String {
         guard category == .sessions else { return displayName }
-        if let sessionTitle, !sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let sessionTitle, !sessionTitle.trimmedWhitespaceAndNewlines().isEmpty {
             return sessionTitle
         }
-        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = displayName.trimmedWhitespaceAndNewlines()
         let fileStem = isDirectory ? fileName : url.deletingPathExtension().lastPathComponent
         if name.isEmpty || (name == fileName && UUID(uuidString: fileStem) != nil) {
             return "未命名会话"
@@ -470,7 +474,7 @@ public struct ScanReport: Sendable {
             }
             let sortedProtected = bucket.protectedItems.sorted { lhs, rhs in
                 if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes > rhs.sizeBytes }
-                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                return CoreTextCompare.caseInsensitiveAscending(lhs.displayName, rhs.displayName)
             }
             let summary = ClientScanSummary(
                 profile: bucket.profile,
@@ -517,7 +521,7 @@ public struct ScanReport: Sendable {
         let lhsRank = rank(lhs.profile.kind)
         let rhsRank = rank(rhs.profile.kind)
         if lhsRank != rhsRank { return lhsRank < rhsRank }
-        return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
+        return CoreTextCompare.caseInsensitiveAscending(lhs.profile.name, rhs.profile.name)
     }
 
     private static func compareBuiltInSummaries(_ lhs: ClientScanSummary, _ rhs: ClientScanSummary) -> Bool {
@@ -527,7 +531,7 @@ public struct ScanReport: Sendable {
         if lhs.protectedSizeBytes != rhs.protectedSizeBytes {
             return lhs.protectedSizeBytes > rhs.protectedSizeBytes
         }
-        return lhs.profile.name.localizedCaseInsensitiveCompare(rhs.profile.name) == .orderedAscending
+        return CoreTextCompare.caseInsensitiveAscending(lhs.profile.name, rhs.profile.name)
     }
 }
 
@@ -588,21 +592,13 @@ public struct TrashedItemMatcher: Sendable, Hashable {
         if exactPaths.contains(candidate) {
             return true
         }
-        guard candidate.hasPrefix("/"), candidate.count > 1 else {
-            return false
-        }
-        var searchEnd = candidate.endIndex
-        while let slashIndex = candidate[..<searchEnd].lastIndex(of: "/") {
-            if slashIndex == candidate.startIndex {
-                break
-            }
-            let ancestor = String(candidate[..<slashIndex])
+        var matched = false
+        PlatformPath.forEachAncestor(of: candidate) { ancestor in
             if exactPaths.contains(ancestor) {
-                return true
+                matched = true
             }
-            searchEnd = slashIndex
         }
-        return false
+        return matched
     }
 
     private static func pathVariants(for url: URL, resolvedDirCache: inout [String: String]) -> [String] {
@@ -624,15 +620,14 @@ public struct TrashedItemMatcher: Sendable, Hashable {
         for normalizedPath: String,
         cache: inout [String: String]
     ) -> String {
-        guard normalizedPath.hasPrefix("/"), normalizedPath != "/" else {
+        guard !normalizedPath.isEmpty, !PlatformPath.isRoot(normalizedPath),
+              let parentPath = PlatformPath.parent(of: normalizedPath) else {
             return normalizedPath
         }
-        let url = URL(fileURLWithPath: normalizedPath).standardizedFileURL
         // 仅解析祖先目录符号链接，保留末级节点身份不穿透末级符号链接
-        let leafName = url.lastPathComponent
-        let parentPath = ExcludedItemMatcher.normalizePath(url.deletingLastPathComponent())
+        let leafName = PlatformPath.lastPathComponent(normalizedPath)
         let resolvedParent = resolveExistingDirectoryPath(parentPath, cache: &cache)
-        return resolvedParent == "/" ? "/\(leafName)" : "\(resolvedParent)/\(leafName)"
+        return resolvedParent.hasSuffix("/") ? "\(resolvedParent)\(leafName)" : "\(resolvedParent)/\(leafName)"
     }
 
     private static func resolveExistingDirectoryPath(
@@ -642,7 +637,7 @@ public struct TrashedItemMatcher: Sendable, Hashable {
         if let cached = cache[dirPath] {
             return cached
         }
-        guard dirPath.hasPrefix("/"), dirPath != "/" else {
+        guard !dirPath.isEmpty, !PlatformPath.isRoot(dirPath) else {
             cache[dirPath] = dirPath
             return dirPath
         }
@@ -651,31 +646,30 @@ public struct TrashedItemMatcher: Sendable, Hashable {
         var currentPath = dirPath
         var missingComponents: [String] = []
 
-        while currentPath != "/" {
+        while !PlatformPath.isRoot(currentPath) {
             if let cached = cache[currentPath] {
                 var resolved = cached
                 for component in missingComponents.reversed() {
-                    resolved = resolved == "/" ? "/\(component)" : "\(resolved)/\(component)"
-                }
-                cache[dirPath] = resolved
-                return resolved
-            }
-            if fileManager.fileExists(atPath: currentPath) {
-                let resolvedExisting = ExcludedItemMatcher.normalizePath(
-                    URL(fileURLWithPath: currentPath).resolvingSymlinksInPath()
-                )
-                cache[currentPath] = resolvedExisting
-                var resolved = resolvedExisting
-                for component in missingComponents.reversed() {
-                    resolved = resolved == "/" ? "/\(component)" : "\(resolved)/\(component)"
+                    resolved = resolved.hasSuffix("/") ? "\(resolved)\(component)" : "\(resolved)/\(component)"
                 }
                 cache[dirPath] = resolved
                 return resolved
             }
             let currentURL = URL(fileURLWithPath: currentPath)
-            missingComponents.append(currentURL.lastPathComponent)
-            let nextPath = ExcludedItemMatcher.normalizePath(currentURL.deletingLastPathComponent())
-            if nextPath == currentPath {
+            if fileManager.fileExists(atPath: PlatformPath.fileSystemPath(for: currentURL)) {
+                let resolvedExisting = PlatformPath.normalize(
+                    PlatformPath.resolveSymlinks(currentURL)
+                )
+                cache[currentPath] = resolvedExisting
+                var resolved = resolvedExisting
+                for component in missingComponents.reversed() {
+                    resolved = resolved.hasSuffix("/") ? "\(resolved)\(component)" : "\(resolved)/\(component)"
+                }
+                cache[dirPath] = resolved
+                return resolved
+            }
+            missingComponents.append(PlatformPath.lastPathComponent(currentPath))
+            guard let nextPath = PlatformPath.parent(of: currentPath), nextPath != currentPath else {
                 break
             }
             currentPath = nextPath

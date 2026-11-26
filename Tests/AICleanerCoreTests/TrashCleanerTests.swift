@@ -145,7 +145,7 @@ final class TrashCleanerTests: XCTestCase {
     func testLateCredentialsBlockBothOrdinaryAndOverrideScansAtTrashTime() throws {
         try sandbox.createFile(relativeToHome: ".workbuddy/cache/entry.bin", byteCount: 64)
         try sandbox.createFile(relativeToHome: ".workbuddy-ai/plugins/demo/plugin.js", byteCount: 64)
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let cache = try XCTUnwrap(report.allItems.first { $0.ruleID == "workbuddy-cache" })
         let plugins = try XCTUnwrap(report.allProtectedItems.first { $0.ruleID == "workbuddy-ai-protected-plugins" })
         try sandbox.createFile(relativeToHome: ".workbuddy/cache/nested/auth.json", byteCount: 64)
@@ -247,6 +247,7 @@ final class TrashCleanerTests: XCTestCase {
         XCTAssertEqual(summary.topClients.map(\.totalFreedBytes), [1_500])
     }
 
+    #if os(macOS)
     func testSystemTrashPerformerUsesRealMacOSTrashOnIsolatedTempFile() throws {
         // 仅针对本次测试在临时目录新建的一次性文件验证真实 FileManager.trashItem，
         // 并在 defer 中精确清理测试产物，绝不触碰任何宿主真实数据或残留废纸篓垃圾。
@@ -273,6 +274,7 @@ final class TrashCleanerTests: XCTestCase {
         let trashURL = try XCTUnwrap(result.trashedItems.first?.resultingTrashURL)
         XCTAssertTrue(FileManager.default.fileExists(atPath: trashURL.path))
     }
+    #endif
 
     func testScanReportRemovingUpdatesStatsPruningSortingAndNestedSubpaths() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -539,7 +541,7 @@ final class TrashCleanerTests: XCTestCase {
         try sandbox.createFile(relativeToHome: "Library/Application Support/Cursor/GPUCache/data_0", byteCount: 5_000)
 
         let safetyGuard = SafetyGuard(homeDirectory: sandbox.homeURL)
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL, safetyGuard: safetyGuard)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles, safetyGuard: safetyGuard)
         let performer = try SandboxTrashPerformer(
             mockTrashDir: sandbox.rootURL.appendingPathComponent("MockTrash", isDirectory: true)
         )

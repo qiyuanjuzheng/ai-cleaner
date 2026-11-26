@@ -28,6 +28,7 @@ public struct SafetyGuard: Sendable {
     public let platform: any PlatformAdapter
     public let homeDirectory: URL
 
+    private let platformPolicy: PlatformSafetyPolicy
     private let homePathVariants: Set<String>
     private let lowerHomePathVariants: Set<String>
     private let cachesPathPrefixes: [String]
@@ -37,6 +38,7 @@ public struct SafetyGuard: Sendable {
         self.platform = platform
         let resolvedInput = (homeDirectory ?? platform.homeDirectory).standardizedFileURL
         self.homeDirectory = resolvedInput
+        self.platformPolicy = PlatformSafetyPolicy(platform: platform, home: resolvedInput)
 
         let rawHome = PlatformPath.normalize(resolvedInput)
         let resolvedHome = PlatformPath.normalize(platform.resolveSymlinks(at: resolvedInput))
@@ -86,6 +88,8 @@ public struct SafetyGuard: Sendable {
     ) -> URL {
         let platform = platform ?? HostPlatformAdapter.shared
         let standardized = url.standardizedFileURL
+        // Windows validates each component before resolving aliases to avoid entering a junction.
+        if platform.platform == .windows { return standardized }
         let normalizedPath = PlatformPath.normalize(standardized)
 
         var workingURL = standardized
@@ -114,8 +118,8 @@ public struct SafetyGuard: Sendable {
 
         let identity = try? platform.identity(at: url)
         if let identity {
-            let specialNodeCheck = Self.validateSpecialNode(identity: identity, url: url)
-            guard specialNodeCheck.isAllowed else { return specialNodeCheck }
+            let inspection = validateNode(at: url, identity: identity)
+            guard inspection.isAllowed else { return inspection }
         }
 
         let isLinkOrReparse = identity?.kind.isLinkOrReparsePoint ?? false
@@ -158,6 +162,25 @@ public struct SafetyGuard: Sendable {
         let hardCheck = validateHardProtection(path: PlatformPath.normalize(url))
         guard hardCheck.isAllowed else { return hardCheck }
         return validateSoftProtection(url: url, isDirectory: isDirectory)
+    }
+
+    func validateDescendant(at url: URL, identity: FileIdentity, allowUserOverride: Bool = false) -> SafetyDecision {
+        let inspection = validateNode(at: url, identity: identity)
+        guard inspection.isAllowed else { return inspection }
+        return allowUserOverride
+            ? validateHardProtection(path: PlatformPath.normalize(url))
+            : validateEntry(url: url, isDirectory: identity.kind == .directory)
+    }
+
+    private func validateNode(at url: URL, identity: FileIdentity) -> SafetyDecision {
+        if platform.platform == .windows {
+            if identity.kind.isLinkOrReparsePoint { return .blocked(reason: "Windows 符号链接或重解析点受保护") }
+            if identity.isHiddenOrSystem { return .blocked(reason: "Windows 隐藏或系统条目受保护") }
+            if identity.kind == .regular, platform.hasActiveFileLock(at: url) {
+                return .blocked(reason: "文件正被 Windows 进程占用，请关闭相关应用后重新扫描")
+            }
+        }
+        return Self.validateSpecialNode(identity: identity, url: url)
     }
 
     private func validateSoftProtection(url: URL, isDirectory: Bool) -> SafetyDecision {
@@ -223,21 +246,12 @@ public struct SafetyGuard: Sendable {
                     return .blocked(reason: "无法检查目录内的条目：\(childURL.lastPathComponent)")
                 }
 
-                if let reason = Self.validateSpecialNode(identity: childIdentity, url: childURL).blockReason {
+                if let reason = validateDescendant(at: childURL, identity: childIdentity,
+                                                   allowUserOverride: allowUserOverride).blockReason {
                     return .blocked(reason: "目录内包含受保护内容：\(reason)")
                 }
 
-                let childNormalizedPath = PlatformPath.normalize(childURL)
-                let childIsLink = childIdentity.kind.isLinkOrReparsePoint
-                let childIsRealDir = childIdentity.kind == .directory
-                let decision = allowUserOverride
-                    ? validateHardProtection(path: childNormalizedPath)
-                    : validateEntry(url: childURL, isDirectory: childIsRealDir)
-                if let reason = decision.blockReason {
-                    return .blocked(reason: "目录内包含受保护内容：\(reason)")
-                }
-
-                if childIsLink {
+                if childIdentity.kind.isLinkOrReparsePoint {
                     let resolved = platform.resolveSymlinks(at: childURL)
                     let resolvedNormalized = PlatformPath.normalize(resolved)
                     if let reason = validateHardProtection(path: resolvedNormalized).blockReason {
@@ -251,7 +265,10 @@ public struct SafetyGuard: Sendable {
                     continue
                 }
 
-                if childIsRealDir {
+                if childIdentity.kind == .directory {
+                    if platform.platform == .linux && childIdentity.volumeID != rootIdentity.volumeID {
+                        return .blocked(reason: "目录内包含其他挂载卷：\(childURL.lastPathComponent)")
+                    }
                     directoryStack.append(childURL)
                 }
             }
@@ -262,8 +279,11 @@ public struct SafetyGuard: Sendable {
 
     // MARK: - Private Helpers
 
-    private func validateHardProtection(path: String) -> SafetyDecision {
+    private func validateHardProtection(path: String, allowContainerRoots: Bool = false) -> SafetyDecision {
         let normalizedPath = PlatformPath.normalize(path)
+        if let reason = platformPolicy.violation(for: normalizedPath, allowContainerRoots: allowContainerRoots) {
+            return .blocked(reason: reason)
+        }
         let lowerPath = normalizedPath.lowercased()
         let components = lowerPath.split(separator: "/")
         let fileName = PlatformPath.lastPathComponent(normalizedPath)
@@ -314,10 +334,17 @@ public struct SafetyGuard: Sendable {
             return .blocked(reason: "仅支持本地文件路径")
         }
 
+        let raw = PlatformPath.normalize(url)
+        if let reason = platformPolicy.violation(for: raw, allowContainerRoots: allowHomeSubdirectoryRoots) {
+            return .blocked(reason: reason)
+        }
+        if platform.platform == .windows, let reason = windowsReparseBoundary(for: url) {
+            return .blocked(reason: reason)
+        }
         let candidates = pathCandidates(for: url)
         let caseInsensitive = platform.pathsAreCaseInsensitive
         for path in candidates {
-            let hardCheck = validateHardProtection(path: path)
+            let hardCheck = validateHardProtection(path: path, allowContainerRoots: allowHomeSubdirectoryRoots)
             guard hardCheck.isAllowed else { return hardCheck }
 
             if path.isEmpty || PlatformPath.isRoot(path) || Self.blockedExactSystemPaths.contains(path) {
@@ -361,6 +388,42 @@ public struct SafetyGuard: Sendable {
         }
 
         return .allowed
+    }
+
+    private func windowsReparseBoundary(for url: URL) -> String? {
+        var path = PlatformPath.normalize(url)
+        var components: [URL] = []
+        #if !os(Windows)
+        // When simulating Windows on a POSIX host (e.g., macOS /var -> /private/var),
+        // stop ascending once we reach the sandbox home boundary so host OS symlinks
+        // above the test sandbox do not falsely reject every simulated Windows path.
+        let lowerPath = path.lowercased()
+        let stopAtHome = lowerHomePathVariants.first { home in
+            lowerPath == home || lowerPath.hasPrefix(home + "/")
+        }
+        #endif
+        while !PlatformPath.isRoot(path) {
+            components.append(URL(fileURLWithPath: path))
+            #if !os(Windows)
+            if let stopAtHome, path.lowercased() == stopAtHome {
+                break
+            }
+            #endif
+            guard let parent = PlatformPath.parent(of: path), parent != path else { break }
+            path = parent
+        }
+        for component in components.reversed() {
+            do {
+                if try platform.identity(at: component).kind.isLinkOrReparsePoint {
+                    return "路径包含受保护的 Windows 符号链接或重解析点：\(component.lastPathComponent)"
+                }
+            } catch PlatformFileError.notFound {
+                break  // Missing rule paths on an uninstalled client are normal.
+            } catch {
+                return "无法确认 Windows 路径安全：\(component.lastPathComponent)"
+            }
+        }
+        return nil
     }
 
     private func pathCandidates(for url: URL) -> [String] {

@@ -50,7 +50,8 @@ enum BuiltInRuleCatalog {
                         isSessionArchive: rule.isSessionArchive
                     )
                     let resolvedURL = candidate.resolveURL(homeDirectory: safetyGuard.homeDirectory)
-                    if let reason = safetyGuard.validateBuiltInContainer(resolvedURL).blockReason {
+                    if candidate.recommendation != .notRecommended,
+                       let reason = safetyGuard.validateBuiltInContainer(resolvedURL).blockReason {
                         CoreLogger.shared.warning(
                             "丢弃未通过安全校验的内置规则",
                             metadata: [

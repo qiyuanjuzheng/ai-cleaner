@@ -255,6 +255,8 @@ public protocol PlatformAdapter: Sendable {
 
     /// 启动/数据卷查询路径（macOS `/System/Volumes/Data`，Linux `/`，Windows 系统盘根目录）。
     var startupVolumeURL: URL { get }
+    /// Known personal folders can be redirected outside the home directory.
+    var protectedUserDirectories: [URL] { get }
     /// 当前进程可执行文件路径（用于临时目录自保护，替代 `Bundle.main.executableURL`）。
     var currentExecutableURL: URL? { get }
     /// 读取指定环境变量（替代 `ProcessInfo.processInfo.environment`）。
@@ -286,6 +288,8 @@ extension PlatformAdapter {
             return URL(fileURLWithPath: "C:\\", isDirectory: true)
         }
     }
+
+    public var protectedUserDirectories: [URL] { [] }
 
     public var currentExecutableURL: URL? { nil }
 
@@ -411,14 +415,21 @@ public struct SandboxPlatformAdapter: PlatformAdapter {
         case (.windows, .localAppData):
             return homeDirectory.appendingPathComponent("AppData/Local", isDirectory: true)
         case (.linux, .xdgConfig):
-            return homeDirectory.appendingPathComponent(".config", isDirectory: true)
+            return xdgPath("XDG_CONFIG_HOME", defaultPath: ".config")
         case (.linux, .xdgCache):
-            return homeDirectory.appendingPathComponent(".cache", isDirectory: true)
+            return xdgPath("XDG_CACHE_HOME", defaultPath: ".cache")
         case (.linux, .xdgData):
-            return homeDirectory.appendingPathComponent(".local/share", isDirectory: true)
+            return xdgPath("XDG_DATA_HOME", defaultPath: ".local/share")
         default:
             return nil
         }
+    }
+
+    private func xdgPath(_ variable: String, defaultPath: String) -> URL {
+        if let path = environmentOverrides[variable], PlatformPath.isAbsolute(path) {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return homeDirectory.appendingPathComponent(defaultPath, isDirectory: true)
     }
 
     public func userDataDirectory() -> URL {

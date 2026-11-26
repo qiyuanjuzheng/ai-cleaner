@@ -51,6 +51,15 @@ public struct HostPlatformAdapter: PlatformAdapter {
     }
     public var pathsAreCaseInsensitive: Bool { platform != .linux }
 
+    public var protectedUserDirectories: [URL] {
+        #if os(Windows)
+        [AICL_KNOWN_PATH_WIN_DESKTOP, AICL_KNOWN_PATH_WIN_DOCUMENTS, AICL_KNOWN_PATH_WIN_DOWNLOADS,
+         AICL_KNOWN_PATH_WIN_PICTURES, AICL_KNOWN_PATH_WIN_MUSIC, AICL_KNOWN_PATH_WIN_VIDEOS].compactMap(Self.knownPath)
+        #else
+        []
+        #endif
+    }
+
     public var currentExecutableURL: URL? { Self.knownPath(AICL_KNOWN_PATH_EXECUTABLE) }
 
     public var startupVolumeURL: URL {

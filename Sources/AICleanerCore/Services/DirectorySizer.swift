@@ -87,6 +87,9 @@ public struct DirectorySizer: Sendable {
                     try platform.contentsOfDirectory(at: currentDir)
                 }
             } catch {
+                if safetyGuard != nil && platform.platform != .macos {
+                    protectedReason = "无法检查目录：\(currentDir.lastPathComponent)"
+                }
                 continue
             }
 
@@ -95,19 +98,22 @@ public struct DirectorySizer: Sendable {
                     break
                 }
                 guard let identity = try? platform.identity(at: childURL) else {
+                    if safetyGuard != nil && platform.platform != .macos {
+                        protectedReason = "无法检查目录内的条目：\(childURL.lastPathComponent)"
+                        break
+                    }
                     continue
                 }
 
                 let childIsLink = identity.kind.isLinkOrReparsePoint
                 let childIsDir = identity.kind == .directory
 
-                if safetyGuard != nil, identity.kind.isSpecialNode {
-                    protectedReason = "\(childURL.lastPathComponent)：特殊系统节点（Socket/FIFO/设备文件）不允许清理"
-                    break
-                }
-
                 if let safetyGuard {
-                    let decision = safetyGuard.validateEntry(url: childURL, isDirectory: childIsDir)
+                    if platform.platform == .linux && childIsDir && identity.volumeID != rootIdentity.volumeID {
+                        protectedReason = "目录内包含其他挂载卷：\(childURL.lastPathComponent)"
+                        break
+                    }
+                    let decision = safetyGuard.validateDescendant(at: childURL, identity: identity)
                     if let reason = decision.blockReason {
                         protectedReason = "\(childURL.lastPathComponent)：\(reason)"
                         break

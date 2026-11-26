@@ -181,12 +181,12 @@ int32_t aicl_file_identity(const char *utf8_path, aicl_file_identity_t *out) {
             NULL
         );
     }
+    DWORD open_error = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
     free(wpath);
 
     if (h == INVALID_HANDLE_VALUE) {
-        DWORD err = GetLastError();
-        out->error_code = (int32_t)err;
-        return (int32_t)err;
+        out->error_code = (int32_t)open_error;
+        return (int32_t)open_error;
     }
 
     FILE_BASIC_INFO basic;
@@ -522,6 +522,18 @@ int32_t aicl_get_known_path(int32_t kind, char *out_buf, size_t out_cap) {
             if (got == 0 || got >= _countof(wbuf)) return -1;
             return wide_to_utf8_buf(wbuf, out_buf, out_cap);
         }
+        case AICL_KNOWN_PATH_WIN_DESKTOP:
+            return known_folder_utf8(&FOLDERID_Desktop, out_buf, out_cap);
+        case AICL_KNOWN_PATH_WIN_DOCUMENTS:
+            return known_folder_utf8(&FOLDERID_Documents, out_buf, out_cap);
+        case AICL_KNOWN_PATH_WIN_DOWNLOADS:
+            return known_folder_utf8(&FOLDERID_Downloads, out_buf, out_cap);
+        case AICL_KNOWN_PATH_WIN_PICTURES:
+            return known_folder_utf8(&FOLDERID_Pictures, out_buf, out_cap);
+        case AICL_KNOWN_PATH_WIN_MUSIC:
+            return known_folder_utf8(&FOLDERID_Music, out_buf, out_cap);
+        case AICL_KNOWN_PATH_WIN_VIDEOS:
+            return known_folder_utf8(&FOLDERID_Videos, out_buf, out_cap);
         case AICL_KNOWN_PATH_EXECUTABLE: {
             wchar_t wbuf[32768];
             DWORD got = GetModuleFileNameW(NULL, wbuf, (DWORD)_countof(wbuf));

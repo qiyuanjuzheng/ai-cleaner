@@ -86,18 +86,6 @@ struct SidebarView: View {
                     )
                     .padding(.top, 14)
 
-                    SidebarClientTile(
-                        title: "项目会话",
-                        cleanableBytesText: "",
-                        hasProtectedOnly: false,
-                        icon: .symbol("folder.badge.clock"),
-                        tint: .teal,
-                        isSelected: viewModel.sidebarSelection == .projects,
-                        namespace: sidebarNamespace
-                    ) {
-                        select(.projects)
-                    }
-
                     if viewModel.hasScanResults && !viewModel.isScanning && viewModel.builtInSidebarEntries.isEmpty {
                         Text("未检测到 AI 客户端")
                             .font(.caption)
@@ -112,10 +100,10 @@ struct SidebarView: View {
                                 hasProtectedOnly: entry.cleanableBytes == 0 && entry.protectedBytes > 0,
                                 icon: .client(entry.id),
                                 tint: AppTheme.color(forAccentToken: entry.accentToken),
-                                isSelected: viewModel.sidebarSelection == .client(entry.id),
+                                isSelected: viewModel.sidebarSelection.clientID == entry.id,
                                 namespace: sidebarNamespace
                             ) {
-                                select(.client(entry.id))
+                                viewModel.selectBuiltInClient(entry.id)
                             }
                         }
                     }

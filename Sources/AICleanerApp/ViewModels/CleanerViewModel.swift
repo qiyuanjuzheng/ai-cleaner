@@ -8,17 +8,38 @@ enum SidebarSelection: Hashable, Sendable {
     case allClients
     case history
     case excluded
-    case projects
     case client(String)
+    case clientProjects(String)
+
+    var clientID: String? {
+        switch self {
+        case .client(let id), .clientProjects(let id):
+            return id
+        case .allClients, .history, .excluded:
+            return nil
+        }
+    }
+
+    var projectClientID: String? {
+        if case .clientProjects(let id) = self { return id }
+        return nil
+    }
+
+    var isProjectScope: Bool { projectClientID != nil }
 
     var isListScope: Bool {
         switch self {
         case .allClients, .client:
             return true
-        case .history, .excluded, .projects:
+        case .history, .excluded, .clientProjects:
             return false
         }
     }
+}
+
+enum ClientPageTab: Hashable {
+    case cleanup
+    case projects
 }
 
 enum ItemAgeFilter: String, CaseIterable, Identifiable, Sendable {
@@ -291,13 +312,13 @@ final class CleanerViewModel {
     var sidebarSelection: SidebarSelection = .allClients {
         didSet {
             guard !suppressCacheRebuild, oldValue != sidebarSelection else { return }
-            if oldValue == .projects || sidebarSelection == .projects {
+            if oldValue.isProjectScope || sidebarSelection.isProjectScope {
                 pendingRiskItemToSelect = nil
                 showingTrashConfirmation = false
                 projectSelectedItemIDs.removeAll()
-                if sidebarSelection == .projects {
-                    refreshProjectVisibility()
-                } else {
+                showsAllProjectClients = false
+                rebuildProjectGroups()
+                if !sidebarSelection.isProjectScope {
                     rebuildSelectionCache()
                 }
             }
@@ -316,6 +337,25 @@ final class CleanerViewModel {
         }
     }
 
+    var builtInClientPage: SidebarClientEntry? {
+        guard let clientID = sidebarSelection.clientID else { return nil }
+        return builtInSidebarEntries.first { $0.id == clientID }
+    }
+
+    var clientPageTab: ClientPageTab {
+        get { sidebarSelection.isProjectScope ? .projects : .cleanup }
+        set {
+            guard let client = builtInClientPage else { return }
+            sidebarSelection = newValue == .projects ? .clientProjects(client.id) : .client(client.id)
+        }
+    }
+
+    func selectBuiltInClient(_ id: String) {
+        sidebarSelection = sidebarSelection.isProjectScope ? .clientProjects(id) : .client(id)
+    }
+
+    private(set) var canShowAllProjectClients = false
+    private(set) var showsAllProjectClients = false
     private(set) var projectGroups: [SessionProject] = []
     private(set) var visibleProjectSessions: [CleanableItem] = []
     private(set) var protectedProjectPaths: Set<String> = []
@@ -324,7 +364,8 @@ final class CleanerViewModel {
         didSet {
             guard oldValue != selectedProjectID else { return }
             projectSelectedItemIDs.removeAll()
-            if sidebarSelection == .projects {
+            showsAllProjectClients = false
+            if sidebarSelection.isProjectScope {
                 pendingRiskItemToSelect = nil
                 showingTrashConfirmation = false
             }
@@ -348,7 +389,7 @@ final class CleanerViewModel {
 
     private var projectSelectedItemIDs: Set<String> = []
     private var activeSelectedItemIDs: Set<String> {
-        sidebarSelection == .projects ? projectSelectedItemIDs : selectedItemIDs
+        sidebarSelection.isProjectScope ? projectSelectedItemIDs : selectedItemIDs
     }
 
     var searchText: String = "" {
@@ -552,6 +593,9 @@ final class CleanerViewModel {
         }
         if sidebarSelection == .excluded {
             return AppTheme.excludedAccentColor
+        }
+        if sidebarSelection.isProjectScope, let client = builtInClientPage {
+            return AppTheme.color(forAccentToken: client.accentToken)
         }
         if let summary = activeSummary {
             return AppTheme.color(forAccentToken: summary.profile.accentToken)
@@ -1042,17 +1086,20 @@ final class CleanerViewModel {
     }
 
     private func rebuildProjectGroups() {
-        var groups = projectCatalog.projects.compactMap { project -> SessionProject? in
-            let sessions = project.sessions.compactMap { allDisplayedItemsByID[$0.id] }
-            guard !sessions.isEmpty || isProjectProtected(project.id) else { return nil }
-            return SessionProject(id: project.id, sessions: sessions)
+        if let clientID = sidebarSelection.projectClientID {
+            projectGroups = projectCatalog.projects.compactMap { project -> SessionProject? in
+                let clientSessions = project.sessions.filter { $0.clientID == clientID }
+                guard !clientSessions.isEmpty else { return nil }
+                let visibleSessions = clientSessions.compactMap { allDisplayedItemsByID[$0.id] }
+                guard !visibleSessions.isEmpty || isProjectProtected(project.id) else { return nil }
+                return SessionProject(id: project.id, sessions: visibleSessions)
+            }
+        } else {
+            projectGroups = []
         }
-        let visiblePaths = Set(groups.compactMap(\.id.workspacePath))
-        for path in protectedProjectPaths.subtracting(visiblePaths).sorted() {
-            groups.append(SessionProject(id: .workspace(path), sessions: []))
-        }
-        projectGroups = groups
-        let nextProjectID = groups.contains { $0.id == selectedProjectID } ? selectedProjectID : groups.first?.id
+
+        let nextProjectID = projectGroups.contains { $0.id == selectedProjectID }
+            ? selectedProjectID : projectGroups.first?.id
         if nextProjectID == selectedProjectID {
             refreshProjectVisibility()
         } else {
@@ -1060,8 +1107,29 @@ final class CleanerViewModel {
         }
     }
 
+    func setShowsAllProjectClients(_ enabled: Bool) {
+        guard enabled != showsAllProjectClients, !enabled || canShowAllProjectClients else { return }
+        showsAllProjectClients = enabled
+        showingTrashConfirmation = false
+        refreshProjectVisibility()
+    }
+
     private func refreshProjectVisibility() {
-        let sessions = projectGroups.first { $0.id == selectedProjectID }?.sessions ?? []
+        let currentProject = projectGroups.first { $0.id == selectedProjectID }
+        let currentSessions = currentProject?.sessions ?? []
+        let allSessions: [CleanableItem]
+        if let currentProject, currentProject.id.workspacePath != nil {
+            allSessions = projectCatalog.projects.first { $0.id == currentProject.id }?.sessions
+                .compactMap { allDisplayedItemsByID[$0.id] } ?? []
+        } else {
+            allSessions = currentSessions
+        }
+
+        canShowAllProjectClients = allSessions.contains { $0.clientID != sidebarSelection.projectClientID }
+        if !canShowAllProjectClients {
+            showsAllProjectClients = false
+        }
+        let sessions = showsAllProjectClients ? allSessions : currentSessions
         let cutoff = projectAgeFilter.cutoffDate(relativeTo: now())
         projectAgeCutoff = cutoff
         if let cutoff {
@@ -1075,7 +1143,7 @@ final class CleanerViewModel {
         let items = visibleProjectSessions.flatMap { [$0] + projectArtifacts(for: $0) }
         projectVisibleItemIDs = Set(items.map(\.id))
         projectSelectedItemIDs.formIntersection(items.lazy.filter { $0.hardProtectionReason == nil }.map(\.id))
-        if sidebarSelection == .projects {
+        if sidebarSelection.isProjectScope {
             if let pendingRiskItemToSelect, !projectVisibleItemIDs.contains(pendingRiskItemToSelect.id) {
                 self.pendingRiskItemToSelect = nil
             }
@@ -1408,7 +1476,7 @@ final class CleanerViewModel {
 
     /// 由用户主动触发扫描（从待扫描首页、工具栏或菜单启动）
     func startScan() {
-        if !sidebarSelection.isListScope && sidebarSelection != .projects {
+        if !sidebarSelection.isListScope && !sidebarSelection.isProjectScope {
             sidebarSelection = .allClients
         }
         rescan()
@@ -1491,7 +1559,7 @@ final class CleanerViewModel {
             self.suppressCacheRebuild = true
             self.report = finalBundle.report
             self.isScanning = false
-            if case let .client(clientID) = self.sidebarSelection,
+            if let clientID = self.sidebarSelection.clientID,
                finalBundle.clientSummaryByID[clientID] == nil {
                 self.sidebarSelection = .allClients
             }
@@ -1546,7 +1614,7 @@ final class CleanerViewModel {
     func toggleSelection(for item: CleanableItem) {
         guard let current = allDisplayedItemsByID[item.id],
               current.hardProtectionReason == nil,
-              sidebarSelection != .projects || projectVisibleItemIDs.contains(item.id) else { return }
+              !sidebarSelection.isProjectScope || projectVisibleItemIDs.contains(item.id) else { return }
         let selected = isSelected(item)
         if selected || current.isCleanable {
             updateSelection(for: current.id, selected: !selected)
@@ -1560,12 +1628,12 @@ final class CleanerViewModel {
         guard pendingRiskItemToSelect?.id == item.id,
               let current = allDisplayedItemsByID[item.id],
               current.hardProtectionReason == nil, !current.isCleanable,
-              sidebarSelection != .projects || projectVisibleItemIDs.contains(item.id) else { return }
+              !sidebarSelection.isProjectScope || projectVisibleItemIDs.contains(item.id) else { return }
         updateSelection(for: item.id, selected: true)
     }
 
     private func updateSelection(for id: String, selected: Bool) {
-        if sidebarSelection == .projects {
+        if sidebarSelection.isProjectScope {
             if selected { projectSelectedItemIDs.insert(id) } else { projectSelectedItemIDs.remove(id) }
             rebuildSelectionCache()
         } else {
@@ -1630,7 +1698,7 @@ final class CleanerViewModel {
     }
 
     func selectAllVisible() {
-        if sidebarSelection == .projects {
+        if sidebarSelection.isProjectScope {
             projectSelectedItemIDs.formUnion(projectBulkSelectableSessions.map(\.id))
             rebuildSelectionCache()
             return
@@ -1664,7 +1732,7 @@ final class CleanerViewModel {
     }
 
     func clearAllSelection() {
-        if sidebarSelection == .projects {
+        if sidebarSelection.isProjectScope {
             projectSelectedItemIDs.removeAll()
             rebuildSelectionCache()
         } else {
@@ -1812,7 +1880,7 @@ final class CleanerViewModel {
         let previousScope = activeListScopeSelection
         suppressCacheRebuild = true
         self.report = bundle.report
-        if case let .client(clientID) = self.sidebarSelection,
+        if let clientID = self.sidebarSelection.clientID,
            bundle.clientSummaryByID[clientID] == nil {
             self.sidebarSelection = .allClients
         }
@@ -1898,7 +1966,7 @@ final class CleanerViewModel {
         let allowOverride = acknowledgedNotRecommendedRisk && hasSelectedNotRecommendedItems
         let projectCatalog = projectCatalog
         let protectionStore = projectProtectionStore
-        let verifyProjectSelection = sidebarSelection == .projects
+        let verifyProjectSelection = sidebarSelection.isProjectScope
 
         Task {
             let result = await Task.detached(priority: .userInitiated) {

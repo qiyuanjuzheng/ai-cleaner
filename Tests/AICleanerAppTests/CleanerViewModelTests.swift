@@ -1452,6 +1452,56 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testClientProjectTabScopesListsAndCanShowSharedProjectSessions() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let shared: SessionProjectID = .workspace("/work/shared")
+        try write(#"{"type":"user","cwd":"/work/shared"}"#, at: ".codex/sessions/day/codex-shared.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/shared"}"#,
+                  at: ".claude/projects/-work-shared/claude-shared.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/claude-only"}"#,
+                  at: ".claude/projects/-work-claude-only/claude-only.jsonl", in: home)
+
+        let model = makeViewModel(home: home)
+        model.report = ScanEngine(homeDirectory: home).scan()
+        model.selectBuiltInClient("codex")
+        XCTAssertEqual(model.clientPageTab, .cleanup)
+        XCTAssertEqual(model.scopedItems.map(\.clientID), ["codex"])
+        model.clientPageTab = .projects
+        XCTAssertEqual(model.sidebarSelection, .clientProjects("codex"))
+        XCTAssertEqual(model.projectGroups.map(\.id), [shared])
+        XCTAssertEqual(model.projectGroups.first?.sessions.count, 1)
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["codex-shared.jsonl"])
+        XCTAssertTrue(model.canShowAllProjectClients)
+
+        let outsideClient = try XCTUnwrap(model.report?.allItems.first { $0.fileName == "claude-shared.jsonl" })
+        model.toggleSelection(for: outsideClient)
+        model.selectAllVisible()
+        XCTAssertEqual(model.selectedItems.map(\.fileName), ["codex-shared.jsonl"])
+        model.setShowsAllProjectClients(true)
+        model.selectAllVisible()
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), ["codex-shared.jsonl", "claude-shared.jsonl"])
+        model.setShowsAllProjectClients(false)
+        XCTAssertEqual(model.selectedItems.map(\.fileName), ["codex-shared.jsonl"])
+
+        model.selectBuiltInClient("claude-code")
+        XCTAssertEqual(model.sidebarSelection, .clientProjects("claude-code"))
+        XCTAssertEqual(Set(model.projectGroups.map(\.id)), [shared, .workspace("/work/claude-only")])
+        XCTAssertEqual(model.selectedProjectID, shared)
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["claude-shared.jsonl"])
+        XCTAssertTrue(model.selectedItems.isEmpty)
+
+        model.setProjectProtection(true, for: shared)
+        model.setShowsAllProjectClients(true)
+        XCTAssertEqual(model.visibleProjectSessions.count, 2)
+        XCTAssertTrue(model.visibleProjectSessions.allSatisfy { $0.hardProtectionReason != nil })
+
+        model.clientPageTab = .cleanup
+        XCTAssertEqual(model.sidebarSelection, .client("claude-code"))
+        XCTAssertEqual(Set(model.scopedItems.map(\.clientID)), ["claude-code"])
+    }
+
+    @MainActor
     func testProjectAgeFilterAndSelectionsStayInTheCurrentProject() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
@@ -1485,7 +1535,7 @@ final class CleanerViewModelTests: XCTestCase {
         )
         let overviewSelection = try XCTUnwrap(model.filteredItems.first { $0.fileName == "other.jsonl" })
         model.toggleSelection(for: overviewSelection)
-        model.sidebarSelection = .projects
+        model.sidebarSelection = .clientProjects("codex")
         model.selectedProjectID = .workspace("/work/demo")
         XCTAssertEqual(Set(model.visibleProjectSessions.map(\.fileName)), [oldName, "edge.jsonl", "newer.jsonl", "unknown.jsonl"])
 
@@ -1521,7 +1571,7 @@ final class CleanerViewModelTests: XCTestCase {
         model.selectAllVisible()
         XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), [key, "\(key).jsonl"])
 
-        model.sidebarSelection = .projects
+        model.sidebarSelection = .clientProjects("codex")
         model.selectedProjectID = .workspace("/work/demo")
         model.selectAllVisible()
         XCTAssertEqual(model.selectedItems.count, 1)
@@ -1567,7 +1617,7 @@ final class CleanerViewModelTests: XCTestCase {
         let other = try XCTUnwrap(model.filteredItems.first { $0.fileName == "other.jsonl" })
         model.toggleSelection(for: other)
 
-        model.sidebarSelection = .projects
+        model.sidebarSelection = .clientProjects("codex")
         model.selectedProjectID = .workspace("/work/demo")
         model.projectAgeFilter = .olderThan90Days
         model.selectAllVisible()

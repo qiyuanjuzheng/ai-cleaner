@@ -13,7 +13,7 @@ struct ContentView: View {
     var body: some View {
         let isHistory = viewModel.sidebarSelection == .history
         let isExcluded = viewModel.sidebarSelection == .excluded
-        let isProjects = viewModel.sidebarSelection == .projects
+        let isProjects = viewModel.sidebarSelection.isProjectScope
         let isListPage = viewModel.sidebarSelection.isListScope
 
         NavigationSplitView {
@@ -56,6 +56,10 @@ struct ContentView: View {
                         .padding(.vertical, 9)
                         .background(AppTheme.glassElevatedFill(for: colorScheme))
                         .overlay(alignment: .bottom) { Divider() }
+                    }
+
+                    if let client = viewModel.builtInClientPage {
+                        clientPageSwitcher(client)
                     }
 
                     // 列表页、清理记录页与已排除页使用 ZStack 保活切换，彻底消除切页时重建 ScrollView 与 Swift Charts 的卡顿
@@ -186,6 +190,26 @@ struct ContentView: View {
         .onChange(of: viewModel.appearanceMode) { _, newMode in
             applyWindowAppearance(newMode)
         }
+    }
+
+    private func clientPageSwitcher(_ client: SidebarClientEntry) -> some View {
+        HStack(spacing: 12) {
+            Text(client.title)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+            Picker("客户端页面", selection: $viewModel.clientPageTab) {
+                Text("清理条目").tag(ClientPageTab.cleanup)
+                Text("项目会话").tag(ClientPageTab.projects)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 9)
+        .background(AppTheme.glassCardFill(for: colorScheme))
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func applyWindowAppearance(_ mode: AppAppearanceMode) {

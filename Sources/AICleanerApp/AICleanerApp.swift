@@ -132,7 +132,7 @@ struct AICleanerApp: App {
                 }
                 .keyboardShortcut("a", modifiers: [.command, .option])
                 .disabled(
-                    viewModel.sidebarSelection == .projects
+                    viewModel.sidebarSelection.isProjectScope
                         ? viewModel.projectBulkSelectableSessions.isEmpty
                         : viewModel.filteredBulkSelectableItems.isEmpty
                 )

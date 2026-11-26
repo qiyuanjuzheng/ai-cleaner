@@ -22,7 +22,7 @@ struct ProjectSessionsView: View {
                     }
                 }
             } else if viewModel.projectGroups.isEmpty {
-                ContentUnavailableView("未找到项目会话", systemImage: "folder.badge.clock")
+                ContentUnavailableView("此客户端没有项目会话", systemImage: "folder.badge.clock")
             } else {
                 HStack(spacing: 0) {
                     projectList
@@ -45,7 +45,7 @@ struct ProjectSessionsView: View {
 
     private var projectList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("项目会话")
+            Text("项目")
                 .font(.system(.headline, design: .rounded).weight(.bold))
                 .padding(.horizontal, 14)
                 .padding(.top, 16)
@@ -132,12 +132,26 @@ struct ProjectSessionsView: View {
                                   systemImage: isProtected ? "lock.open" : "lock")
                         }
                         .disabled(viewModel.isCleaning)
+                        .help("项目保护适用于此项目关联的所有客户端会话和专属文件")
                     }
                 }
                 if isProtected {
-                    Label("此项目的会话与专属关联文件已锁定", systemImage: "lock.fill")
+                    Label("此项目在所有客户端的会话与专属关联文件已锁定", systemImage: "lock.fill")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if viewModel.canShowAllProjectClients, let client = viewModel.builtInClientPage {
+                    Picker("客户端范围", selection: Binding(
+                        get: { viewModel.showsAllProjectClients },
+                        set: { viewModel.setShowsAllProjectClients($0) }
+                    )) {
+                        Text(client.title).tag(false)
+                        Text("所有客户端").tag(true)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
 
                 HStack(spacing: 10) {

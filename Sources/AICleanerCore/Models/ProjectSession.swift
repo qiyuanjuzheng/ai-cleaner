@@ -66,6 +66,7 @@ public struct ProjectSessionCatalog: Sendable {
     }
 
     private let ownedLocations: [String: [URL]]
+    private let projectIDsByItemID: [String: SessionProjectID]
     private let artifactKeysBySessionID: [String: SessionKey]
     private let artifactsByKey: [SessionKey: [CleanableItem]]
     private let workspacePaths: ProjectLocationMatcher
@@ -86,6 +87,7 @@ public struct ProjectSessionCatalog: Sendable {
         }
 
         var groups: [SessionProjectID: [CleanableItem]] = [:]
+        var projectIDs: [String: SessionProjectID] = [:]
         var keysBySessionID: [String: SessionKey] = [:]
         var locations: [String: [URL]] = [:]
         for session in sessions {
@@ -94,7 +96,10 @@ public struct ProjectSessionCatalog: Sendable {
             let path = evidence == .conflict ? nil : session.projectEvidence?.path
             let project = path.map(SessionProjectID.workspace) ?? .unidentified
             groups[project, default: []].append(session)
-            if let path { locations[path, default: []].append(session.url) }
+            if let path {
+                locations[path, default: []].append(session.url)
+                projectIDs[session.id] = project
+            }
             if let key, evidence != .conflict, evidence?.path == path {
                 keysBySessionID[session.id] = key
             }
@@ -105,12 +110,14 @@ public struct ProjectSessionCatalog: Sendable {
             guard let key = SessionKey(item), evidenceByKey[key] != .conflict else { continue }
             if let path = evidenceByKey[key]?.path {
                 locations[path, default: []].append(item.url)
+                projectIDs[item.id] = .workspace(path)
             }
             artifacts[key, default: []].append(item)
         }
         artifactKeysBySessionID = keysBySessionID
         artifactsByKey = artifacts
         ownedLocations = locations
+        projectIDsByItemID = projectIDs
         workspacePaths = ProjectLocationMatcher(urls: locations.keys.map { URL(fileURLWithPath: $0) })
         projects = groups.map { SessionProject(id: $0.key, sessions: $0.value) }.sorted { lhs, rhs in
             if lhs.id == .unidentified { return false }
@@ -124,6 +131,10 @@ public struct ProjectSessionCatalog: Sendable {
     public func artifacts(for session: CleanableItem) -> [CleanableItem] {
         guard let key = artifactKeysBySessionID[session.id] else { return [] }
         return artifactsByKey[key] ?? []
+    }
+
+    public func projectID(for item: CleanableItem) -> SessionProjectID {
+        projectIDsByItemID[item.id] ?? .unidentified
     }
 
     public func protection(for projects: Set<String>) -> ProjectLocationMatcher {

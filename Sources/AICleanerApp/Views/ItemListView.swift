@@ -376,7 +376,8 @@ struct ItemControlBarView: View {
             ControlBarIconMenuButton(
                 symbolName: "slider.horizontal.3",
                 accessibilityLabel: ItemControlBarMenuFactory.accessibilityLabel,
-                showsIndicatorBadge: viewModel.selectedAgeFilter != .all || viewModel.sortOrder != .sizeDescending,
+                showsIndicatorBadge: viewModel.selectedAgeFilter != .all || viewModel.sortOrder != .sizeDescending
+                    || (viewModel.selectedCategory == .sessions && viewModel.groupsSessionsByProject),
                 menuBuilder: {
                     ItemControlBarMenuFactory.makeMenu(for: viewModel)
                 }

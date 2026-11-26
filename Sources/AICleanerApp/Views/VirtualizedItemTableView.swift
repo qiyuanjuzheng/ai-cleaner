@@ -1969,6 +1969,95 @@ final class SectionHeaderTableCellView: NSTableCellView {
     }
 }
 
+/// 「按项目会话分组」模式下的项目分组头（仅展示，无折叠与批量勾选入口，勾选规则仍按推荐分组）
+@MainActor
+final class ProjectHeaderTableCellView: NSTableCellView {
+    static let reuseIdentifier = NSUserInterfaceItemIdentifier("ProjectHeaderCell")
+
+    private(set) var currentHeader: ProjectHeaderRow?
+
+    private let folderIconView: PassthroughImageView = {
+        let view = PassthroughImageView()
+        view.imageScaling = .scaleNone
+        view.imageAlignment = .alignCenter
+        view.contentTintColor = .secondaryLabelColor
+        return view
+    }()
+
+    private let titleLabel = PassthroughLabel.makeLabel(
+        font: ItemTableResources.sectionTitleFont,
+        color: .labelColor,
+        lineBreakMode: .byTruncatingTail
+    )
+
+    private let summaryLabel = PassthroughLabel.makeLabel(
+        font: ItemTableResources.sectionSummaryFont,
+        color: .secondaryLabelColor,
+        lineBreakMode: .byTruncatingTail
+    )
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = Self.reuseIdentifier
+        wantsLayer = true
+
+        addSubview(folderIconView)
+        addSubview(titleLabel)
+        addSubview(summaryLabel)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(header: ProjectHeaderRow) {
+        currentHeader = header
+        titleLabel.stringValue = header.title
+        summaryLabel.stringValue = header.summaryText
+        folderIconView.image = ItemTableResources.symbolImage(named: "folder", pointSize: 10, weight: .regular)
+        titleLabel.toolTip = header.project.workspacePath ?? header.title
+        needsLayout = true
+    }
+
+    func refreshAppearance() {
+        folderIconView.contentTintColor = .secondaryLabelColor
+    }
+
+    override func layout() {
+        super.layout()
+        guard let header = currentHeader else { return }
+
+        let leftX = VirtualizedItemTableMetrics.horizontalMargin + VirtualizedItemTableMetrics.sectionHeaderExtraHorizontalPadding
+        let rightX = bounds.width - leftX
+        let topPad = header.isFirstSection
+            ? VirtualizedItemTableMetrics.sectionHeaderFirstTopPadding
+            : VirtualizedItemTableMetrics.sectionHeaderSubsequentTopPadding
+        let contentH = VirtualizedItemTableMetrics.sectionHeaderContentHeight
+        let midY = topPad + contentH / 2
+
+        var cursorX = leftX
+        folderIconView.frame = CGRect(x: cursorX, y: round(midY - 6), width: 12, height: 12)
+        cursorX += 12 + 7
+
+        let titleFit = titleLabel.fittingSize
+        let summaryFit = summaryLabel.fittingSize
+        let availableW = max(0, rightX - cursorX)
+        let summaryW = min(ceil(summaryFit.width), max(0, availableW / 2))
+        let titleW = min(ceil(titleFit.width), max(0, availableW - summaryW - 7))
+        titleLabel.frame = CGRect(x: cursorX, y: round(midY - titleFit.height / 2), width: titleW, height: ceil(titleFit.height))
+        summaryLabel.frame = CGRect(
+            x: cursorX + titleW + 7,
+            y: round(midY - summaryFit.height / 2),
+            width: summaryW,
+            height: ceil(summaryFit.height)
+        )
+    }
+}
+
 // MARK: - Single-Instance Full Session Title Popover Controller
 
 @MainActor
@@ -2306,6 +2395,8 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
                         && viewModel.isSectionAllBulkSelected(header.recommendation)
                     cell.setAllBulkSelected(isAllSelected)
                 }
+            case .projectHeader:
+                break
             }
         }
     }
@@ -2322,6 +2413,10 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
         }
         switch rows[row] {
         case let .sectionHeader(header):
+            return header.isFirstSection
+                ? VirtualizedItemTableMetrics.firstSectionHeaderHeight
+                : VirtualizedItemTableMetrics.subsequentSectionHeaderHeight
+        case let .projectHeader(header):
             return header.isFirstSection
                 ? VirtualizedItemTableMetrics.firstSectionHeaderHeight
                 : VirtualizedItemTableMetrics.subsequentSectionHeaderHeight
@@ -2375,6 +2470,20 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
                     self?.handleToggleSectionSelection(recommendation)
                 }
             )
+            return cell
+
+        case let .projectHeader(header):
+            let cell: ProjectHeaderTableCellView
+            if let reused = tableView.makeView(
+                withIdentifier: ProjectHeaderTableCellView.reuseIdentifier,
+                owner: nil
+            ) as? ProjectHeaderTableCellView {
+                cell = reused
+            } else {
+                cell = ProjectHeaderTableCellView()
+                cell.identifier = ProjectHeaderTableCellView.reuseIdentifier
+            }
+            cell.configure(header: header)
             return cell
 
         case let .item(itemRow):
@@ -2706,6 +2815,8 @@ final class VirtualizedItemTableCoordinator: NSObject, NSTableViewDataSource, NS
                 itemCell.refreshAppearance()
             } else if let headerCell = view as? SectionHeaderTableCellView {
                 headerCell.refreshAppearance()
+            } else if let projectCell = view as? ProjectHeaderTableCellView {
+                projectCell.refreshAppearance()
             }
         }
     }

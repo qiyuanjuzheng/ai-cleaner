@@ -171,6 +171,13 @@ struct SectionHeaderRow: Equatable, Sendable {
     let individualOnlyCount: Int
 }
 
+struct ProjectHeaderRow: Equatable, Sendable {
+    let project: SessionProjectID
+    let title: String
+    let summaryText: String
+    let isFirstSection: Bool
+}
+
 /// 扁平虚拟化列表中的单条文件行模型（纯值类型，预计算全部文案与提示以实现零滚动热路径拼接）
 struct ItemDisplayRow: Equatable, Sendable {
     let id: String
@@ -190,12 +197,15 @@ struct ItemDisplayRow: Equatable, Sendable {
 /// 单层扁平虚拟化列表行元素（供原生 NSTableView 以 O(1) 行高查表与对象池 Cell 复用渲染）
 enum FlatListRow: Identifiable, Equatable, Sendable {
     case sectionHeader(SectionHeaderRow)
+    case projectHeader(ProjectHeaderRow)
     case item(ItemDisplayRow)
 
     var id: String {
         switch self {
         case let .sectionHeader(header):
             return "header::\(header.recommendation.rawValue)"
+        case let .projectHeader(header):
+            return "project::\(header.project.workspacePath ?? "")"
         case let .item(row):
             return "item::\(row.id)"
         }
@@ -389,6 +399,12 @@ final class CleanerViewModel {
         didSet {
             guard !suppressCacheRebuild, oldValue != selectedCategory else { return }
             rebuildFilterCache(resetViewport: true)
+        }
+    }
+    var groupsSessionsByProject = false {
+        didSet {
+            guard groupsSessionsByProject != oldValue, selectedCategory == .sessions else { return }
+            rebuildDisplayedRows(resetViewport: true)
         }
     }
     var selectedRecommendation: CleanupRecommendation? = nil {
@@ -949,41 +965,82 @@ final class CleanerViewModel {
 
             guard !isCollapsed else { continue }
 
-            let count = section.items.count
-            for (index, item) in section.items.enumerated() {
-                let position: RowCardPosition
-                if count == 1 {
-                    position = .single
-                } else if index == 0 {
-                    position = .first
-                } else if index == count - 1 {
-                    position = .last
-                } else {
-                    position = .middle
-                }
+            appendItemRows(
+                section.items, to: &rows, safeMaxBytes: safeMaxBytes, showClientBadge: showClientBadge,
+                presentations: presentations, homeDirectory: homeDirectory
+            )
+        }
+        return rows
+    }
 
-                let presentation = presentations[item.id]
-                    ?? PreparedItemPresentation.make(for: item, homeDirectory: homeDirectory)
-
-                rows.append(
-                    .item(
-                        ItemDisplayRow(
-                            id: item.id,
-                            item: item,
-                            title: presentation.title,
-                            detailText: presentation.detailText,
-                            sizeText: presentation.sizeText,
-                            dateText: presentation.dateText,
-                            abbreviatedPath: presentation.abbreviatedPath,
-                            rowTooltip: presentation.rowTooltip,
-                            finderTooltip: presentation.finderTooltip,
-                            showClientBadge: showClientBadge,
-                            relativeSizeFraction: Double(item.sizeBytes) / safeMaxBytes,
-                            position: position
-                        )
-                    )
-                )
+    private nonisolated static func appendItemRows(
+        _ items: [CleanableItem],
+        to rows: inout [FlatListRow],
+        safeMaxBytes: Double,
+        showClientBadge: Bool,
+        presentations: [String: PreparedItemPresentation],
+        homeDirectory: URL
+    ) {
+        for (index, item) in items.enumerated() {
+            let position: RowCardPosition
+            if items.count == 1 {
+                position = .single
+            } else if index == 0 {
+                position = .first
+            } else if index == items.count - 1 {
+                position = .last
+            } else {
+                position = .middle
             }
+
+            let presentation = presentations[item.id] ?? PreparedItemPresentation.make(for: item, homeDirectory: homeDirectory)
+            rows.append(.item(ItemDisplayRow(
+                id: item.id,
+                item: item,
+                title: presentation.title,
+                detailText: presentation.detailText,
+                sizeText: presentation.sizeText,
+                dateText: presentation.dateText,
+                abbreviatedPath: presentation.abbreviatedPath,
+                rowTooltip: presentation.rowTooltip,
+                finderTooltip: presentation.finderTooltip,
+                showClientBadge: showClientBadge,
+                relativeSizeFraction: Double(item.sizeBytes) / safeMaxBytes,
+                position: position
+            )))
+        }
+    }
+
+    private func buildProjectRows(showClientBadge: Bool) -> [FlatListRow] {
+        var projectOrder: [SessionProjectID] = []
+        var groups: [SessionProjectID: [CleanableItem]] = [:]
+        for item in filteredItems {
+            let project = projectCatalog.projectID(for: item)
+            if project != .unidentified && groups[project] == nil {
+                projectOrder.append(project)
+            }
+            groups[project, default: []].append(item)
+        }
+        if groups[.unidentified] != nil {
+            projectOrder.append(.unidentified)
+        }
+
+        var rows: [FlatListRow] = []
+        rows.reserveCapacity(filteredItems.count + projectOrder.count)
+        for (index, project) in projectOrder.enumerated() {
+            guard let items = groups[project] else { continue }
+            let bytes = items.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            rows.append(.projectHeader(ProjectHeaderRow(
+                project: project,
+                title: project.name,
+                summaryText: "\(items.count) 项 · \(CleanerFormatting.formatBytes(bytes))",
+                isFirstSection: index == 0
+            )))
+            Self.appendItemRows(
+                items, to: &rows, safeMaxBytes: Double(max(1, maxDisplayedItemBytes)),
+                showClientBadge: showClientBadge, presentations: presentationByID,
+                homeDirectory: scanEngine.homeDirectory
+            )
         }
         return rows
     }
@@ -1310,15 +1367,19 @@ final class CleanerViewModel {
 
     private func rebuildDisplayedRows(resetViewport: Bool) {
         let showClientBadge = (activeListScopeSelection == .allClients)
-        displayedRows = Self.buildFlatRows(
-            from: displayedSections,
-            maxBytes: maxDisplayedItemBytes,
-            showClientBadge: showClientBadge,
-            selectedRecommendation: selectedRecommendation,
-            collapsedSections: collapsedSections,
-            presentations: presentationByID,
-            homeDirectory: scanEngine.homeDirectory
-        )
+        if selectedCategory == .sessions && groupsSessionsByProject {
+            displayedRows = buildProjectRows(showClientBadge: showClientBadge)
+        } else {
+            displayedRows = Self.buildFlatRows(
+                from: displayedSections,
+                maxBytes: maxDisplayedItemBytes,
+                showClientBadge: showClientBadge,
+                selectedRecommendation: selectedRecommendation,
+                collapsedSections: collapsedSections,
+                presentations: presentationByID,
+                homeDirectory: scanEngine.homeDirectory
+            )
+        }
         if resetViewport {
             listViewportID &+= 1
         }

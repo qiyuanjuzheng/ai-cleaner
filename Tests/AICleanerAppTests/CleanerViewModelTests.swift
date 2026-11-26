@@ -1452,6 +1452,55 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSessionsCanGroupByWorkspaceWithoutChangingFiltersOrProtection() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try write(#"{"type":"user","cwd":"/work/team-a/demo"}"#, at: ".codex/sessions/day/codex.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/team-a/demo"}"#,
+                  at: ".claude/projects/-work-demo/claude.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/team-b/demo"}"#, at: ".codex/sessions/day/other.jsonl", in: home)
+        try write(#"{"type":"user"}"#, at: ".codex/sessions/day/unknown.jsonl", in: home)
+        try write("cache", at: ".codex/generated_images/irrelevant/example.png", in: home)
+
+        let protectedProject = SessionProjectID.workspace("/work/team-a/demo")
+        let otherProject = SessionProjectID.workspace("/work/team-b/demo")
+        let model = makeViewModel(home: home)
+        model.report = ScanEngine(homeDirectory: home).scan()
+        model.setProjectProtection(true, for: protectedProject)
+        model.selectedCategory = .sessions
+        model.groupsSessionsByProject = true
+
+        var currentProject: SessionProjectID?
+        var filesByProject: [SessionProjectID: Set<String>] = [:]
+        var visibleLockedSessions: Set<String> = []
+        for row in model.displayedRows {
+            switch row {
+            case .projectHeader(let header):
+                currentProject = header.project
+            case .item(let row):
+                let project = try XCTUnwrap(currentProject)
+                filesByProject[project, default: []].insert(row.item.fileName)
+                if row.item.hardProtectionReason != nil { visibleLockedSessions.insert(row.item.fileName) }
+            case .sectionHeader:
+                XCTFail("Project grouping must join sessions across recommendations")
+            }
+        }
+        XCTAssertEqual(filesByProject, [protectedProject: ["codex.jsonl", "claude.jsonl"],
+                                        otherProject: ["other.jsonl"], .unidentified: ["unknown.jsonl"]])
+        XCTAssertEqual(visibleLockedSessions, ["codex.jsonl", "claude.jsonl"])
+        XCTAssertEqual(Set(model.filteredBulkSelectableItems.map(\.fileName)), ["other.jsonl", "unknown.jsonl"])
+
+        model.searchText = "other.jsonl"
+        XCTAssertEqual(model.displayedRows.compactMap { row -> SessionProjectID? in
+            if case .projectHeader(let header) = row { return header.project }
+            return nil
+        }, [otherProject])
+        model.groupsSessionsByProject = false
+        XCTAssertTrue(model.displayedRows.contains { if case .sectionHeader = $0 { return true }; return false })
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["other.jsonl"])
+    }
+
+    @MainActor
     func testClientProjectNavigationScopesListsAndCanShowSharedProjectSessions() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }

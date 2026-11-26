@@ -60,6 +60,17 @@ enum ItemControlBarMenuFactory {
             }
         }
 
+        if viewModel.selectedCategory == .sessions {
+            menu.addItem(.separator())
+            menu.addItem(.sectionHeader(title: "会话分组"))
+            menu.addAction("按清理建议", checked: !viewModel.groupsSessionsByProject) {
+                viewModel.groupsSessionsByProject = false
+            }
+            menu.addAction("按项目会话分组", checked: viewModel.groupsSessionsByProject) {
+                viewModel.groupsSessionsByProject = true
+            }
+        }
+
         menu.addItem(.separator())
         menu.addItem(.sectionHeader(title: "批量勾选"))
         let bulkCount = viewModel.filteredBulkSelectableItems.count

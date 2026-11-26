@@ -82,6 +82,10 @@ def expand_rule(entry, templates):
             }
         if "platforms" in entry:
             expanded["platforms"] = entry["platforms"]
+        if "verification" in entry and "verification" not in expanded:
+            expanded["verification"] = entry["verification"]
+        if "evidence" in entry and "evidence" not in expanded:
+            expanded["evidence"] = entry["evidence"]
         yield expanded
 
 
@@ -109,11 +113,19 @@ def compile_rule(rule, platform):
         paths = path if isinstance(path, list) else [path]
 
     compiled = {key: value for key, value in rule.items()
-                if key not in {"path", "paths", "platforms", "protected"}}
+                if key not in {"path", "paths", "platforms", "protected", "verification", "evidence"}}
     if rule.get("protected"):
         compiled.update(category="protectedData", mode="directory", recommendation="notRecommended")
     if compiled["category"] == "protectedData" and compiled.get("recommendation", "notRecommended") != "notRecommended":
         raise ValueError("protected data must use the notRecommended recommendation")
+    if platform in {"windows", "linux"} and compiled["category"] != "protectedData":
+        verification = rule.get("verification")
+        if verification not in {"ci", "source", "docs", "community"}:
+            raise ValueError(f"{platform} cleanable rule must declare verification (ci/source/docs/community)")
+        if verification in {"docs", "community"}:
+            if compiled.get("recommendation") == "recommended":
+                raise ValueError(f"{verification}-verified rule cannot use recommended")
+            compiled["recommendation"] = "reviewSuggested"
     if len(set(paths)) != len(paths):
         raise ValueError("duplicate paths after template expansion")
     return [
@@ -124,17 +136,20 @@ def compile_rule(rule, platform):
 
 def build_catalog(packs):
     catalogs = {platform: [] for platform in ROOTS}
-    profile_ids = set()
+    profiles_by_id = {}
     rule_owners = {}
     seen_rules = {platform: set() for platform in ROOTS}
 
     for pack in packs:
+        pack_profile_ids = set()
         for profile in pack["profiles"]:
             profile_id = profile["id"]
-            if profile_id in profile_ids:
-                raise ValueError(f"duplicate profile ID {profile_id!r}")
-            profile_ids.add(profile_id)
+            if profile_id in pack_profile_ids:
+                raise ValueError(f"duplicate profile ID {profile_id!r} in the same pack")
+            pack_profile_ids.add(profile_id)
             profile_fields = {key: value for key, value in profile.items() if key not in {"rules", "platforms"}}
+            if profiles_by_id.setdefault(profile_id, profile_fields) != profile_fields:
+                raise ValueError(f"profile {profile_id!r} has conflicting metadata across packs")
             rules_by_platform = {platform: [] for platform in ROOTS}
 
             for entry in profile["rules"]:
@@ -156,6 +171,8 @@ def build_catalog(packs):
 
             for platform, rules in rules_by_platform.items():
                 if rules:
+                    if any(existing["id"] == profile_id for existing in catalogs[platform]):
+                        raise ValueError(f"duplicate profile {profile_id!r} in {platform} rules")
                     catalogs[platform].append(dict(profile_fields, rules=rules))
     return catalogs
 

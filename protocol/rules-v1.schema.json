@@ -71,6 +71,9 @@
         }
       }
     },
+    "verification": {
+      "enum": ["ci", "source", "docs", "community"]
+    },
     "templateUse": {
       "type": "object",
       "required": ["use", "with"],
@@ -81,7 +84,9 @@
           "type": "object",
           "additionalProperties": { "type": ["string", "boolean"] }
         },
-        "platforms": { "$ref": "#/$defs/platforms" }
+        "platforms": { "$ref": "#/$defs/platforms" },
+        "verification": { "$ref": "#/$defs/verification" },
+        "evidence": { "$ref": "#/$defs/text" }
       }
     },
     "scanRule": {
@@ -132,7 +137,9 @@
         "mode": { "enum": ["directory", "children", "projectSessions", "recursiveFiles"] },
         "recommendation": { "enum": ["recommended", "reviewSuggested", "notRecommended"] },
         "allowedFileSuffixes": { "type": "array", "items": { "$ref": "#/$defs/text" } },
-        "isSessionArchive": { "type": "boolean" }
+        "isSessionArchive": { "type": "boolean" },
+        "verification": { "$ref": "#/$defs/verification" },
+        "evidence": { "$ref": "#/$defs/text" }
       }
     }
   }

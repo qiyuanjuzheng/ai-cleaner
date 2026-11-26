@@ -29,14 +29,14 @@ final class ControlBarIconMenuTests: XCTestCase {
 
         // 验证「时间范围」全部项存在，且默认仅 `.all` 打勾
         for filter in ItemAgeFilter.allCases {
-            let item = try XCTUnwrap(menuItem(titled: filter.rawValue, in: initialMenu))
+            let item = try XCTUnwrap(menuItem(titled: filter.menuTitle, in: initialMenu))
             XCTAssertTrue(item.isEnabled)
             XCTAssertEqual(item.state, filter == .all ? .on : .off)
         }
 
         // 验证「排序方式」全部项存在，且默认仅 `.sizeDescending` 打勾
         for order in ItemSortOrder.allCases {
-            let item = try XCTUnwrap(menuItem(titled: order.rawValue, in: initialMenu))
+            let item = try XCTUnwrap(menuItem(titled: order.menuTitle, in: initialMenu))
             XCTAssertTrue(item.isEnabled)
             XCTAssertEqual(item.state, order == .sizeDescending ? .on : .off)
         }
@@ -44,13 +44,13 @@ final class ControlBarIconMenuTests: XCTestCase {
         // 触发每个时间范围筛选并验证回调与打勾同步
         for filter in ItemAgeFilter.allCases {
             let menu = ItemControlBarMenuFactory.makeMenu(for: model)
-            let index = try XCTUnwrap(menuItemIndex(titled: filter.rawValue, in: menu))
+            let index = try XCTUnwrap(menuItemIndex(titled: filter.menuTitle, in: menu))
             menu.performActionForItem(at: index)
             XCTAssertEqual(model.selectedAgeFilter, filter)
 
             let refreshed = ItemControlBarMenuFactory.makeMenu(for: model)
             for candidate in ItemAgeFilter.allCases {
-                let candidateItem = try XCTUnwrap(menuItem(titled: candidate.rawValue, in: refreshed))
+                let candidateItem = try XCTUnwrap(menuItem(titled: candidate.menuTitle, in: refreshed))
                 XCTAssertEqual(candidateItem.state, candidate == filter ? .on : .off)
             }
         }
@@ -60,13 +60,13 @@ final class ControlBarIconMenuTests: XCTestCase {
         // 触发每个排序方式并验证回调与打勾同步
         for order in ItemSortOrder.allCases {
             let menu = ItemControlBarMenuFactory.makeMenu(for: model)
-            let index = try XCTUnwrap(menuItemIndex(titled: order.rawValue, in: menu))
+            let index = try XCTUnwrap(menuItemIndex(titled: order.menuTitle, in: menu))
             menu.performActionForItem(at: index)
             XCTAssertEqual(model.sortOrder, order)
 
             let refreshed = ItemControlBarMenuFactory.makeMenu(for: model)
             for candidate in ItemSortOrder.allCases {
-                let candidateItem = try XCTUnwrap(menuItem(titled: candidate.rawValue, in: refreshed))
+                let candidateItem = try XCTUnwrap(menuItem(titled: candidate.menuTitle, in: refreshed))
                 XCTAssertEqual(candidateItem.state, candidate == order ? .on : .off)
             }
         }
@@ -316,7 +316,7 @@ final class ControlBarIconMenuTests: XCTestCase {
             var invokedCount = 0
             control.popupMenu = { menu, _, _ in
                 invokedCount += 1
-                if let idx = menu.items.firstIndex(where: { $0.title == ItemAgeFilter.olderThan7Days.rawValue }) {
+                if let idx = menu.items.firstIndex(where: { $0.title == ItemAgeFilter.olderThan7Days.menuTitle }) {
                     menu.performActionForItem(at: idx)
                 }
             }

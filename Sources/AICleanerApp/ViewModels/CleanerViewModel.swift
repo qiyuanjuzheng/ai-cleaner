@@ -37,37 +37,30 @@ enum SidebarSelection: Hashable, Sendable {
     }
 }
 
-enum ItemAgeFilter: String, CaseIterable, Identifiable, Sendable {
-    case all = "全部时间"
-    case olderThan7Days = "7 天前"
-    case olderThan30Days = "30 天前"
-    case olderThan90Days = "90 天前"
+typealias ItemAgeFilter = ScanItemAge
+typealias ItemSortOrder = ScanItemSort
 
-    var id: String { rawValue }
-
-    func cutoffDate(relativeTo now: Date = Date()) -> Date? {
-        let calendar = Calendar.current
+extension ScanItemAge {
+    var menuTitle: String {
         switch self {
-        case .all:
-            return nil
-        case .olderThan7Days:
-            return calendar.date(byAdding: .day, value: -7, to: now)
-        case .olderThan30Days:
-            return calendar.date(byAdding: .day, value: -30, to: now)
-        case .olderThan90Days:
-            return calendar.date(byAdding: .day, value: -90, to: now)
+        case .all: return "全部时间"
+        case .olderThan7Days: return "7 天前"
+        case .olderThan30Days: return "30 天前"
+        case .olderThan90Days: return "90 天前"
         }
     }
 }
 
-enum ItemSortOrder: String, CaseIterable, Identifiable, Sendable {
-    case sizeDescending = "按体积从大到小"
-    case sizeAscending = "按体积从小到大"
-    case modifiedDescending = "按修改时间最新"
-    case modifiedAscending = "按修改时间最早"
-    case nameAscending = "按名称排序"
-
-    var id: String { rawValue }
+extension ScanItemSort {
+    var menuTitle: String {
+        switch self {
+        case .sizeDescending: return "按体积从大到小"
+        case .sizeAscending: return "按体积从小到大"
+        case .modifiedDescending: return "按修改时间最新"
+        case .modifiedAscending: return "按修改时间最早"
+        case .nameAscending: return "按名称排序"
+        }
+    }
 }
 
 /// 单条扫描结果的预格式化展示数据（在后台线程一次性生成，杜绝列表渲染期加锁格式化或拼接字符串）
@@ -96,23 +89,7 @@ struct PreparedItemPresentation: Sendable {
         }
         let rowTooltip = "\(item.safetyNote)\n路径：\(abbreviatedPath)"
         let finderTooltip = "在 Finder 中显示：\(abbreviatedPath)"
-        let searchable = [
-            title,
-            item.sessionTitle,
-            item.sessionProjectName,
-            item.displayName,
-            item.fileName,
-            item.url.path,
-            item.clientName,
-            item.category.displayName,
-            item.recommendation.displayName,
-            item.safetyNote,
-            item.sourceBadge,
-            item.isRecentlyModified ? "近期修改" : nil
-        ]
-        .compactMap { $0 }
-        .joined(separator: "\u{1F}")
-        .lowercased()
+        let searchable = ScanItemFilter.searchableText(for: item)
 
         return PreparedItemPresentation(
             title: title,
@@ -238,20 +215,8 @@ final class CleanerViewModel {
 
     // MARK: - Nested Display & Cache Types
 
-    struct RecommendationSection: Identifiable, Sendable {
-        let recommendation: CleanupRecommendation
-        let items: [CleanableItem]
-        let totalBytes: Int64
-
-        var id: CleanupRecommendation { recommendation }
-    }
-
-    struct SelectedClientGroup: Identifiable {
-        let id: String
-        let clientName: String
-        let items: [CleanableItem]
-        let totalBytes: Int64
-    }
+    typealias RecommendationSection = ScanItemBuckets.Section
+    typealias SelectedClientGroup = CleanupSelectionSummary.ClientGroup
 
     private struct CachedScopeData: Sendable {
         let activeSummary: ClientScanSummary?
@@ -789,8 +754,11 @@ final class CleanerViewModel {
             proBytes += item.sizeBytes
         }
 
-        let sorted = sortItems(combined, by: .sizeDescending)
-        let (defaultBulkSelectable, defaultSections, defaultMaxBytes) = bucketItems(sorted)
+        let sorted = ScanItemSort.sizeDescending.sorting(combined)
+        let buckets = ScanItemBuckets(items: sorted)
+        let defaultBulkSelectable = buckets.bulkSelectable
+        let defaultSections = buckets.sections
+        let defaultMaxBytes = buckets.maximumBytes
         let showClientBadge = (selection == .allClients)
         let defaultFlatRows = buildFlatRows(
             from: defaultSections,
@@ -846,74 +814,6 @@ final class CleanerViewModel {
             defaultMaxBytes: defaultMaxBytes,
             defaultFlatRows: defaultFlatRows
         )
-    }
-
-    private nonisolated static func sortItems(_ items: [CleanableItem], by order: ItemSortOrder) -> [CleanableItem] {
-        items.sorted { lhs, rhs in
-            switch order {
-            case .sizeDescending:
-                if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes > rhs.sizeBytes }
-                return lhs.modifiedAt > rhs.modifiedAt
-            case .sizeAscending:
-                if lhs.sizeBytes != rhs.sizeBytes { return lhs.sizeBytes < rhs.sizeBytes }
-                return lhs.modifiedAt < rhs.modifiedAt
-            case .modifiedDescending:
-                if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt > rhs.modifiedAt }
-                return lhs.sizeBytes > rhs.sizeBytes
-            case .modifiedAscending:
-                if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt < rhs.modifiedAt }
-                return lhs.sizeBytes > rhs.sizeBytes
-            case .nameAscending:
-                return lhs.preferredDisplayTitle.localizedCaseInsensitiveCompare(rhs.preferredDisplayTitle) == .orderedAscending
-            }
-        }
-    }
-
-    private nonisolated static func bucketItems(
-        _ sorted: [CleanableItem]
-    ) -> (bulkSelectable: [CleanableItem], sections: [RecommendationSection], maxBytes: Int64) {
-        var bulkSelectable: [CleanableItem] = []
-        bulkSelectable.reserveCapacity(sorted.count)
-        var maxBytes: Int64 = 0
-        var recBucket: [CleanableItem] = []
-        var revBucket: [CleanableItem] = []
-        var proBucket: [CleanableItem] = []
-        var recTotal: Int64 = 0
-        var revTotal: Int64 = 0
-        var proTotal: Int64 = 0
-
-        for item in sorted {
-            if item.sizeBytes > maxBytes {
-                maxBytes = item.sizeBytes
-            }
-            if item.isBulkSelectable {
-                bulkSelectable.append(item)
-            }
-            switch item.recommendation {
-            case .recommended:
-                recBucket.append(item)
-                recTotal += item.sizeBytes
-            case .reviewSuggested:
-                revBucket.append(item)
-                revTotal += item.sizeBytes
-            case .notRecommended:
-                proBucket.append(item)
-                proTotal += item.sizeBytes
-            }
-        }
-
-        var sections: [RecommendationSection] = []
-        sections.reserveCapacity(3)
-        if !recBucket.isEmpty {
-            sections.append(RecommendationSection(recommendation: .recommended, items: recBucket, totalBytes: recTotal))
-        }
-        if !revBucket.isEmpty {
-            sections.append(RecommendationSection(recommendation: .reviewSuggested, items: revBucket, totalBytes: revTotal))
-        }
-        if !proBucket.isEmpty {
-            sections.append(RecommendationSection(recommendation: .notRecommended, items: proBucket, totalBytes: proTotal))
-        }
-        return (bulkSelectable, sections, maxBytes)
     }
 
     private nonisolated static func buildFlatRows(
@@ -1335,59 +1235,22 @@ final class CleanerViewModel {
             return
         }
 
-        let lowerQuery = searchText
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let ageCutoff = selectedAgeFilter.cutoffDate()
-
-        // 当排序为默认「体积降序」时，直接遍历已排好序的 `defaultSortedItems`，过滤即有序，彻底跳过 O(N log N) 排序
-        let sourceItems = (sortOrder == .sizeDescending)
-            ? (currentScope?.defaultSortedItems ?? scopedItems)
-            : scopedItems
-
-        let filtered: [CleanableItem]
-        if lowerQuery.isEmpty && selectedRecommendation == nil && selectedCategory == nil && ageCutoff == nil {
-            filtered = sourceItems
-        } else {
-            filtered = sourceItems.filter { item in
-                if let selectedRecommendation, item.recommendation != selectedRecommendation {
-                    return false
-                }
-                if let selectedCategory, item.category != selectedCategory {
-                    return false
-                }
-                if let ageCutoff {
-                    if !item.isCleanable || item.modifiedAt >= ageCutoff {
-                        return false
-                    }
-                }
-                if lowerQuery.isEmpty {
-                    return true
-                }
-                if let presentation = presentationByID[item.id] {
-                    return presentation.searchableLowercased.contains(lowerQuery)
-                }
-                return item.preferredDisplayTitle.localizedCaseInsensitiveContains(lowerQuery)
-                    || item.sessionTitle?.localizedCaseInsensitiveContains(lowerQuery) == true
-                    || item.sessionProjectName?.localizedCaseInsensitiveContains(lowerQuery) == true
-                    || item.displayName.localizedCaseInsensitiveContains(lowerQuery)
-                    || item.fileName.localizedCaseInsensitiveContains(lowerQuery)
-                    || item.url.path.localizedCaseInsensitiveContains(lowerQuery)
-            }
+        let filter = ScanItemFilter(
+            search: searchText,
+            category: selectedCategory,
+            recommendation: selectedRecommendation,
+            age: selectedAgeFilter
+        )
+        let preSorted = sortOrder == .sizeDescending ? currentScope?.defaultSortedItems : nil
+        let filtered = filter.applying(to: preSorted ?? scopedItems) { id in
+            presentationByID[id]?.searchableLowercased
         }
-
-        let sorted: [CleanableItem]
-        if sortOrder == .sizeDescending && currentScope != nil {
-            sorted = filtered
-        } else {
-            sorted = Self.sortItems(filtered, by: sortOrder)
-        }
-
-        let (bulkSelectable, sections, maxBytes) = Self.bucketItems(sorted)
+        let sorted = preSorted == nil ? sortOrder.sorting(filtered) : filtered
+        let buckets = ScanItemBuckets(items: sorted)
         filteredItems = sorted
-        filteredBulkSelectableItems = bulkSelectable
-        displayedSections = sections
-        maxDisplayedItemBytes = maxBytes
+        filteredBulkSelectableItems = buckets.bulkSelectable
+        displayedSections = buckets.sections
+        maxDisplayedItemBytes = buckets.maximumBytes
         rebuildSectionSelectionCache()
 
         rebuildDisplayedRows(resetViewport: resetViewport)
@@ -1416,101 +1279,17 @@ final class CleanerViewModel {
 
     private func rebuildSelectionCache() {
         selectionRevision &+= 1
-        let activeIDs = activeSelectedItemIDs
-        guard !activeIDs.isEmpty else {
-            selectedItems = []
-            selectedTotalBytes = 0
-            selectedNotRecommendedItems = []
-            selectedNotRecommendedTotalBytes = 0
-            groupedSelectedItems = []
-            rebuildSectionSelectionCache()
-            return
-        }
-
-        let resolved = activeIDs.compactMap { allDisplayedItemsByID[$0] }
-            .filter { $0.hardProtectionReason == nil }
-            .sorted { lhs, rhs in
-                if lhs.recommendation == .notRecommended && rhs.recommendation != .notRecommended {
-                    return true
-                }
-                if lhs.recommendation != .notRecommended && rhs.recommendation == .notRecommended {
-                    return false
-                }
-                if lhs.clientName != rhs.clientName {
-                    return lhs.clientName.localizedCaseInsensitiveCompare(rhs.clientName) == .orderedAscending
-                }
-                return lhs.sizeBytes > rhs.sizeBytes
-            }
-
-        var totalBytes: Int64 = 0
-        var riskItems: [CleanableItem] = []
-        var riskBytes: Int64 = 0
-        var byClient: [String: (name: String, items: [CleanableItem], bytes: Int64)] = [:]
-
-        for item in resolved {
-            totalBytes += item.sizeBytes
-            if item.recommendation == .notRecommended {
-                riskItems.append(item)
-                riskBytes += item.sizeBytes
-            }
-            var entry = byClient[item.clientID] ?? (item.clientName, [], 0)
-            entry.items.append(item)
-            entry.bytes += item.sizeBytes
-            byClient[item.clientID] = entry
-        }
-
-        selectedItems = resolved
-        selectedTotalBytes = totalBytes
-        selectedNotRecommendedItems = riskItems
-        selectedNotRecommendedTotalBytes = riskBytes
-        groupedSelectedItems = byClient.map { clientID, val in
-            SelectedClientGroup(id: clientID, clientName: val.name, items: val.items, totalBytes: val.bytes)
-        }
-        .sorted { $0.totalBytes > $1.totalBytes }
+        let summary = CleanupSelectionSummary(selectedIDs: activeSelectedItemIDs, itemsByID: allDisplayedItemsByID)
+        selectedItems = summary.items
+        selectedTotalBytes = summary.totalBytes
+        selectedNotRecommendedItems = summary.riskItems
+        selectedNotRecommendedTotalBytes = summary.riskBytes
+        groupedSelectedItems = summary.clientGroups
         rebuildSectionSelectionCache()
     }
 
     private func rebuildSectionSelectionCache() {
-        guard !selectedItemIDs.isEmpty, !filteredBulkSelectableItems.isEmpty else {
-            if !fullySelectedBulkSections.isEmpty {
-                fullySelectedBulkSections = []
-                selectionRevision &+= 1
-            }
-            return
-        }
-
-        var hasRecommended = false
-        var allRecommendedSelected = true
-        var hasReview = false
-        var allReviewSelected = true
-
-        for item in filteredBulkSelectableItems {
-            switch item.recommendation {
-            case .recommended:
-                hasRecommended = true
-                if allRecommendedSelected && !selectedItemIDs.contains(item.id) {
-                    allRecommendedSelected = false
-                }
-            case .reviewSuggested:
-                hasReview = true
-                if allReviewSelected && !selectedItemIDs.contains(item.id) {
-                    allReviewSelected = false
-                }
-            case .notRecommended:
-                break
-            }
-            if hasRecommended && !allRecommendedSelected && hasReview && !allReviewSelected {
-                break
-            }
-        }
-
-        var next: Set<CleanupRecommendation> = []
-        if hasRecommended && allRecommendedSelected {
-            next.insert(.recommended)
-        }
-        if hasReview && allReviewSelected {
-            next.insert(.reviewSuggested)
-        }
+        let next = ScanItemSelection.fullySelectedSections(in: filteredBulkSelectableItems, selectedIDs: selectedItemIDs)
         if fullySelectedBulkSections != next {
             fullySelectedBulkSections = next
             selectionRevision &+= 1
@@ -1706,13 +1485,12 @@ final class CleanerViewModel {
 
     func toggleSelection(for item: CleanableItem) {
         guard let current = allDisplayedItemsByID[item.id],
-              current.hardProtectionReason == nil,
               !sidebarSelection.isProjectScope || projectVisibleItemIDs.contains(item.id) else { return }
-        let selected = isSelected(item)
-        if selected || current.isCleanable {
-            updateSelection(for: current.id, selected: !selected)
-        } else {
-            pendingRiskItemToSelect = current
+        switch ScanItemSelection.toggle(current, isSelected: isSelected(item)) {
+        case .blocked: return
+        case .select: updateSelection(for: current.id, selected: true)
+        case .deselect: updateSelection(for: current.id, selected: false)
+        case .confirmRisk: pendingRiskItemToSelect = current
         }
     }
 
@@ -1720,7 +1498,7 @@ final class CleanerViewModel {
         defer { pendingRiskItemToSelect = nil }
         guard pendingRiskItemToSelect?.id == item.id,
               let current = allDisplayedItemsByID[item.id],
-              current.hardProtectionReason == nil, !current.isCleanable,
+              ScanItemSelection.toggle(current, isSelected: false) == .confirmRisk,
               !sidebarSelection.isProjectScope || projectVisibleItemIDs.contains(item.id) else { return }
         updateSelection(for: item.id, selected: true)
     }
@@ -1749,11 +1527,7 @@ final class CleanerViewModel {
     /// 一键勾选当前视图下的全部「建议清理」项
     func selectRecommendedInScope() {
         guard sidebarSelection.isListScope else { return }
-        var next = selectedItemIDs
-        for item in scopedRecommendedItems where item.isBulkSelectable {
-            next.insert(item.id)
-        }
-        selectedItemIDs = next
+        selectedItemIDs = ScanItemSelection.selecting(scopedRecommendedItems, from: selectedItemIDs)
     }
 
     /// 判断指定分组当前筛选可见的可批量勾选项是否已全部选中
@@ -1763,21 +1537,17 @@ final class CleanerViewModel {
 
     func selectSection(_ recommendation: CleanupRecommendation) {
         guard recommendation.isCleanable else { return }
-        var next = selectedItemIDs
-        for item in filteredBulkSelectableItems where item.recommendation == recommendation {
-            next.insert(item.id)
-        }
-        selectedItemIDs = next
+        selectedItemIDs = ScanItemSelection.selecting(
+            filteredBulkSelectableItems, from: selectedItemIDs, recommendation: recommendation
+        )
     }
 
     /// 取消勾选指定分组当前筛选可见的全部条目
     func deselectSection(_ recommendation: CleanupRecommendation) {
         guard recommendation.isCleanable else { return }
-        var next = selectedItemIDs
-        for item in filteredItems where item.recommendation == recommendation {
-            next.remove(item.id)
-        }
-        selectedItemIDs = next
+        selectedItemIDs = ScanItemSelection.deselecting(
+            filteredItems, from: selectedItemIDs, recommendation: recommendation
+        )
     }
 
     /// 一键切换指定分组的勾选状态：未全选时全选本组可批量项，已全选时取消本组当前可见条目
@@ -1812,36 +1582,20 @@ final class CleanerViewModel {
 
     func selectAllVisible() {
         if sidebarSelection.isProjectScope {
-            projectSelectedItemIDs.formUnion(projectBulkSelectableSessions.map(\.id))
+            projectSelectedItemIDs = ScanItemSelection.selecting(projectBulkSelectableSessions, from: projectSelectedItemIDs)
             rebuildSelectionCache()
             return
         }
-        var next = selectedItemIDs
-        for item in filteredBulkSelectableItems {
-            next.insert(item.id)
-        }
-        selectedItemIDs = next
+        selectedItemIDs = ScanItemSelection.selecting(filteredBulkSelectableItems, from: selectedItemIDs)
     }
 
     func invertVisibleSelection() {
         guard sidebarSelection.isListScope else { return }
-        var next = selectedItemIDs
-        for item in filteredBulkSelectableItems {
-            if next.contains(item.id) {
-                next.remove(item.id)
-            } else {
-                next.insert(item.id)
-            }
-        }
-        selectedItemIDs = next
+        selectedItemIDs = ScanItemSelection.inverting(filteredBulkSelectableItems, from: selectedItemIDs)
     }
 
     func clearVisibleSelection() {
-        var next = selectedItemIDs
-        for item in filteredItems {
-            next.remove(item.id)
-        }
-        selectedItemIDs = next
+        selectedItemIDs = ScanItemSelection.deselecting(filteredItems, from: selectedItemIDs)
     }
 
     func clearAllSelection() {

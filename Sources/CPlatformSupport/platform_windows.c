@@ -660,6 +660,30 @@ bool aicl_list_directory(const char *utf8_path, aicl_dir_entry_cb cb, void *ctx)
     return complete;
 }
 
+void *aicl_data_directory_lock(const char *utf8_path) {
+    wchar_t *path = utf8_to_wide_path(utf8_path, true, false);
+    if (!path) return NULL;
+    HANDLE handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    free(path);
+    if (handle == INVALID_HANDLE_VALUE) return NULL;
+
+    FILE_ATTRIBUTE_TAG_INFO attributes;
+    OVERLAPPED region = {0};
+    if (GetFileType(handle) != FILE_TYPE_DISK
+        || !GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attributes, sizeof(attributes))
+        || (attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0
+        || !LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &region)) {
+        CloseHandle(handle);
+        return NULL;
+    }
+    return handle;
+}
+
+void aicl_data_directory_unlock(void *handle) {
+    if (handle) CloseHandle((HANDLE)handle);
+}
+
 int32_t aicl_volume_case_sensitive(const char *utf8_path) {
     (void)utf8_path;
     return 0;

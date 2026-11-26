@@ -2,7 +2,8 @@
 import PackageDescription
 
 var products: [Product] = [
-    .library(name: "AICleanerCore", targets: ["AICleanerCore"])
+    .library(name: "AICleanerCore", targets: ["AICleanerCore"]),
+    .executable(name: "aicleaner-core", targets: ["AICleanerSidecar"])
 ]
 var dependencies: [Package.Dependency] = [
     .package(url: "https://github.com/apple/swift-log.git", exact: "1.6.4")
@@ -22,7 +23,9 @@ var targets: [Target] = [
         name: "AICleanerCore",
         dependencies: ["CPlatformSupport", "CSQLite", .product(name: "Logging", package: "swift-log")]
     ),
-    .testTarget(name: "AICleanerCoreTests", dependencies: ["AICleanerCore", "CPlatformSupport", "CSQLite"])
+    .testTarget(name: "AICleanerCoreTests", dependencies: ["AICleanerCore", "CPlatformSupport", "CSQLite"]),
+    .executableTarget(name: "AICleanerSidecar", dependencies: ["AICleanerCore", "CPlatformSupport"]),
+    .testTarget(name: "AICleanerSidecarTests", dependencies: ["AICleanerSidecar", "AICleanerCore"])
 ]
 
 #if os(macOS)

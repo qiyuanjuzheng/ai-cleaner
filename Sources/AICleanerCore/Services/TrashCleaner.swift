@@ -60,7 +60,8 @@ public struct TrashCleaner: Sendable {
         allowNotRecommendedOverride: Bool = false,
         projectCatalog: ProjectSessionCatalog? = nil,
         projectProtectionStore: ProjectProtectionStore? = nil,
-        verifyProjectSelection: Bool = false
+        verifyProjectSelection: Bool = false,
+        scannedSnapshots: [String: FileCleanupSnapshot]? = nil
     ) -> CleanupResult {
         let platform = safetyGuard.platform
         let fileManager = FileManager.default
@@ -150,8 +151,9 @@ public struct TrashCleaner: Sendable {
                 continue
             }
 
-            if verifyProjectSelection {
-                guard let snapshot = item.cleanupSnapshot, snapshot.modifiedAt != nil else {
+            if verifyProjectSelection || scannedSnapshots != nil {
+                let snapshot = scannedSnapshots?[item.id] ?? item.cleanupSnapshot
+                guard let snapshot, snapshot.modifiedAt != nil else {
                     failed.append(CleanupFailure(item: item, reason: "扫描时无法验证条目的文件身份或修改时间，请重新扫描"))
                     continue
                 }

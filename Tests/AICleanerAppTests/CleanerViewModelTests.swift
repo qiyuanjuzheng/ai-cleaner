@@ -1452,10 +1452,256 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSessionsCanGroupByWorkspaceWithoutChangingFiltersOrProtection() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try write(#"{"type":"user","cwd":"/work/team-a/demo"}"#, at: ".codex/sessions/day/codex.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/team-a/demo"}"#,
+                  at: ".claude/projects/-work-demo/claude.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/team-b/demo"}"#, at: ".codex/sessions/day/other.jsonl", in: home)
+        try write(#"{"type":"user"}"#, at: ".codex/sessions/day/unknown.jsonl", in: home)
+        try write("cache", at: ".codex/generated_images/irrelevant/example.png", in: home)
+
+        let protectedProject = SessionProjectID.workspace("/work/team-a/demo")
+        let otherProject = SessionProjectID.workspace("/work/team-b/demo")
+        let model = makeViewModel(home: home)
+        model.report = ScanEngine(homeDirectory: home).scan()
+        model.setProjectProtection(true, for: protectedProject)
+        model.selectedCategory = .sessions
+        model.groupsSessionsByProject = true
+
+        var currentProject: SessionProjectID?
+        var filesByProject: [SessionProjectID: Set<String>] = [:]
+        var visibleLockedSessions: Set<String> = []
+        for row in model.displayedRows {
+            switch row {
+            case .projectHeader(let header):
+                currentProject = header.project
+            case .item(let row):
+                let project = try XCTUnwrap(currentProject)
+                filesByProject[project, default: []].insert(row.item.fileName)
+                if row.item.hardProtectionReason != nil { visibleLockedSessions.insert(row.item.fileName) }
+            case .sectionHeader:
+                XCTFail("Project grouping must join sessions across recommendations")
+            }
+        }
+        XCTAssertEqual(filesByProject, [protectedProject: ["codex.jsonl", "claude.jsonl"],
+                                        otherProject: ["other.jsonl"], .unidentified: ["unknown.jsonl"]])
+        XCTAssertEqual(visibleLockedSessions, ["codex.jsonl", "claude.jsonl"])
+        XCTAssertEqual(Set(model.filteredBulkSelectableItems.map(\.fileName)), ["other.jsonl", "unknown.jsonl"])
+
+        model.searchText = "other.jsonl"
+        XCTAssertEqual(model.displayedRows.compactMap { row -> SessionProjectID? in
+            if case .projectHeader(let header) = row { return header.project }
+            return nil
+        }, [otherProject])
+        model.groupsSessionsByProject = false
+        XCTAssertTrue(model.displayedRows.contains { if case .sectionHeader = $0 { return true }; return false })
+        XCTAssertEqual(model.filteredItems.map(\.fileName), ["other.jsonl"])
+    }
+
+    @MainActor
+    func testClientProjectNavigationScopesListsAndCanShowSharedProjectSessions() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let shared: SessionProjectID = .workspace("/work/shared")
+        try write(#"{"type":"user","cwd":"/work/shared"}"#, at: ".codex/sessions/day/codex-shared.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/shared"}"#,
+                  at: ".claude/projects/-work-shared/claude-shared.jsonl", in: home)
+        try write(#"{"type":"user","cwd":"/work/claude-only"}"#,
+                  at: ".claude/projects/-work-claude-only/claude-only.jsonl", in: home)
+
+        let model = makeViewModel(home: home)
+        model.report = ScanEngine(homeDirectory: home).scan()
+        model.selectBuiltInClient("codex")
+        XCTAssertEqual(model.sidebarSelection, .client("codex"))
+        XCTAssertEqual(model.scopedItems.map(\.clientID), ["codex"])
+        model.sidebarSelection = .clientProjects("codex")
+        XCTAssertEqual(model.projectGroups.map(\.id), [shared])
+        XCTAssertEqual(model.projectGroups.first?.sessions.count, 1)
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["codex-shared.jsonl"])
+        XCTAssertTrue(model.canShowAllProjectClients)
+
+        let outsideClient = try XCTUnwrap(model.report?.allItems.first { $0.fileName == "claude-shared.jsonl" })
+        model.toggleSelection(for: outsideClient)
+        model.selectAllVisible()
+        XCTAssertEqual(model.selectedItems.map(\.fileName), ["codex-shared.jsonl"])
+        model.setShowsAllProjectClients(true)
+        model.selectAllVisible()
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), ["codex-shared.jsonl", "claude-shared.jsonl"])
+        model.setShowsAllProjectClients(false)
+        XCTAssertEqual(model.selectedItems.map(\.fileName), ["codex-shared.jsonl"])
+
+        model.selectBuiltInClient("codex")
+        XCTAssertEqual(model.sidebarSelection, .client("codex"))
+        XCTAssertTrue(model.selectedItems.isEmpty)
+
+        model.sidebarSelection = .clientProjects("codex")
+        model.selectBuiltInClient("claude-code")
+        XCTAssertEqual(model.sidebarSelection, .client("claude-code"))
+        model.sidebarSelection = .clientProjects("claude-code")
+        XCTAssertEqual(Set(model.projectGroups.map(\.id)), [shared, .workspace("/work/claude-only")])
+        model.selectedProjectID = shared
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["claude-shared.jsonl"])
+        XCTAssertTrue(model.selectedItems.isEmpty)
+
+        model.setProjectProtection(true, for: shared)
+        model.setShowsAllProjectClients(true)
+        XCTAssertEqual(model.visibleProjectSessions.count, 2)
+        XCTAssertTrue(model.visibleProjectSessions.allSatisfy { $0.hardProtectionReason != nil })
+
+        model.selectBuiltInClient("claude-code")
+        XCTAssertEqual(model.sidebarSelection, .client("claude-code"))
+        XCTAssertEqual(Set(model.scopedItems.map(\.clientID)), ["claude-code"])
+    }
+
+    @MainActor
+    func testProjectAgeFilterAndSelectionsStayInTheCurrentProject() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let cutoff = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -90, to: now))
+        let key = "11111111-1111-4111-8111-111111111111"
+        let oldName = "\(key).jsonl"
+        try write(#"{"type":"session_meta","payload":{"cwd":"/work/demo"}}"#,
+                  at: ".codex/sessions/day/\(oldName)", in: home, modifiedAt: cutoff.addingTimeInterval(-1))
+        try write(#"{"type":"user","cwd":"/work/demo"}"#,
+                  at: ".codex/sessions/day/edge.jsonl", in: home, modifiedAt: cutoff)
+        try write(#"{"type":"user","cwd":"/work/demo"}"#,
+                  at: ".codex/sessions/day/newer.jsonl", in: home, modifiedAt: cutoff.addingTimeInterval(1))
+        try write(#"{"type":"user","cwd":"/other/demo"}"#,
+                  at: ".codex/sessions/day/other.jsonl", in: home, modifiedAt: cutoff.addingTimeInterval(-1))
+        try write("image", at: ".codex/generated_images/\(key)/image.png", in: home)
+        let engine = ScanEngine(homeDirectory: home, systemTempRoot: nil, now: now)
+        let model = makeViewModel(home: home, scanEngine: engine, now: { now })
+        let report = engine.scan()
+        let summary = try XCTUnwrap(report.clientSummaries.first)
+        let unknown = CleanableItem(
+            clientID: summary.id, clientName: summary.profile.name, ruleID: "fixture", displayName: "Unknown time",
+            fileName: "unknown.jsonl", url: home.appendingPathComponent("unknown.jsonl"), category: .sessions,
+            safetyNote: "", sizeBytes: 1, fileCount: 1, modifiedAt: cutoff.addingTimeInterval(-60),
+            isDirectory: false, isCustom: false, projectEvidence: .reported("/work/demo")
+        )
+        model.report = ScanReport(
+            scannedAt: now,
+            clientSummaries: [ClientScanSummary(profile: summary.profile, items: summary.items + [unknown])],
+            totalBuiltInProfilesCount: 1, detectedBuiltInClientsCount: 1
+        )
+        let overviewSelection = try XCTUnwrap(model.filteredItems.first { $0.fileName == "other.jsonl" })
+        model.toggleSelection(for: overviewSelection)
+        model.sidebarSelection = .clientProjects("codex")
+        model.selectedProjectID = .workspace("/work/demo")
+        XCTAssertEqual(Set(model.visibleProjectSessions.map(\.fileName)), [oldName, "edge.jsonl", "newer.jsonl", "unknown.jsonl"])
+
+        model.selectAllVisible()
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), [oldName, "edge.jsonl", "newer.jsonl", "unknown.jsonl"])
+        let old = try XCTUnwrap(model.visibleProjectSessions.first { $0.fileName == oldName })
+        let artifact = try XCTUnwrap(model.projectArtifacts(for: old).first)
+        model.toggleSelection(for: artifact)
+        model.projectAgeFilter = .olderThan90Days
+        XCTAssertEqual(model.projectAgeCutoff, cutoff)
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), [oldName])
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), [oldName, key])
+
+        model.selectedProjectID = .workspace("/other/demo")
+        XCTAssertTrue(model.selectedItems.isEmpty)
+        model.sidebarSelection = .allClients
+        XCTAssertEqual(model.selectedItems.map(\.id), [overviewSelection.id])
+    }
+
+    @MainActor
+    func testProjectProtectionLocksAllViewsAndNewSessionsAfterRestart() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let key = "11111111-1111-4111-8111-111111111111"
+        let old = Date().addingTimeInterval(-100 * 86_400)
+        try write(#"{"type":"user","cwd":"/work/demo"}"#,
+                  at: ".codex/sessions/day/\(key).jsonl", in: home, modifiedAt: old)
+        try write("image", at: ".codex/generated_images/\(key)/image.png", in: home)
+        let model = makeViewModel(home: home)
+        model.rescan()
+        try await waitUntil { !model.isScanning && model.hasScanResults }
+        model.sidebarSelection = .client("codex")
+        model.selectAllVisible()
+        XCTAssertEqual(Set(model.selectedItems.map(\.fileName)), [key, "\(key).jsonl"])
+
+        model.sidebarSelection = .clientProjects("codex")
+        model.selectedProjectID = .workspace("/work/demo")
+        model.selectAllVisible()
+        XCTAssertEqual(model.selectedItems.count, 1)
+        model.setProjectProtection(true, for: .workspace("/work/demo"))
+        XCTAssertTrue(model.selectedItems.isEmpty)
+        model.projectAgeFilter = .olderThan90Days
+        let lockedSession = try XCTUnwrap(model.visibleProjectSessions.first)
+        XCTAssertNotNil(lockedSession.hardProtectionReason)
+        XCTAssertNotNil(model.projectArtifacts(for: lockedSession).first?.hardProtectionReason)
+
+        for scope in [SidebarSelection.allClients, .client("codex")] {
+            model.sidebarSelection = scope
+            XCTAssertTrue(model.selectedItems.isEmpty)
+            XCTAssertTrue(model.filteredBulkSelectableItems.isEmpty)
+            let artifact = try XCTUnwrap(model.scopedItems.first { $0.fileName == key })
+            model.toggleSelection(for: artifact)
+            model.confirmRiskItemSelection(artifact)
+            XCTAssertTrue(model.selectedItems.isEmpty)
+        }
+
+        try write(#"{"type":"user","cwd":"/work/demo"}"#,
+                  at: ".codex/sessions/day/discovered.jsonl", in: home, modifiedAt: old)
+        let restarted = makeViewModel(home: home)
+        restarted.rescan()
+        try await waitUntil { !restarted.isScanning && restarted.hasScanResults }
+        XCTAssertEqual(Set(restarted.scopedProtectedItems.map(\.fileName)), [key, "\(key).jsonl", "discovered.jsonl"])
+        restarted.setProjectProtection(false, for: .workspace("/work/demo"))
+        XCTAssertEqual(Set(restarted.filteredBulkSelectableItems.map(\.fileName)), [key, "\(key).jsonl", "discovered.jsonl"])
+    }
+
+    @MainActor
+    func testProjectCleanupVerifiesScannedFilesAndKeepsHistoryAndOtherSelections() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let projectSession = #"{"type":"user","cwd":"/work/demo"}"#
+        let old = Date().addingTimeInterval(-100 * 86_400)
+        try write(projectSession, at: ".codex/sessions/day/updated.jsonl", in: home, modifiedAt: old)
+        try write(projectSession, at: ".codex/sessions/day/unchanged.jsonl", in: home, modifiedAt: old)
+        try write(#"{"type":"user","cwd":"/other/demo"}"#, at: ".codex/sessions/day/other.jsonl", in: home, modifiedAt: old)
+        let model = makeViewModel(home: home)
+        model.rescan()
+        try await waitUntil { !model.isScanning && model.hasScanResults }
+        let other = try XCTUnwrap(model.filteredItems.first { $0.fileName == "other.jsonl" })
+        model.toggleSelection(for: other)
+
+        model.sidebarSelection = .clientProjects("codex")
+        model.selectedProjectID = .workspace("/work/demo")
+        model.projectAgeFilter = .olderThan90Days
+        model.selectAllVisible()
+        model.requestTrashConfirmation()
+        XCTAssertTrue(model.showingTrashConfirmation)
+        XCTAssertEqual(model.selectedItems.count, 2)
+
+        try write(projectSession + "\n{}", at: ".codex/sessions/day/updated.jsonl", in: home, modifiedAt: old)
+        model.confirmAndTrashSelectedItems()
+        try await waitUntil { !model.isCleaning && model.lastCleanupResult != nil }
+        let result = try XCTUnwrap(model.lastCleanupResult)
+        XCTAssertEqual(result.trashedItems.map(\.item.fileName), ["unchanged.jsonl"])
+        XCTAssertEqual(result.failedItems.map(\.item.fileName), ["updated.jsonl"])
+        XCTAssertEqual(model.historyRecords.count, 1)
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["updated.jsonl"])
+
+        model.rescan()
+        try await waitUntil { !model.isScanning }
+        XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["updated.jsonl"])
+        XCTAssertTrue(model.selectedItems.isEmpty, "Rescanning must require a new selection for changed content")
+        model.sidebarSelection = .allClients
+        XCTAssertEqual(model.selectedItems.map(\.id), [other.id])
+    }
+
+    @MainActor
     private func makeViewModel(
         home: URL,
         scanEngine: (any ScanPerforming)? = nil,
-        trashPerformer: (any TrashPerforming)? = nil
+        trashPerformer: (any TrashPerforming)? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) -> CleanerViewModel {
         CleanerViewModel(
             homeDirectory: home,
@@ -1466,7 +1712,8 @@ final class CleanerViewModelTests: XCTestCase {
             historyStore: CleanupHistoryStore(storageURL: home.appendingPathComponent("history.json")),
             excludedItemStore: ExcludedItemStore(storageURL: home.appendingPathComponent("excluded-items.json")),
             trashPerformer: trashPerformer ?? FixtureTrashPerformer(directory: home.appendingPathComponent(".fixture-trash")),
-            scanEngine: scanEngine
+            scanEngine: scanEngine,
+            now: now
         )
     }
 

@@ -14,6 +14,7 @@ struct ContentView: View {
     var body: some View {
         let isHistory = viewModel.sidebarSelection == .history
         let isExcluded = viewModel.sidebarSelection == .excluded
+        let isProjects = viewModel.sidebarSelection.isProjectScope
         let isListPage = viewModel.sidebarSelection.isListScope
 
         NavigationSplitView {
@@ -70,6 +71,10 @@ struct ContentView: View {
                             .allowsHitTesting(isListPage)
                             .accessibilityHidden(!isListPage)
 
+                        if isProjects {
+                            ProjectSessionsView(viewModel: viewModel)
+                        }
+
                         if hasVisitedHistory || isHistory {
                             CleanupHistoryView(viewModel: viewModel)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,12 +95,12 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                 // 智能悬浮操作岛（与列表页一同保活，切去清理记录/已排除再返回时不重建、不重播旧提示动效）
-                BottomActionBar(viewModel: viewModel, isVisible: isListPage)
+                BottomActionBar(viewModel: viewModel, isVisible: isListPage || isProjects)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 18)
-                    .opacity(isListPage ? 1 : 0)
-                    .allowsHitTesting(isListPage)
-                    .accessibilityHidden(!isListPage)
+                    .opacity(isListPage || isProjects ? 1 : 0)
+                    .allowsHitTesting(isListPage || isProjects)
+                    .accessibilityHidden(!(isListPage || isProjects))
             }
         }
         .environment(\.isWindowVisibleOnScreen, isWindowVisibleOnScreen)

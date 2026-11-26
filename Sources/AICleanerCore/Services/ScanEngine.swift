@@ -233,7 +233,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
             totalBuiltInProfilesCount: builtInProfiles.count,
             detectedBuiltInClientsCount: detectedBuiltInCount,
             skippedProtectedCount: totalSkippedProtected
-        )
+        ).filtering(excluding: excludedMatcher)
     }
 
     // MARK: - Private
@@ -241,7 +241,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
     private func scanProfile(
         _ profile: AIClientProfile,
         referenceNow: Date,
-        excludedMatcher: ExcludedItemMatcher,
+        excludedMatcher userExclusions: ExcludedItemMatcher,
         fileManager: FileManager
     ) -> ClientScanSummary {
         var discoveredItems: [CleanableItem] = []
@@ -263,6 +263,10 @@ public struct ScanEngine: ScanPerforming, Sendable {
 
         for rule in orderedRules {
             if Task.isCancelled { break }
+            // Keep project ownership available even when a session is hidden by an exclusion.
+            let isProjectRule = !profile.isCustom && (rule.category == .sessions
+                || SessionMetadataReader.exclusiveArtifactRuleIDs.contains(rule.id))
+            let excludedMatcher = isProjectRule ? ExcludedItemMatcher() : userExclusions
             let targetURL = rule.resolveURL(homeDirectory: homeDirectory)
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: targetURL.path, isDirectory: &isDir) else {
@@ -460,6 +464,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     let canonicalPath = childURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
+                    let snapshot = isProjectRule ? FileCleanupSnapshot.capture(at: childURL, fileManager: fileManager) : nil
                     let metadata: SessionItemMetadata
                     if rule.category == .sessions {
                         metadata = sessionReader.flatSessionMetadata(
@@ -470,16 +475,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             sessionIndex: sessionIndex,
                             fileManager: fileManager
                         )
-                        if let record = metadata.resolvedRecord {
-                            sessionIndex.register(
-                                sessionID: metadata.resolvedSessionID,
-                                workspacePath: record.workspacePath,
-                                record: record,
-                                preferExisting: true
-                            )
-                        }
+                        sessionIndex.registerScannedSession(metadata)
                     } else if !profile.isCustom {
-                        metadata = sessionReader.sessionArtifactMetadata(
+                        let display = sessionReader.sessionArtifactMetadata(
                             itemURL: childURL,
                             isDirectory: inspection.isDirectory,
                             clientID: profile.id,
@@ -487,6 +485,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             fileCount: inspection.fileCount,
                             sessionIndex: sessionIndex,
                             fileManager: fileManager
+                        )
+                        metadata = sessionReader.exactArtifactOwnership(
+                            for: display, at: childURL, isDirectory: inspection.isDirectory, rule: rule, index: sessionIndex
                         )
                     } else {
                         metadata = SessionItemMetadata(displayName: childURL.lastPathComponent)
@@ -517,7 +518,11 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             isCustom: profile.isCustom,
                             requiresIndividualSelection: requiresIndividualSelection,
                             sessionTitle: metadata.title,
-                            sessionProjectName: metadata.projectName
+                            sessionProjectName: metadata.projectName,
+                            exactSessionID: metadata.exactSessionID,
+                            projectEvidence: metadata.projectEvidence,
+                            isSessionArtifact: metadata.isSessionArtifact,
+                            cleanupSnapshot: snapshot
                         )
                     )
                 }
@@ -594,6 +599,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                         let canonicalPath = sessionURL.standardizedFileURL.path
                         guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
+                        let snapshot = FileCleanupSnapshot.capture(at: sessionURL, fileManager: fileManager)
                         let metadata = sessionReader.projectSessionMetadata(
                             itemURL: sessionURL,
                             projectFolderName: projectFolderName,
@@ -601,14 +607,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             sessionIndex: sessionIndex,
                             fileManager: fileManager
                         )
-                        if let record = metadata.resolvedRecord {
-                            sessionIndex.register(
-                                sessionID: metadata.resolvedSessionID,
-                                workspacePath: record.workspacePath,
-                                record: record,
-                                preferExisting: true
-                            )
-                        }
+                        sessionIndex.registerScannedSession(metadata)
 
                         let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
                             rule: rule,
@@ -635,7 +634,11 @@ public struct ScanEngine: ScanPerforming, Sendable {
                                 isCustom: profile.isCustom,
                                 requiresIndividualSelection: requiresIndividualSelection,
                                 sessionTitle: metadata.title,
-                                sessionProjectName: metadata.projectName
+                                sessionProjectName: metadata.projectName,
+                                exactSessionID: metadata.exactSessionID,
+                                projectEvidence: metadata.projectEvidence,
+                                isSessionArtifact: metadata.isSessionArtifact,
+                                cleanupSnapshot: snapshot
                             )
                         )
                     }
@@ -702,6 +705,7 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     let canonicalPath = fileURL.standardizedFileURL.path
                     guard seenCleanablePaths.insert(canonicalPath).inserted else { continue }
 
+                    let snapshot = isProjectRule ? FileCleanupSnapshot.capture(at: fileURL, fileManager: fileManager) : nil
                     let metadata = sessionReader.flatSessionMetadata(
                         itemURL: fileURL,
                         isDirectory: false,
@@ -710,13 +714,8 @@ public struct ScanEngine: ScanPerforming, Sendable {
                         sessionIndex: sessionIndex,
                         fileManager: fileManager
                     )
-                    if let record = metadata.resolvedRecord {
-                        sessionIndex.register(
-                            sessionID: metadata.resolvedSessionID,
-                            workspacePath: record.workspacePath,
-                            record: record,
-                            preferExisting: true
-                        )
+                    if rule.category == .sessions {
+                        sessionIndex.registerScannedSession(metadata)
                     }
 
                     let (recommendation, note, requiresIndividualSelection) = resolveRecommendation(
@@ -744,7 +743,11 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             isCustom: profile.isCustom,
                             requiresIndividualSelection: requiresIndividualSelection,
                             sessionTitle: metadata.title,
-                            sessionProjectName: metadata.projectName
+                            sessionProjectName: metadata.projectName,
+                            exactSessionID: metadata.exactSessionID,
+                            projectEvidence: metadata.projectEvidence,
+                            isSessionArtifact: metadata.isSessionArtifact,
+                            cleanupSnapshot: snapshot
                         )
                     )
                 }

@@ -126,23 +126,27 @@ struct AICleanerApp: App {
                 Button("勾选建议清理项") {
                     viewModel.selectRecommendedInScope()
                 }
-                .disabled(viewModel.scopedRecommendedItems.isEmpty)
+                .disabled(!viewModel.sidebarSelection.isListScope || viewModel.scopedRecommendedItems.isEmpty)
 
                 Button("全选可批量勾选项") {
                     viewModel.selectAllVisible()
                 }
                 .keyboardShortcut("a", modifiers: [.command, .option])
-                .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
+                .disabled(
+                    viewModel.sidebarSelection.isProjectScope
+                        ? viewModel.projectBulkSelectableSessions.isEmpty
+                        : viewModel.filteredBulkSelectableItems.isEmpty
+                )
 
                 Button("反选可批量勾选项") {
                     viewModel.invertVisibleSelection()
                 }
-                .disabled(viewModel.filteredBulkSelectableItems.isEmpty)
+                .disabled(!viewModel.sidebarSelection.isListScope || viewModel.filteredBulkSelectableItems.isEmpty)
 
                 Button("清空全部选择") {
                     viewModel.clearAllSelection()
                 }
-                .disabled(viewModel.selectedItemIDs.isEmpty)
+                .disabled(viewModel.selectedItems.isEmpty)
             }
         }
     }

@@ -40,6 +40,29 @@ struct TrashConfirmationSheet: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(hasHighRiskItems ? "确认移入废纸篓（含高风险项）" : "确认移入废纸篓")
                         .font(.system(.title3, design: .rounded).weight(.bold))
+                    if viewModel.sidebarSelection.isProjectScope, let project = viewModel.selectedProjectID {
+                        HStack(spacing: 8) {
+                            Text(project.name)
+                                .font(.callout.weight(.semibold))
+                            if viewModel.showsAllProjectClients {
+                                Text("所有客户端")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if let client = viewModel.builtInClientPage {
+                                Text(client.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let path = project.workspacePath {
+                            Text(path)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(path)
+                        }
+                    }
                     HStack(spacing: 5) {
                         Text("拟移入 \(viewModel.selectedItems.count) 项，共")
                             .font(.callout)

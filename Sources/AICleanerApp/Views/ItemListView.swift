@@ -341,6 +341,35 @@ struct ItemControlBarView: View {
                 .font(.caption)
             }
 
+            // 项目会话入口（与当前选中客户端绑定，替代原侧栏子项）
+            if case .client(let clientID) = viewModel.sidebarSelection {
+                Button {
+                    viewModel.sidebarSelection = .clientProjects(clientID)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text("项目会话")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                            .fill(AppTheme.glassCardFill(for: colorScheme))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8.5, style: .continuous)
+                            .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 8.5, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("查看当前客户端的项目会话")
+            }
+
             // 紧凑透明搜索框
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")

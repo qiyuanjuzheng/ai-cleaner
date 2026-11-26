@@ -1,0 +1,20 @@
+[package]
+name = "aicleaner-tauri-shell"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "AICL-33 spike: empty Tauri 2 shell that talks to the aicleaner-core sidecar"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

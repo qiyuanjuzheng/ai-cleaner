@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>AI Cleaner shell probe</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; }
+      pre { background: rgba(127, 127, 127, 0.12); padding: 1rem; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>AI Cleaner shell probe</h1>
+    <p>AICL-33 spike: empty Tauri 2 window talking to the <code>aicleaner-core</code> sidecar.</p>
+    <pre id="out">calling sidecar…</pre>
+    <script>
+      window.__TAURI__.core
+        .invoke("hello")
+        .then((r) => (document.getElementById("out").textContent = JSON.stringify(r, null, 2)))
+        .catch((e) => (document.getElementById("out").textContent = "error: " + e));
+    </script>
+  </body>
+</html>

@@ -94,17 +94,7 @@ struct SidebarView: View {
                             .padding(.vertical, 6)
                     } else {
                         ForEach(viewModel.builtInSidebarEntries) { entry in
-                            SidebarClientTile(
-                                title: entry.title,
-                                cleanableBytesText: entry.cleanableBytesText,
-                                hasProtectedOnly: entry.cleanableBytes == 0 && entry.protectedBytes > 0,
-                                icon: .client(entry.id),
-                                tint: AppTheme.color(forAccentToken: entry.accentToken),
-                                isSelected: viewModel.sidebarSelection.clientID == entry.id,
-                                namespace: sidebarNamespace
-                            ) {
-                                viewModel.selectBuiltInClient(entry.id)
-                            }
+                            builtInClientRow(entry)
                         }
                     }
 
@@ -265,6 +255,45 @@ struct SidebarView: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
+    private func builtInClientRow(_ entry: SidebarClientEntry) -> some View {
+        let cleanup = SidebarSelection.client(entry.id)
+        let projects = SidebarSelection.clientProjects(entry.id)
+        let tint = AppTheme.color(forAccentToken: entry.accentToken)
+
+        return VStack(spacing: 2) {
+            SidebarClientTile(
+                title: entry.title,
+                cleanableBytesText: entry.cleanableBytesText,
+                hasProtectedOnly: entry.cleanableBytes == 0 && entry.protectedBytes > 0,
+                icon: .client(entry.id),
+                tint: tint,
+                isSelected: viewModel.sidebarSelection == cleanup,
+                namespace: sidebarNamespace
+            ) {
+                viewModel.selectBuiltInClient(entry.id)
+            }
+            .help("查看 \(entry.title) 的清理条目")
+
+            if viewModel.sidebarSelection.clientID == entry.id {
+                SidebarClientTile(
+                    title: "项目会话",
+                    cleanableBytesText: "",
+                    hasProtectedOnly: false,
+                    icon: .symbol("folder"),
+                    tint: tint,
+                    isSelected: viewModel.sidebarSelection == projects,
+                    namespace: sidebarNamespace,
+                    rowHeight: 28
+                ) {
+                    select(projects)
+                }
+                .padding(.leading, 24)
+                .help("查看 \(entry.title) 的项目会话")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
     private func select(_ selection: SidebarSelection) {
         viewModel.sidebarSelection = selection
     }
@@ -300,6 +329,7 @@ private struct SidebarClientTile: View {
     let isSelected: Bool
     let namespace: Namespace.ID
     var emphasizeBytesTint: Color? = nil
+    var rowHeight: CGFloat = 34
     let action: () -> Void
 
     @State private var isHovered: Bool = false
@@ -338,7 +368,7 @@ private struct SidebarClientTile: View {
             }
             .padding(.leading, 11)
             .padding(.trailing, 10)
-            .frame(height: 34)
+            .frame(height: rowHeight)
             .background(
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 8.5, style: .continuous)
@@ -356,6 +386,7 @@ private struct SidebarClientTile: View {
             .contentShape(RoundedRectangle(cornerRadius: 8.5, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onHover { hovering in
             isHovered = hovering
         }

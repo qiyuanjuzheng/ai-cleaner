@@ -37,11 +37,6 @@ enum SidebarSelection: Hashable, Sendable {
     }
 }
 
-enum ClientPageTab: Hashable {
-    case cleanup
-    case projects
-}
-
 enum ItemAgeFilter: String, CaseIterable, Identifiable, Sendable {
     case all = "全部时间"
     case olderThan7Days = "7 天前"
@@ -342,16 +337,8 @@ final class CleanerViewModel {
         return builtInSidebarEntries.first { $0.id == clientID }
     }
 
-    var clientPageTab: ClientPageTab {
-        get { sidebarSelection.isProjectScope ? .projects : .cleanup }
-        set {
-            guard let client = builtInClientPage else { return }
-            sidebarSelection = newValue == .projects ? .clientProjects(client.id) : .client(client.id)
-        }
-    }
-
     func selectBuiltInClient(_ id: String) {
-        sidebarSelection = sidebarSelection.isProjectScope ? .clientProjects(id) : .client(id)
+        sidebarSelection = .client(id)
     }
 
     private(set) var canShowAllProjectClients = false

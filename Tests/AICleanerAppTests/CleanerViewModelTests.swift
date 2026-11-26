@@ -1452,7 +1452,7 @@ final class CleanerViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testClientProjectTabScopesListsAndCanShowSharedProjectSessions() throws {
+    func testClientProjectNavigationScopesListsAndCanShowSharedProjectSessions() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
         let shared: SessionProjectID = .workspace("/work/shared")
@@ -1465,10 +1465,9 @@ final class CleanerViewModelTests: XCTestCase {
         let model = makeViewModel(home: home)
         model.report = ScanEngine(homeDirectory: home).scan()
         model.selectBuiltInClient("codex")
-        XCTAssertEqual(model.clientPageTab, .cleanup)
+        XCTAssertEqual(model.sidebarSelection, .client("codex"))
         XCTAssertEqual(model.scopedItems.map(\.clientID), ["codex"])
-        model.clientPageTab = .projects
-        XCTAssertEqual(model.sidebarSelection, .clientProjects("codex"))
+        model.sidebarSelection = .clientProjects("codex")
         XCTAssertEqual(model.projectGroups.map(\.id), [shared])
         XCTAssertEqual(model.projectGroups.first?.sessions.count, 1)
         XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["codex-shared.jsonl"])
@@ -1484,10 +1483,16 @@ final class CleanerViewModelTests: XCTestCase {
         model.setShowsAllProjectClients(false)
         XCTAssertEqual(model.selectedItems.map(\.fileName), ["codex-shared.jsonl"])
 
+        model.selectBuiltInClient("codex")
+        XCTAssertEqual(model.sidebarSelection, .client("codex"))
+        XCTAssertTrue(model.selectedItems.isEmpty)
+
+        model.sidebarSelection = .clientProjects("codex")
         model.selectBuiltInClient("claude-code")
-        XCTAssertEqual(model.sidebarSelection, .clientProjects("claude-code"))
+        XCTAssertEqual(model.sidebarSelection, .client("claude-code"))
+        model.sidebarSelection = .clientProjects("claude-code")
         XCTAssertEqual(Set(model.projectGroups.map(\.id)), [shared, .workspace("/work/claude-only")])
-        XCTAssertEqual(model.selectedProjectID, shared)
+        model.selectedProjectID = shared
         XCTAssertEqual(model.visibleProjectSessions.map(\.fileName), ["claude-shared.jsonl"])
         XCTAssertTrue(model.selectedItems.isEmpty)
 
@@ -1496,7 +1501,7 @@ final class CleanerViewModelTests: XCTestCase {
         XCTAssertEqual(model.visibleProjectSessions.count, 2)
         XCTAssertTrue(model.visibleProjectSessions.allSatisfy { $0.hardProtectionReason != nil })
 
-        model.clientPageTab = .cleanup
+        model.selectBuiltInClient("claude-code")
         XCTAssertEqual(model.sidebarSelection, .client("claude-code"))
         XCTAssertEqual(Set(model.scopedItems.map(\.clientID)), ["claude-code"])
     }

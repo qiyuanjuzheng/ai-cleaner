@@ -102,22 +102,6 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                let isClientPage = viewModel.builtInClientPage != nil
-                Picker("客户端页面", selection: $viewModel.clientPageTab) {
-                    Text("清理条目").tag(ClientPageTab.cleanup)
-                    Text("项目会话").tag(ClientPageTab.projects)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-                .fixedSize()
-                // Keep the native toolbar item mounted so AppKit does not resize the window on navigation.
-                .opacity(isClientPage ? 1 : 0)
-                .disabled(!isClientPage)
-                .accessibilityHidden(!isClientPage)
-            }
-
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     viewModel.appearanceMode = viewModel.appearanceMode.next

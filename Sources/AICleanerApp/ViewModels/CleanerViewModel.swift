@@ -439,6 +439,8 @@ final class CleanerViewModel {
     }
 
     var isScanning: Bool = false
+    /// 扫描进度页状态源（步骤条 / 客户端发现卡片 / 实时统计），由扫描引擎进度事件驱动
+    let scanProgress = ScanProgressModel()
     var isCleaning: Bool = false
     var showingTrashConfirmation: Bool = false
     var showingAddCustomSheet: Bool = false
@@ -1535,6 +1537,7 @@ final class CleanerViewModel {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
+        scanProgress.endSession()
     }
 
     /// 从扫描结果页返回初始「待扫描」状态（保留历史清理统计、自定义目录与已排除清单）
@@ -1542,6 +1545,7 @@ final class CleanerViewModel {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
+        scanProgress.endSession()
         sessionExcludedSnapshots.removeAll()
 
         suppressCacheRebuild = true
@@ -1565,11 +1569,13 @@ final class CleanerViewModel {
         scanTask?.cancel()
         isScanning = true
         errorBannerMessage = nil
+        scanProgress.beginSession()
 
         let engine = scanEngine
         let customDirs = customDirectories
         let excludedSnapshot = excludedItems
         let homeDir = scanEngine.homeDirectory
+        let progressModel = scanProgress
         let protectedSnapshot: Set<String>
         do {
             protectedSnapshot = try projectProtectionStore.load()
@@ -1584,7 +1590,13 @@ final class CleanerViewModel {
                 let newReport = engine.scan(
                     customDirectories: customDirs,
                     excludedItems: excludedSnapshot,
-                    now: nil
+                    now: nil,
+                    onProgress: { event in
+                        // 引擎在后台线程发布整包快照，切回主线程消费（模型内部丢弃会话结束后的在途事件）
+                        Task { @MainActor in
+                            progressModel.apply(event)
+                        }
+                    }
                 )
                 return Self.buildPreparedReportBundle(
                     from: newReport, homeDirectory: homeDir, protectedProjects: protectedSnapshot
@@ -1603,10 +1615,16 @@ final class CleanerViewModel {
                 )
             }
 
+            // 收尾：进度页短暂呈现「三步全部完成」，再切换到结果页（取消时立即跳出，不应用报告）
+            progressModel.finishSession()
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+
             self.sessionExcludedSnapshots.removeAll()
             self.suppressCacheRebuild = true
             self.report = finalBundle.report
             self.isScanning = false
+            self.scanProgress.endSession()
             if let clientID = self.sidebarSelection.clientID,
                finalBundle.clientSummaryByID[clientID] == nil {
                 self.sidebarSelection = .allClients

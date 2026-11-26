@@ -69,8 +69,10 @@ final class PortableRulePackTests: XCTestCase {
             XCTAssertTrue(protectedRuleIDs.contains(expectedProtected), "Missing protected rule: \(expectedProtected)")
         }
 
-        // Verification safety gate: source-verified caches/logs may be .recommended; docs-verified rules stay .reviewSuggested.
+        // Verification safety gate: ci/source-verified caches/logs may be .recommended; docs-verified rules stay .reviewSuggested.
         XCTAssertEqual(rulesByID["ollama-windows-logs"]?.recommendation, .recommended)
+        XCTAssertEqual(rulesByID["opencode-logs"]?.recommendation, .recommended)
+        XCTAssertEqual(rulesByID["codex-cli-tmp"]?.recommendation, .recommended)
         XCTAssertEqual(rulesByID["zed-logs"]?.recommendation, .recommended)
         XCTAssertEqual(rulesByID["cherry-cache"]?.recommendation, .recommended)
         XCTAssertEqual(rulesByID["cursor-cache"]?.recommendation, .reviewSuggested)

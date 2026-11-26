@@ -313,8 +313,8 @@
           "category": "temporary",
           "mode": "directory",
           "explanation": "会话执行时生成的临时文件。",
-          "verification": "source",
-          "evidence": "openai/codex CODEX_HOME/tmp temporary directory"
+          "verification": "ci",
+          "evidence": "Verified via codex-cli 0.172.0 + aicleaner-core.exe scan on Windows-2025Server (CI run 45848097381): C:\\Users\\runneradmin\\.codex\\tmp"
         },
         {
           "id": "codex-cli-hidden-tmp",
@@ -1455,12 +1455,12 @@
           "path": "{home}/.local/share/opencode/log",
           "category": "logs",
           "mode": "recursiveFiles",
-          "explanation": "OpenCode CLI 会话与调试日志文件，建议清理，不影响历史主库。",
+          "explanation": "OpenCode CLI 会话与调试日志文件，仅匹配 .log 文件，不影响历史主库。",
           "allowedFileSuffixes": [
             ".log"
           ],
-          "verification": "docs",
-          "evidence": "OpenCode XDG-compat ~/.local/share/opencode/log (.log only)"
+          "verification": "ci",
+          "evidence": "Verified via opencode 1.19.6 debug paths + aicleaner-core.exe scan on Windows-2025Server (CI run 45848097381): C:\\Users\\runneradmin\\.local\\share\\opencode\\log\\opencode.log"
         },
         {
           "id": "opencode-windows-local-logs",

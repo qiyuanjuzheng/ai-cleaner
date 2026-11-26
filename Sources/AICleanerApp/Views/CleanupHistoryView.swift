@@ -318,13 +318,22 @@ struct CleanupHistoryView: View {
     // MARK: - 4. 底部双栏：客户端清理排行 + 最近清理记录
 
     private var bottomDetailGrid: some View {
-        HStack(alignment: .top, spacing: 14) {
-            clientRankingCard
-                .frame(minWidth: 260, maxWidth: 340)
+        Grid(alignment: .topLeading, horizontalSpacing: 14) {
+            GridRow {
+                clientRankingCard
+                    .frame(minWidth: 260, maxWidth: 340)
 
-            recentRecordsCard
-                .frame(maxWidth: .infinity)
+                recentRecordsCard
+                    .frame(maxWidth: .infinity)
+            }
         }
+    }
+
+    private var detailRowDivider: some View {
+        Rectangle()
+            .fill(AppTheme.hairlineDivider(for: colorScheme))
+            .frame(height: 0.5)
+            .padding(.horizontal, 14)
     }
 
     private var clientRankingCard: some View {
@@ -414,14 +423,12 @@ struct CleanupHistoryView: View {
                         .frame(height: 46)
 
                         if index < topList.count - 1 {
-                            Rectangle()
-                                .fill(AppTheme.hairlineDivider(for: colorScheme))
-                                .frame(height: 0.5)
-                                .padding(.horizontal, 14)
+                            detailRowDivider
                         }
                     }
                 }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(AppTheme.glassCardFill(for: colorScheme))
@@ -454,18 +461,18 @@ struct CleanupHistoryView: View {
                         }
                     }
 
-                    if record.id != page.records.last?.id || page.count > 1 {
-                        Rectangle()
-                            .fill(AppTheme.hairlineDivider(for: colorScheme))
-                            .frame(height: 0.5)
-                            .padding(.horizontal, 14)
+                    if record.id != page.records.last?.id {
+                        detailRowDivider
                     }
                 }
 
                 if page.count > 1 {
+                    Spacer(minLength: 0)
+                    detailRowDivider
                     recentRecordsPagination(page)
                 }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(AppTheme.glassCardFill(for: colorScheme))

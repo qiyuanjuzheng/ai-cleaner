@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Cleaner built-in rule pack v1",
+  "type": "object",
+  "required": ["schemaVersion", "profiles"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "templates": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/template" }
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["macos", "windows", "linux"] }
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "name", "symbolName", "accentToken", "description", "protectedSummary", "rules"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "name": { "$ref": "#/$defs/text" },
+        "symbolName": { "$ref": "#/$defs/text" },
+        "accentToken": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "protectedSummary": { "$ref": "#/$defs/text" },
+        "platforms": { "$ref": "#/$defs/platforms" },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/scanRule" },
+              { "$ref": "#/$defs/templateUse" }
+            ]
+          }
+        }
+      }
+    },
+    "template": {
+      "type": "object",
+      "required": ["params", "rules"],
+      "additionalProperties": false,
+      "properties": {
+        "params": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$" }
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": { "when": { "type": "string", "pattern": "^\\{\\{[A-Za-z][A-Za-z0-9]*\\}\\}$" } },
+            "allOf": [{ "$ref": "#/$defs/ruleFields" }],
+            "unevaluatedProperties": false
+          }
+        }
+      }
+    },
+    "templateUse": {
+      "type": "object",
+      "required": ["use", "with"],
+      "additionalProperties": false,
+      "properties": {
+        "use": { "$ref": "#/$defs/text" },
+        "with": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "boolean"] }
+        },
+        "platforms": { "$ref": "#/$defs/platforms" }
+      }
+    },
+    "scanRule": {
+      "allOf": [{ "$ref": "#/$defs/ruleFields" }],
+      "unevaluatedProperties": false
+    },
+    "ruleFields": {
+      "type": "object",
+      "required": ["id", "displayName", "explanation"],
+      "oneOf": [{ "required": ["path"] }, { "required": ["paths"] }],
+      "if": { "required": ["protected"], "properties": { "protected": { "const": true } } },
+      "then": {
+        "properties": {
+          "category": { "const": "protectedData" },
+          "mode": { "const": "directory" },
+          "recommendation": { "const": "notRecommended" }
+        }
+      },
+      "else": { "required": ["category", "mode"] },
+      "properties": {
+        "id": { "$ref": "#/$defs/text" },
+        "displayName": { "$ref": "#/$defs/text" },
+        "explanation": { "$ref": "#/$defs/text" },
+        "path": { "$ref": "#/$defs/text" },
+        "paths": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "macos": { "$ref": "#/$defs/text" },
+            "windows": { "$ref": "#/$defs/text" },
+            "linux": {
+              "oneOf": [
+                { "$ref": "#/$defs/text" },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "$ref": "#/$defs/text" }
+                }
+              ]
+            }
+          }
+        },
+        "platforms": { "$ref": "#/$defs/platforms" },
+        "protected": { "type": "boolean" },
+        "category": { "enum": ["sessions", "cache", "temporary", "logs", "custom", "protectedData"] },
+        "mode": { "enum": ["directory", "children", "projectSessions", "recursiveFiles"] },
+        "recommendation": { "enum": ["recommended", "reviewSuggested", "notRecommended"] },
+        "allowedFileSuffixes": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "isSessionArchive": { "type": "boolean" }
+      }
+    }
+  }
+}

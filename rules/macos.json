@@ -1,0 +1,2268 @@
+{
+  "$schema": "../protocol/rules-v1.schema.json",
+  "schemaVersion": 1,
+  "templates": {
+    "electronCache": {
+      "params": [
+        "prefix",
+        "root",
+        "includeCachedData"
+      ],
+      "rules": [
+        {
+          "id": "{{prefix}}-cache",
+          "displayName": "应用网络缓存 (Cache)",
+          "path": "{{root}}/Cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "应用静态资源与网络缓存，清理后按需自动重建，不影响登录。"
+        },
+        {
+          "id": "{{prefix}}-code-cache",
+          "displayName": "脚本编译缓存 (Code Cache)",
+          "path": "{{root}}/Code Cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "JS/WASM 编译缓存，下次启动时自动重建。"
+        },
+        {
+          "id": "{{prefix}}-gpu-cache",
+          "displayName": "GPU 渲染缓存",
+          "path": "{{root}}/GPUCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "图形渲染管线缓存，重启自动重建。"
+        },
+        {
+          "id": "{{prefix}}-gpu-persistent-cache",
+          "displayName": "GPU 持久缓存",
+          "path": "{{root}}/GPUPersistentCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "持久化图形渲染缓存，清理后按需重建。"
+        },
+        {
+          "id": "{{prefix}}-shader-cache",
+          "displayName": "着色器缓存 (GrShaderCache)",
+          "path": "{{root}}/GrShaderCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "Skia 图形着色器编译缓存，清理后按需重建。"
+        },
+        {
+          "id": "{{prefix}}-graphite-dawn-cache",
+          "displayName": "Graphite Dawn 缓存",
+          "path": "{{root}}/GraphiteDawnCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "图形引擎着色器缓存，清理后按需重建。"
+        },
+        {
+          "id": "{{prefix}}-dawn-graphite",
+          "displayName": "Dawn Graphite 缓存",
+          "path": "{{root}}/DawnGraphiteCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "图形后端着色器缓存，清理后按需重建。"
+        },
+        {
+          "id": "{{prefix}}-dawn-webgpu",
+          "displayName": "Dawn WebGPU 缓存",
+          "path": "{{root}}/DawnWebGPUCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "WebGPU 图形缓存，清理后按需重建。"
+        },
+        {
+          "id": "{{prefix}}-crashpad",
+          "displayName": "崩溃转储日志 (Crashpad)",
+          "path": "{{root}}/Crashpad",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "应用异常退出时生成的崩溃诊断日志。"
+        },
+        {
+          "id": "{{prefix}}-app-logs",
+          "displayName": "应用运行日志",
+          "path": "{{root}}/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "按日期归档的客户端运行日志，清理不影响业务数据。"
+        },
+        {
+          "id": "{{prefix}}-cached-data",
+          "displayName": "字节码缓存 (CachedData)",
+          "path": "{{root}}/CachedData",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "V8 字节码与内置脚本缓存，体积常较大，启动后自动重建。",
+          "when": "{{includeCachedData}}"
+        },
+        {
+          "id": "{{prefix}}-cached-vsix",
+          "displayName": "扩展安装包缓存 (CachedExtensionVSIXs)",
+          "path": "{{root}}/CachedExtensionVSIXs",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "插件安装/更新后遗留的 VSIX 压缩包，不影响已安装扩展。",
+          "when": "{{includeCachedData}}"
+        }
+      ]
+    }
+  },
+  "profiles": [
+    {
+      "accentToken": "claude",
+      "description": "Anthropic 命令行编程助手的聊天会话、转录文件、调试日志与运行缓存",
+      "id": "claude-code",
+      "name": "Claude Code",
+      "protectedSummary": "已锁定保护 ~/.claude.json、settings.json、CLAUDE.md、各项目 memory/、sessions-index.json、skills、plugins、hooks 与 history.jsonl",
+      "symbolName": "terminal",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "claude-code-project-sessions",
+          "displayName": "项目聊天会话",
+          "path": "{home}/.claude/projects",
+          "category": "sessions",
+          "mode": "projectSessions",
+          "explanation": "本地会话记录及会话产物。"
+        },
+        {
+          "id": "claude-code-transcripts",
+          "displayName": "历史会话转录目录 (transcripts)",
+          "path": "{home}/.claude/transcripts",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "自动留存的历史对话转录副本。",
+          "isSessionArchive": true
+        },
+        {
+          "id": "claude-code-cli-cache",
+          "displayName": "CLI 与 MCP 运行缓存",
+          "path": "{caches}/claude-cli-nodejs",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "Claude Code 及 MCP 服务器运行缓存与日志，建议清理，下次运行自动重建。"
+        },
+        {
+          "id": "claude-code-debug",
+          "displayName": "调试日志",
+          "path": "{home}/.claude/debug",
+          "category": "logs",
+          "mode": "children",
+          "explanation": "会话调试输出日志，移入废纸篓不影响历史会话与配置。"
+        },
+        {
+          "id": "claude-code-paste-cache",
+          "displayName": "剪贴板粘贴缓存",
+          "path": "{home}/.claude/paste-cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "终端粘贴长文本生成的临时缓存。"
+        },
+        {
+          "id": "claude-code-shell-snapshots",
+          "displayName": "Shell 环境快照",
+          "path": "{home}/.claude/shell-snapshots",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "一次性终端环境快照，下次启动自动重新捕获。"
+        },
+        {
+          "id": "claude-code-downloads",
+          "displayName": "临时下载目录",
+          "path": "{home}/.claude/downloads",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "客户端运行期间产生的临时下载包，建议清理。"
+        },
+        {
+          "id": "claude-code-session-env",
+          "displayName": "会话临时环境",
+          "path": "{home}/.claude/session-env",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "单次会话的临时环境变量文件，建议清理。"
+        },
+        {
+          "id": "claude-code-backups",
+          "displayName": "自动备份临时目录",
+          "path": "{home}/.claude/backups",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "配置更新时留存的历史备份副本，不影响当前生效的 settings.json。"
+        },
+        {
+          "id": "claude-code-file-history",
+          "displayName": "会话文件撤销快照 (file-history)",
+          "path": "{home}/.claude/file-history",
+          "category": "temporary",
+          "mode": "children",
+          "recommendation": "reviewSuggested",
+          "explanation": "用于回滚会话中的文件修改。确认无需回滚后可勾选。"
+        },
+        {
+          "id": "claude-code-protected-plugins",
+          "displayName": "已安装插件目录 (plugins)",
+          "path": "{home}/.claude/plugins",
+          "explanation": "包含已安装的 Claude Code 插件与 MCP 市场组件，删除后需重新下载安装，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "claude-code-protected-skills",
+          "displayName": "自定义技能库 (skills)",
+          "path": "{home}/.claude/skills",
+          "explanation": "包含个人或团队自定义的 Skills 提示词与脚本，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "claude-code-protected-history",
+          "displayName": "命令输入历史索引 (history.jsonl)",
+          "path": "{home}/.claude/history.jsonl",
+          "explanation": "记录跨会话的快捷历史输入索引，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "claude-code-protected-settings",
+          "displayName": "核心配置文件 (settings.json)",
+          "path": "{home}/.claude/settings.json",
+          "explanation": "包含权限、模型与 Hook 等核心配置，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "codex",
+      "description": "OpenAI Codex CLI 与桌面端的聊天会话、临时产物、渲染缓存与日志",
+      "id": "codex",
+      "name": "Codex",
+      "protectedSummary": "已锁定保护 auth.json、config.toml、AGENTS.md、memories、worktrees、plugins 与 SQLite 主数据库",
+      "symbolName": "cpu",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "codex-sessions",
+          "displayName": "聊天会话记录",
+          "path": "{home}/.codex/sessions",
+          "category": "sessions",
+          "mode": "recursiveFiles",
+          "explanation": "按单条对话展示本地会话（.jsonl 与 .jsonl.zst）。",
+          "allowedFileSuffixes": [
+            ".jsonl",
+            ".jsonl.zst"
+          ]
+        },
+        {
+          "id": "codex-archived-sessions",
+          "displayName": "已归档聊天会话",
+          "path": "{home}/.codex/archived_sessions",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "已归档的历史会话文件。",
+          "isSessionArchive": true
+        },
+        {
+          "id": "codex-multica-sessions",
+          "displayName": "工作区代理会话",
+          "path": "{home}/.codex/multica-sessions",
+          "category": "sessions",
+          "mode": "children",
+          "recommendation": "recommended",
+          "explanation": "自动化代理任务产生的一次性会话目录，任务完成后建议清理。"
+        },
+        {
+          "id": "codex-cli-tmp",
+          "displayName": "Codex 临时目录 (tmp)",
+          "path": "{home}/.codex/tmp",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "会话执行时生成的临时文件。"
+        },
+        {
+          "id": "codex-cli-hidden-tmp",
+          "displayName": "Codex 隐藏临时目录 (.tmp)",
+          "path": "{home}/.codex/.tmp",
+          "category": "temporary",
+          "mode": "children",
+          "explanation": "运行过程产生的临时工作子项，已自动过滤敏感文件，建议清理。"
+        },
+        {
+          "id": "codex-cli-cache",
+          "displayName": "Codex CLI 缓存",
+          "path": "{home}/.codex/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "命令行运行缓存，清理后按需自动重新生成。"
+        },
+        {
+          "id": "codex-cli-log",
+          "displayName": "Codex 运行日志",
+          "path": "{home}/.codex/log",
+          "category": "logs",
+          "mode": "children",
+          "explanation": "Codex CLI 输出的文本日志文件，建议清理。"
+        },
+        {
+          "id": "codex-shell-snapshots",
+          "displayName": "Shell 环境快照",
+          "path": "{home}/.codex/shell_snapshots",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "一次性终端环境快照，下次启动自动重新采集。"
+        },
+        {
+          "id": "codex-generated-images",
+          "displayName": "一次性生成图片产物",
+          "path": "{home}/.codex/generated_images",
+          "category": "temporary",
+          "mode": "children",
+          "recommendation": "reviewSuggested",
+          "explanation": "对话期间生成的本地图片缓存产物，如已导出或不再需要可勾选清理。"
+        },
+        {
+          "id": "codex-sys-cache",
+          "displayName": "系统级应用缓存 (Codex)",
+          "path": "{caches}/Codex",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 下的 Codex 浏览器与代码缓存，建议清理。"
+        },
+        {
+          "id": "codex-bundle-cache",
+          "displayName": "系统级网络与更新缓存",
+          "path": "{caches}/com.openai.codex",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "包含 URLCache 与 Sparkle 自动更新安装包缓存，建议清理。"
+        },
+        {
+          "id": "codex-sys-logs",
+          "displayName": "系统运行日志",
+          "path": "{logs}/Codex",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "macOS Logs 目录下的 Codex 日志。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "codex-desktop",
+            "root": "{appSupport}/Codex",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "codex-protected-thread-db",
+          "displayName": "主对话索引库 (thread_history_1.sqlite)",
+          "path": "{home}/.codex/thread_history_1.sqlite",
+          "explanation": "Codex 桌面端/CLI 的主会话索引 SQLite 数据库，删除会导致全部线程列表丢失，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "codex-protected-plugins",
+          "displayName": "已安装插件与技能组件 (plugins)",
+          "path": "{home}/.codex/plugins",
+          "explanation": "包含已安装插件与扩展运行环境，删除后需重新安装，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "codex-protected-worktrees",
+          "displayName": "Git 代码工作树 (worktrees)",
+          "path": "{home}/.codex/worktrees",
+          "explanation": "包含各任务的 Git Worktree 代码分支副本，可能存在未合并/未提交代码，不建议直接清理。",
+          "protected": true
+        },
+        {
+          "id": "codex-protected-memories",
+          "displayName": "长期记忆目录 (memories)",
+          "path": "{home}/.codex/memories",
+          "explanation": "保存跨会话积累的长期偏好与项目记忆，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "codex-protected-auth",
+          "displayName": "登录凭据 (auth.json)",
+          "path": "{home}/.codex/auth.json",
+          "explanation": "包含账号认证令牌，删除后需要重新登录，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "workbuddy",
+      "description": "腾讯 WorkBuddy / CodeBuddy 的聊天会话、一次性任务工作目录、追踪日志与缓存",
+      "id": "workbuddy",
+      "name": "WorkBuddy",
+      "protectedSummary": "已锁定保护 binaries 运行时、plugins 插件、skills 技能库、security 凭据与 workbuddy.db",
+      "symbolName": "person.2.badge.gearshape.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "workbuddy-project-sessions",
+          "displayName": "项目聊天会话",
+          "path": "{home}/.workbuddy/projects",
+          "category": "sessions",
+          "mode": "projectSessions",
+          "explanation": "按单条对话展开 WorkBuddy 各项目的 .jsonl 会话与伴随产物。"
+        },
+        {
+          "id": "workbuddy-ai-project-sessions",
+          "displayName": "WorkBuddy AI 聊天会话",
+          "path": "{home}/.workbuddy-ai/projects",
+          "category": "sessions",
+          "mode": "projectSessions",
+          "explanation": "按单条展开 WorkBuddy AI 会话记录。"
+        },
+        {
+          "id": "workbuddy-task-folders",
+          "displayName": "一次性任务工作目录 (~/WorkBuddy)",
+          "path": "{home}/WorkBuddy",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "每次新建任务生成的时间戳工作目录（如 2026-11-...），会跳过含 .git 或敏感凭据的目录。"
+        },
+        {
+          "id": "workbuddy-workspace-sessions",
+          "displayName": "会话文件回滚快照 (workspace/sessions)",
+          "path": "{home}/.workbuddy/workspace/sessions",
+          "category": "temporary",
+          "mode": "children",
+          "recommendation": "reviewSuggested",
+          "explanation": "会话修改文件时创建的备份。确认无需恢复后可勾选。"
+        },
+        {
+          "id": "workbuddy-traces",
+          "displayName": "执行追踪记录 (traces)",
+          "path": "{home}/.workbuddy/traces",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "历史任务执行链路追踪日志，体积增长很快，建议定期清理。"
+        },
+        {
+          "id": "workbuddy-blobs",
+          "displayName": "临时对象缓存 (blobs)",
+          "path": "{home}/.workbuddy/blobs",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "会话缓存的临时文件。"
+        },
+        {
+          "id": "workbuddy-logs",
+          "displayName": "运行日志 (logs)",
+          "path": "{home}/.workbuddy/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "WorkBuddy 客户端运行日志，建议清理。"
+        },
+        {
+          "id": "workbuddy-cache",
+          "displayName": "本地缓存 (cache)",
+          "path": "{home}/.workbuddy/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "客户端运行缓存，清理后按需自动重建。"
+        },
+        {
+          "id": "workbuddy-file-tree-manifests",
+          "displayName": "文件树索引缓存 (file-tree-manifests)",
+          "path": "{home}/.workbuddy/file-tree-manifests",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "项目目录结构快照缓存，建议清理，下次打开项目自动刷新。"
+        },
+        {
+          "id": "workbuddy-pending-telemetry",
+          "displayName": "待上报遥测缓存",
+          "path": "{appSupport}/WorkBuddy/pending-telemetry",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "临时统计日志队列，建议清理。"
+        },
+        {
+          "id": "workbuddy-ai-logs",
+          "displayName": "WorkBuddy AI 日志",
+          "path": "{home}/.workbuddy-ai/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "WorkBuddy AI 模块运行日志，建议清理。"
+        },
+        {
+          "id": "workbuddy-ai-traces",
+          "displayName": "WorkBuddy AI 追踪日志",
+          "path": "{home}/.workbuddy-ai/traces",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "执行追踪日志文件，建议清理。"
+        },
+        {
+          "id": "workbuddy-ai-blobs",
+          "displayName": "WorkBuddy AI 临时对象缓存",
+          "path": "{home}/.workbuddy-ai/blobs",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "临时二进制缓存，建议清理。"
+        },
+        {
+          "id": "workbuddy-ai-cache",
+          "displayName": "WorkBuddy AI 本地缓存",
+          "path": "{home}/.workbuddy-ai/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "运行缓存，清理后自动重建。"
+        },
+        {
+          "id": "workbuddy-ai-audit-log",
+          "displayName": "WorkBuddy AI 审计日志",
+          "path": "{home}/.workbuddy-ai/audit-log",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "历史审计日志文件，建议清理。"
+        },
+        {
+          "id": "codebuddy-logs",
+          "displayName": "CodeBuddy 运行日志",
+          "path": "{home}/.codebuddy/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "CodeBuddy 扩展日志，建议清理。"
+        },
+        {
+          "id": "codebuddy-diagnostics",
+          "displayName": "CodeBuddy 诊断报告",
+          "path": "{home}/.codebuddy/diagnostics",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "一次性诊断报告文件，建议清理。"
+        },
+        {
+          "id": "workbuddy-protected-binaries",
+          "displayName": "内置运行时组件 (binaries)",
+          "path": "{home}/.workbuddy/binaries",
+          "explanation": "WorkBuddy 内置的运行环境与核心可执行组件，删除后客户端将无法正常执行任务并需重新下载数百 MB，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "workbuddy-protected-plugins",
+          "displayName": "已安装插件 (plugins)",
+          "path": "{home}/.workbuddy/plugins",
+          "explanation": "包含已安装插件与扩展包，删除后需全部重装，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "workbuddy-protected-skills",
+          "displayName": "技能库 (skills)",
+          "path": "{home}/.workbuddy/skills",
+          "explanation": "保存自定义与已导入的 Skills 工作流，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "workbuddy-protected-security",
+          "displayName": "安全与凭据目录 (security)",
+          "path": "{home}/.workbuddy/security",
+          "explanation": "包含本地认证与安全校验数据，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "workbuddy-ai-protected-binaries",
+          "displayName": "WorkBuddy AI 运行时 (binaries)",
+          "path": "{home}/.workbuddy-ai/binaries",
+          "explanation": "核心运行时组件，删除后需重新下载，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "workbuddy-ai-protected-plugins",
+          "displayName": "WorkBuddy AI 插件 (plugins)",
+          "path": "{home}/.workbuddy-ai/plugins",
+          "explanation": "已安装的扩展插件，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "workbuddy-ai-protected-db",
+          "displayName": "WorkBuddy 主数据库 (workbuddy.db)",
+          "path": "{home}/.workbuddy-ai/workbuddy.db",
+          "explanation": "核心结构化数据库，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "doubao",
+      "description": "豆包工作伙伴、豆包客户端与豆包代理的会话任务目录、飞书对话归档与渲染缓存",
+      "id": "doubao",
+      "name": "豆包工作伙伴 / 豆包",
+      "protectedSummary": "已锁定保护 ~/Doubao/skills、~/DoubaoWork/skills、public_config.json、Cookies 与 Local Storage",
+      "symbolName": "bubble.left.and.exclamationmark.bubble.right.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "doubao-workspace-tasks",
+          "displayName": "豆包任务工作目录 (~/Doubao)",
+          "path": "{home}/Doubao",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "豆包生成的单次任务与文档产物目录（已自动排除 skills/），确认无需保留即可移入废纸篓。"
+        },
+        {
+          "id": "doubao-work-tasks",
+          "displayName": "豆包工作伙伴任务目录 (~/DoubaoWork)",
+          "path": "{home}/DoubaoWork",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "豆包工作伙伴生成的任务产出目录（已自动排除 skills/），确认一次性任务完成后可清理。"
+        },
+        {
+          "id": "doubao-lark-chats",
+          "displayName": "飞书协同对话记录 (lark-chats)",
+          "path": "{home}/.doubao/lark-chats",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "按日期保存的豆包协同聊天归档。",
+          "isSessionArchive": true
+        },
+        {
+          "id": "doubao-sys-cache",
+          "displayName": "豆包系统缓存",
+          "path": "{caches}/com.bytedance.doubao",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的豆包缓存，建议清理。"
+        },
+        {
+          "id": "doubao-named-cache",
+          "displayName": "Doubao 系统缓存",
+          "path": "{caches}/Doubao",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "系统缓存目录，清理后自动重建。"
+        },
+        {
+          "id": "doubao-sys-logs",
+          "displayName": "豆包运行日志",
+          "path": "{logs}/Doubao",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "客户端运行日志文件，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "doubao-app",
+            "root": "{appSupport}/Doubao",
+            "includeCachedData": false
+          }
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "jianyin-agent",
+            "root": "{appSupport}/jianyin_agent",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "doubao-protected-skills",
+          "displayName": "豆包技能目录 (~/Doubao/skills)",
+          "path": "{home}/Doubao/skills",
+          "explanation": "保存自定义豆包技能，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "doubao-work-protected-skills",
+          "displayName": "豆包工作伙伴技能 (~/DoubaoWork/skills)",
+          "path": "{home}/DoubaoWork/skills",
+          "explanation": "保存豆包工作伙伴自定义技能，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "doubao-protected-config",
+          "displayName": "豆包基础配置 (public_config.json)",
+          "path": "{appSupport}/Doubao/public_config.json",
+          "explanation": "客户端运行配置文件，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "jianyin-agent-protected-storage",
+          "displayName": "代理本地存储与登录态 (Local Storage)",
+          "path": "{appSupport}/jianyin_agent/Local Storage",
+          "explanation": "保存登录状态与本地偏好，删除将退出登录，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "workdaddy",
+      "description": "WorkDaddy 桌面助手的运行日志、更新包与状态缓存",
+      "id": "workdaddy",
+      "name": "WorkDaddy",
+      "protectedSummary": "已锁定保护 accounts 账号凭据、credit-usage.db 与 automations.json",
+      "symbolName": "briefcase.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "workdaddy-daemon-log",
+          "displayName": "后台守护日志 (daemon.log)",
+          "path": "{appSupport}/WorkDaddy/daemon.log",
+          "category": "logs",
+          "mode": "children",
+          "explanation": "WorkDaddy 守护进程运行日志，建议定期清理。"
+        },
+        {
+          "id": "workdaddy-launcher-log",
+          "displayName": "启动器日志 (launcher.log)",
+          "path": "{appSupport}/WorkDaddy/launcher.log",
+          "category": "logs",
+          "mode": "children",
+          "explanation": "启动器诊断日志，建议清理。"
+        },
+        {
+          "id": "workdaddy-update",
+          "displayName": "自动更新缓存 (update)",
+          "path": "{appSupport}/WorkDaddy/update",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "更新检查与安装包临时缓存，建议清理。"
+        },
+        {
+          "id": "workdaddy-discovery-cache",
+          "displayName": "自动化发现缓存",
+          "path": "{appSupport}/WorkDaddy/automation-discovery-cache.json",
+          "category": "cache",
+          "mode": "children",
+          "explanation": "可自动重建的缓存索引文件，建议清理。"
+        },
+        {
+          "id": "workdaddy-protected-accounts",
+          "displayName": "账号与凭据目录 (accounts)",
+          "path": "{appSupport}/WorkDaddy/accounts",
+          "explanation": "保存登录账号与授权信息，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "workdaddy-protected-db",
+          "displayName": "用量数据库 (credit-usage.db)",
+          "path": "{appSupport}/WorkDaddy/credit-usage.db",
+          "explanation": "本地用量记录数据库，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "workdaddy-protected-automations",
+          "displayName": "自动化配置 (automations.json)",
+          "path": "{appSupport}/WorkDaddy/automations.json",
+          "explanation": "保存用户配置的自动化任务，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "cursor",
+      "description": "Cursor AI 编辑器聊天会话、渲染缓存、更新包与运行日志",
+      "id": "cursor",
+      "name": "Cursor",
+      "protectedSummary": "已锁定保护 User/settings.json、globalStorage、workspaceStorage、Cookies、Local Storage、extensions 与 ~/.cursor/mcp.json",
+      "symbolName": "cursorarrow.rays",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "cursor-chats",
+          "displayName": "CLI 聊天会话",
+          "path": "{home}/.cursor/chats",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "Cursor CLI 保存的单条本地聊天会话，确认一次性即可勾选移入废纸篓。"
+        },
+        {
+          "id": "cursor-projects",
+          "displayName": "项目会话与 MCP 缓存",
+          "path": "{home}/.cursor/projects",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "按项目存放的 Cursor 会话记录与 MCP 缓存目录，移入废纸篓不影响项目源码与编辑器设置。"
+        },
+        {
+          "id": "cursor-updater",
+          "displayName": "客户端更新包缓存",
+          "path": "{appSupport}/cursor-updater",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "自动更新下载的安装包缓存，建议清理。"
+        },
+        {
+          "id": "cursor-sys-cache",
+          "displayName": "系统级应用缓存",
+          "path": "{caches}/Cursor",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS 系统 Caches 下的 Cursor 临时缓存，建议清理。"
+        },
+        {
+          "id": "cursor-shipit-cache",
+          "displayName": "ShipIt 更新缓存",
+          "path": "{caches}/com.todesktop.230313mzl4w4u92.ShipIt",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "桌面端自动更新器下载的增量更新缓存，建议清理。"
+        },
+        {
+          "id": "cursor-sys-logs",
+          "displayName": "系统运行日志",
+          "path": "{logs}/Cursor",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "macOS Logs 目录下的 Cursor 日志文件。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "cursor",
+            "root": "{appSupport}/Cursor",
+            "includeCachedData": true
+          }
+        },
+        {
+          "id": "cursor-protected-extensions",
+          "displayName": "已安装编辑器扩展 (extensions)",
+          "path": "{home}/.cursor/extensions",
+          "explanation": "包含已安装的所有 VSCode/Cursor 插件，删除后编辑器需重新安装全部扩展，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "cursor-protected-skills",
+          "displayName": "自定义技能库 (skills)",
+          "path": "{home}/.cursor/skills",
+          "explanation": "保存自定义 AI 技能与工作流规则，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "cursor-protected-mcp",
+          "displayName": "MCP 配置 (mcp.json)",
+          "path": "{home}/.cursor/mcp.json",
+          "explanation": "包含 MCP 服务器连接与密钥配置，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "cursor-protected-cookies",
+          "displayName": "登录态与 Cookie (Cookies)",
+          "path": "{appSupport}/Cursor/Cookies",
+          "explanation": "包含账号登录态，删除将导致重新登录，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "deepseek",
+      "description": "DeepSeek Harness 桌面端与 CLI 的聊天会话、渲染缓存与日志",
+      "id": "deepseek",
+      "name": "DeepSeek Harness",
+      "protectedSummary": "已锁定保护 ~/.dsh/electron 运行时、profiles 环境、settings.yaml、.credentials.yaml 与 .env",
+      "symbolName": "flame.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "deepseek-sessions",
+          "displayName": "聊天会话记录",
+          "path": "{home}/.dsh/sessions",
+          "category": "sessions",
+          "mode": "projectSessions",
+          "explanation": "按工作区展开单条 DeepSeek Harness 聊天会话记录。"
+        },
+        {
+          "id": "deepseek-sys-logs",
+          "displayName": "系统运行日志",
+          "path": "{logs}/DeepSeek Harness",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "DeepSeek Harness 运行诊断日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "deepseek-desktop",
+            "root": "{appSupport}/@deepseek-ai/dsh-desktop",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "deepseek-protected-electron",
+          "displayName": "内置 Electron 运行时 (electron)",
+          "path": "{home}/.dsh/electron",
+          "explanation": "客户端运行依赖的内置运行时框架，删除将导致应用无法启动，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "deepseek-protected-profiles",
+          "displayName": "运行环境配置 (profiles)",
+          "path": "{home}/.dsh/profiles",
+          "explanation": "保存模型与沙箱运行配置，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "deepseek-protected-creds",
+          "displayName": "认证凭据 (.credentials.yaml)",
+          "path": "{home}/.dsh/.credentials.yaml",
+          "explanation": "保存账号或 API 凭据，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "trae",
+      "description": "字节跳动 Trae 国际版与国内版编辑器缓存、更新包与运行日志",
+      "id": "trae",
+      "name": "Trae / Trae CN",
+      "protectedSummary": "已锁定保护 ~/.trae & ~/.trae-cn 的 extensions 扩展、plugins、memory、user_rules、skills 与 trae-jwt-token",
+      "symbolName": "chevron.left.forwardslash.chevron.right",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "trae-sys-cache",
+          "displayName": "Trae 系统缓存",
+          "path": "{caches}/Trae",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Trae 缓存，建议清理。"
+        },
+        {
+          "id": "trae-cn-sys-cache",
+          "displayName": "Trae CN 系统缓存",
+          "path": "{caches}/Trae CN",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Trae CN 缓存，建议清理。"
+        },
+        {
+          "id": "trae-sys-logs",
+          "displayName": "Trae 运行日志",
+          "path": "{logs}/Trae",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Trae 运行日志，建议清理。"
+        },
+        {
+          "id": "trae-cn-sys-logs",
+          "displayName": "Trae CN 运行日志",
+          "path": "{logs}/Trae CN",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Trae CN 运行日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "trae",
+            "root": "{appSupport}/Trae",
+            "includeCachedData": true
+          }
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "trae-cn",
+            "root": "{appSupport}/Trae CN",
+            "includeCachedData": true
+          }
+        },
+        {
+          "id": "trae-protected-extensions",
+          "displayName": "Trae 已安装扩展 (extensions)",
+          "path": "{home}/.trae/extensions",
+          "explanation": "包含已安装的全部编辑器插件，删除后需逐一重装，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "trae-cn-protected-extensions",
+          "displayName": "Trae CN 已安装扩展 (extensions)",
+          "path": "{home}/.trae-cn/extensions",
+          "explanation": "包含 Trae CN 已安装的全部扩展插件，体积常超过 2 GB，删除需重装，不建议直接清理。",
+          "protected": true
+        },
+        {
+          "id": "trae-protected-plugins",
+          "displayName": "Trae 插件目录 (plugins)",
+          "path": "{home}/.trae/plugins",
+          "explanation": "包含已安装的内置与扩展插件，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "trae-protected-memory",
+          "displayName": "Trae 长期记忆 (memory)",
+          "path": "{home}/.trae/memory",
+          "explanation": "保存跨会话项目记忆与偏好，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "trae-protected-token",
+          "displayName": "登录令牌 (trae-jwt-token)",
+          "path": "{home}/.trae/trae-jwt-token",
+          "explanation": "包含账号登录态令牌，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "trae-cn-protected-token",
+          "displayName": "Trae CN 登录令牌 (trae-jwt-token)",
+          "path": "{home}/.trae-cn/trae-jwt-token",
+          "explanation": "包含账号登录态令牌，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "qoder",
+      "description": "阿里 Qoder AI IDE 缓存、更新包与运行日志",
+      "id": "qoder",
+      "name": "Qoder",
+      "protectedSummary": "已锁定保护 ~/.qoder/extensions 扩展插件与 skills 技能库",
+      "symbolName": "curlybraces.square.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "qoder-sys-cache",
+          "displayName": "Qoder 系统缓存",
+          "path": "{caches}/Qoder",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 下的 Qoder 缓存，建议清理。"
+        },
+        {
+          "id": "qoder-sys-logs",
+          "displayName": "Qoder 运行日志",
+          "path": "{logs}/Qoder",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Qoder 运行日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "qoder",
+            "root": "{appSupport}/Qoder",
+            "includeCachedData": true
+          }
+        },
+        {
+          "id": "qoder-protected-extensions",
+          "displayName": "已安装扩展目录 (extensions)",
+          "path": "{home}/.qoder/extensions",
+          "explanation": "包含 Qoder 已安装的全部编辑器插件，删除后需重新下载安装，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "qoder-protected-skills",
+          "displayName": "自定义技能库 (skills)",
+          "path": "{home}/.qoder/skills",
+          "explanation": "保存自定义技能与规则，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "lingma",
+      "description": "阿里云通义灵码插件缓存、运行日志与本地代码检索索引",
+      "id": "lingma",
+      "name": "通义灵码",
+      "protectedSummary": "已锁定保护 ~/.lingma/bin 语言服务、model 模型、lingma_mcp.json 与 skills",
+      "symbolName": "text.badge.star",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "lingma-cache",
+          "displayName": "运行缓存 (cache)",
+          "path": "{home}/.lingma/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "通义灵码本地缓存，清理后按需自动重建，建议清理。"
+        },
+        {
+          "id": "lingma-logs",
+          "displayName": "运行日志 (logs)",
+          "path": "{home}/.lingma/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "通义灵码插件诊断日志，建议清理。"
+        },
+        {
+          "id": "lingma-tmp",
+          "displayName": "临时文件 (tmp)",
+          "path": "{home}/.lingma/tmp",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "运行过程产生的临时目录，建议清理。"
+        },
+        {
+          "id": "lingma-index",
+          "displayName": "本地代码检索索引 (index)",
+          "path": "{home}/.lingma/index",
+          "category": "cache",
+          "mode": "directory",
+          "recommendation": "reviewSuggested",
+          "explanation": "本地工程搜索索引，下次打开项目时会重新生成。"
+        },
+        {
+          "id": "lingma-protected-bin",
+          "displayName": "语言服务二进制 (bin)",
+          "path": "{home}/.lingma/bin",
+          "explanation": "通义灵码核心语言服务可执行文件，删除后插件需重新下载，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "lingma-protected-model",
+          "displayName": "本地补全模型 (model)",
+          "path": "{home}/.lingma/model",
+          "explanation": "代码补全依赖的轻量模型文件，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "lingma-protected-mcp",
+          "displayName": "MCP 配置文件 (lingma_mcp.json)",
+          "path": "{home}/.lingma/lingma_mcp.json",
+          "explanation": "保存已配置的 MCP 服务连接，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "kiro",
+      "description": "AWS Kiro AI IDE 的应用缓存、更新包与运行日志",
+      "id": "kiro",
+      "name": "Kiro",
+      "protectedSummary": "已锁定保护 ~/.kiro/extensions、skills、steering 与 settings",
+      "symbolName": "wand.and.stars",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "kiro-sys-cache",
+          "displayName": "系统级应用缓存",
+          "path": "{caches}/Kiro",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Kiro 缓存，建议清理。"
+        },
+        {
+          "id": "kiro-sys-logs",
+          "displayName": "系统运行日志",
+          "path": "{logs}/Kiro",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "macOS Logs 目录下的 Kiro 日志。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "kiro",
+            "root": "{appSupport}/Kiro",
+            "includeCachedData": true
+          }
+        },
+        {
+          "id": "kiro-protected-extensions",
+          "displayName": "已安装扩展目录 (extensions)",
+          "path": "{home}/.kiro/extensions",
+          "explanation": "包含 Kiro 已安装的编辑器扩展，体积较大但删除后需全部重装，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "kiro-protected-steering",
+          "displayName": "规则与技能目录 (steering)",
+          "path": "{home}/.kiro/steering",
+          "explanation": "保存自定义项目引导规则，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "zcode",
+      "description": "智谱 ZCode 与智谱清言桌面端的会话工作区、操作产物、缓存与日志",
+      "id": "zcode",
+      "name": "ZCode / 智谱清言",
+      "protectedSummary": "已锁定保护 ~/.zcode/{agents, cli, bundled-agents} 与 ai.z.zcode 密钥存储",
+      "symbolName": "z.square.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "zcode-workspace",
+          "displayName": "ZCode 会话工作区 (workspace)",
+          "path": "{home}/.zcode/workspace",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "按任务/会话保存的 ZCode 工作产物，确认一次性任务完成后可清理。"
+        },
+        {
+          "id": "zcode-projects",
+          "displayName": "ZCode 项目会话 (projects)",
+          "path": "{home}/.zcode/projects",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "项目维度保存的会话目录，按需勾选清理。"
+        },
+        {
+          "id": "zcode-computer-use",
+          "displayName": "电脑操作临时产物 (computer-use)",
+          "path": "{home}/.zcode/computer-use",
+          "category": "temporary",
+          "mode": "directory",
+          "recommendation": "reviewSuggested",
+          "explanation": "Computer Use 运行时保存的截图和产物。确认无需回看后可勾选。"
+        },
+        {
+          "id": "zcode-logs",
+          "displayName": "ZCode 运行日志 (logs)",
+          "path": "{home}/.zcode/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "ZCode 运行日志文件，建议清理。"
+        },
+        {
+          "id": "zcode-cache",
+          "displayName": "ZCode 本地缓存 (cache)",
+          "path": "{home}/.zcode/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "运行缓存，建议清理。"
+        },
+        {
+          "id": "zcode-backup",
+          "displayName": "ZCode 历史备份 (backup)",
+          "path": "{home}/.zcode/backup",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "历史自动备份临时目录，建议清理。"
+        },
+        {
+          "id": "chatglm-dawn-cache",
+          "displayName": "智谱清言 Dawn 缓存",
+          "path": "{appSupport}/chatglm/DawnCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "图形着色器缓存，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "zcode-session",
+            "root": "{appSupport}/ZCode/session",
+            "includeCachedData": false
+          }
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "chatglm",
+            "root": "{appSupport}/chatglm",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "zcode-protected-agents",
+          "displayName": "内置代理引擎 (agents)",
+          "path": "{home}/.zcode/agents",
+          "explanation": "ZCode 核心代理运行环境，删除后需重新下载数百 MB，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "zcode-protected-cli",
+          "displayName": "内置 CLI 运行时 (cli)",
+          "path": "{home}/.zcode/cli",
+          "explanation": "内置命令行工具链，删除会影响运行，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "zcode-protected-bundled",
+          "displayName": "预置代理组件 (bundled-agents)",
+          "path": "{home}/.zcode/bundled-agents",
+          "explanation": "客户端自带核心组件，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "zcode-protected-auth",
+          "displayName": "认证与密钥库 (ai.z.zcode)",
+          "path": "{appSupport}/ai.z.zcode",
+          "explanation": "包含 API Key 与登录凭据存储，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "windsurf",
+      "description": "Windsurf / Codeium 聊天会话、编辑器缓存、扩展缓存与运行日志",
+      "id": "windsurf",
+      "name": "Windsurf",
+      "protectedSummary": "已锁定保护 ~/.codeium/database、memories、User/settings.json、Cookies 与 Local Storage",
+      "symbolName": "wind",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "windsurf-cascade-sessions",
+          "displayName": "Cascade 聊天会话",
+          "path": "{home}/.codeium/windsurf/cascade",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "Windsurf Cascade 单条对话记录文件，确认一次性后可移入废纸篓。"
+        },
+        {
+          "id": "windsurf-sys-cache",
+          "displayName": "系统级应用缓存",
+          "path": "{caches}/Windsurf",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Windsurf 缓存，建议清理。"
+        },
+        {
+          "id": "windsurf-shipit-cache",
+          "displayName": "ShipIt 更新缓存",
+          "path": "{caches}/com.exafunction.windsurf.ShipIt",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "自动更新器留存的安装包缓存，建议清理。"
+        },
+        {
+          "id": "windsurf-sys-logs",
+          "displayName": "系统运行日志",
+          "path": "{logs}/Windsurf",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "macOS Logs 目录下的 Windsurf 日志。"
+        },
+        {
+          "id": "windsurf-codeium-logs",
+          "displayName": "Codeium 引擎日志",
+          "path": "{home}/.codeium/windsurf/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Codeium 语言服务日志，建议清理。"
+        },
+        {
+          "id": "windsurf-codeium-cache",
+          "displayName": "Codeium 临时缓存",
+          "path": "{home}/.codeium/windsurf/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "Codeium 本地临时缓存，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "windsurf",
+            "root": "{appSupport}/Windsurf",
+            "includeCachedData": true
+          }
+        },
+        {
+          "id": "windsurf-protected-database",
+          "displayName": "Codeium 本地索引数据库 (database)",
+          "path": "{home}/.codeium/database",
+          "explanation": "包含代码库语义索引与上下文核心数据库，删除将导致重建全部索引，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "windsurf-protected-memories",
+          "displayName": "用户记忆库 (memories)",
+          "path": "{home}/.codeium/memories",
+          "explanation": "包含跨会话保存的记忆与规则，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "claudeDesktop",
+      "description": "Claude macOS 桌面应用本地会话、缓存、更新包与崩溃日志",
+      "id": "claude-desktop",
+      "name": "Claude Desktop",
+      "protectedSummary": "已锁定保护 claude_desktop_config.json、config.json、Cookies、Local Storage 与 Session Storage",
+      "symbolName": "bubble.left.and.text.bubble.right",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "claude-desktop-local-agent-sessions",
+          "displayName": "本地 Agent 会话",
+          "path": "{appSupport}/Claude/local-agent-mode-sessions",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "Claude Desktop 本地代理模式保存的单次会话目录，确认一次性后可清理。"
+        },
+        {
+          "id": "claude-desktop-code-sessions",
+          "displayName": "桌面端 Code 会话",
+          "path": "{appSupport}/Claude/claude-code-sessions",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "Claude Desktop 内置代码助手会话目录，移入废纸篓不影响应用配置。"
+        },
+        {
+          "id": "claude-desktop-sys-cache",
+          "displayName": "系统级应用缓存",
+          "path": "{caches}/com.anthropic.claudefordesktop",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 下的 Claude Desktop 缓存，建议清理。"
+        },
+        {
+          "id": "claude-desktop-shipit",
+          "displayName": "ShipIt 更新缓存",
+          "path": "{caches}/com.anthropic.claudefordesktop.ShipIt",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "桌面端自动更新下载的临时更新包，建议清理。"
+        },
+        {
+          "id": "claude-desktop-logs",
+          "displayName": "应用运行日志",
+          "path": "{logs}/Claude",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "包含 MCP 与客户端主进程运行日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "claude-desktop",
+            "root": "{appSupport}/Claude",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "claude-desktop-protected-config",
+          "displayName": "MCP 与桌面端配置 (claude_desktop_config.json)",
+          "path": "{appSupport}/Claude/claude_desktop_config.json",
+          "explanation": "保存已接入的 MCP 服务器列表与环境变量，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "claude-desktop-protected-storage",
+          "displayName": "本地存储与登录态 (Local Storage)",
+          "path": "{appSupport}/Claude/Local Storage",
+          "explanation": "包含桌面端登录与偏好状态，删除后需要重新登录，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "chatgpt",
+      "description": "ChatGPT macOS 桌面应用缓存、辅助进程日志与更新包",
+      "id": "chatgpt-desktop",
+      "name": "ChatGPT Desktop",
+      "protectedSummary": "已锁定保护 Keychain 凭据、HTTPStorages、Cookies、Preferences 及配对扩展配置",
+      "symbolName": "sparkles",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "chatgpt-sys-cache",
+          "displayName": "应用系统缓存",
+          "path": "{caches}/com.openai.chat",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "ChatGPT macOS 客户端网络与资源缓存，建议清理，不影响登录状态。"
+        },
+        {
+          "id": "chatgpt-shipit",
+          "displayName": "ShipIt 更新缓存",
+          "path": "{caches}/com.openai.chat.ShipIt",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "客户端更新器下载的临时更新文件，建议清理。"
+        },
+        {
+          "id": "chatgpt-helper-cache",
+          "displayName": "ChatGPTHelper 缓存与诊断",
+          "path": "{caches}/ChatGPTHelper",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "辅助进程产生的异步日志与诊断缓存，建议清理。"
+        },
+        {
+          "id": "chatgpt-app-cache",
+          "displayName": "本地应用缓存",
+          "path": "{appSupport}/com.openai.chat/Cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "本地静态资源缓存目录，建议清理。"
+        },
+        {
+          "id": "chatgpt-app-logs",
+          "displayName": "本地运行日志",
+          "path": "{appSupport}/com.openai.chat/Logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "桌面应用本地诊断日志，建议清理。"
+        },
+        {
+          "id": "chatgpt-sys-logs",
+          "displayName": "系统日志 (com.openai.chat)",
+          "path": "{logs}/com.openai.chat",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "macOS Logs 目录下的 ChatGPT 运行日志。"
+        },
+        {
+          "id": "chatgpt-named-logs",
+          "displayName": "系统日志 (ChatGPT)",
+          "path": "{logs}/ChatGPT",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "macOS Logs 目录下的 ChatGPT 辅助日志。"
+        },
+        {
+          "id": "chatgpt-protected-pairing",
+          "displayName": "应用配对扩展配置 (app_pairing_extensions)",
+          "path": "{appSupport}/com.openai.chat/app_pairing_extensions",
+          "explanation": "用于“与编辑器协同工作”的桌面扩展授权配置，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "opencode",
+      "description": "OpenCode CLI 的会话文件、运行日志与临时缓存目录",
+      "id": "opencode",
+      "name": "OpenCode",
+      "protectedSummary": "已锁定保护 ~/.local/share/opencode/opencode.db 主数据库、~/.opencode/bin 与认证配置",
+      "symbolName": "chevron.left.forwardslash.chevron.right",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "opencode-file-sessions",
+          "displayName": "文件型聊天会话",
+          "path": "{home}/.local/share/opencode/storage/session",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "OpenCode 文件存储模式下的单条会话记录，清理不影响 opencode.db 主库。"
+        },
+        {
+          "id": "opencode-logs",
+          "displayName": "OpenCode 运行日志",
+          "path": "{home}/.local/share/opencode/log",
+          "category": "logs",
+          "mode": "children",
+          "explanation": "OpenCode CLI 会话与调试日志文件，建议清理，不影响历史主库。"
+        },
+        {
+          "id": "opencode-xdg-cache",
+          "displayName": "OpenCode 缓存目录",
+          "path": "{home}/.cache/opencode",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "XDG 缓存目录中的下载与构建缓存，建议清理。"
+        },
+        {
+          "id": "opencode-mac-cache",
+          "displayName": "系统级缓存",
+          "path": "{caches}/opencode",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 下的 OpenCode 缓存。"
+        },
+        {
+          "id": "opencode-tmp",
+          "displayName": "临时目录",
+          "path": "{home}/.opencode/tmp",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "OpenCode 运行产生的临时文件。"
+        },
+        {
+          "id": "opencode-protected-db",
+          "displayName": "OpenCode 主数据库 (opencode.db)",
+          "path": "{home}/.local/share/opencode/opencode.db",
+          "explanation": "存储全部历史会话记录的 SQLite 主库，删除会清空全部对话，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "opencode-protected-bin",
+          "displayName": "OpenCode 运行时二进制 (bin)",
+          "path": "{home}/.opencode/bin",
+          "explanation": "包含 CLI 核心二进制组件，删除后需重新下载，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "pi",
+      "description": "Pi Coding Agent 各工作区的本地聊天会话记录",
+      "id": "pi",
+      "name": "Pi",
+      "protectedSummary": "已锁定保护 ~/.pi/agent/auth.json、settings.json、models.json、mcp.json、skills 与 extensions",
+      "symbolName": "terminal.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "pi-agent-sessions",
+          "displayName": "工作区聊天会话",
+          "path": "{home}/.pi/agent/sessions",
+          "category": "sessions",
+          "mode": "projectSessions",
+          "explanation": "按项目工作区展开单条 Pi 聊天会话（.jsonl），自动提取项目名与首条提问摘要。"
+        },
+        {
+          "id": "pi-protected-auth",
+          "displayName": "认证凭据 (auth.json)",
+          "path": "{home}/.pi/agent/auth.json",
+          "explanation": "包含模型接口认证凭据，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "pi-protected-extensions",
+          "displayName": "自定义扩展 (extensions)",
+          "path": "{home}/.pi/agent/extensions",
+          "explanation": "包含本地安装的 Pi 扩展脚本，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "pi-protected-skills",
+          "displayName": "技能库 (skills)",
+          "path": "{home}/.pi/agent/skills",
+          "explanation": "包含自定义 Skills 提示词与工具，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "gemini",
+      "description": "Gemini CLI 与 Antigravity 桌面端/CLI 的会话工作区、缓存及临时目录",
+      "id": "gemini-antigravity",
+      "name": "Gemini / Antigravity",
+      "protectedSummary": "已锁定保护 oauth_creds.json、google_accounts.json、settings.json、skills 与 conversation_summaries.db 主数据库",
+      "symbolName": "sparkle",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "gemini-antigravity-brain",
+          "displayName": "Antigravity 会话工作区",
+          "path": "{home}/.gemini/antigravity/brain",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "单次对话产生的本地产物与草稿目录。"
+        },
+        {
+          "id": "gemini-antigravity-cli-brain",
+          "displayName": "Antigravity CLI 会话工作区",
+          "path": "{home}/.gemini/antigravity-cli/brain",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "命令行会话产生的独立临时工作区目录，任务完成后可勾选清理。"
+        },
+        {
+          "id": "gemini-antigravity-cache",
+          "displayName": "Antigravity 运行缓存",
+          "path": "{home}/.gemini/antigravity/cache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "Antigravity 运行缓存目录，建议清理，按需自动重建。"
+        },
+        {
+          "id": "gemini-cli-tmp",
+          "displayName": "Gemini CLI 临时会话目录",
+          "path": "{home}/.gemini/tmp",
+          "category": "temporary",
+          "mode": "children",
+          "explanation": "Gemini CLI 运行期间产生的临时目录与中间文件，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "antigravity-desktop",
+            "root": "{appSupport}/Antigravity",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "gemini-protected-summaries-db",
+          "displayName": "会话摘要主数据库 (conversation_summaries.db)",
+          "path": "{home}/.gemini/antigravity/conversation_summaries.db",
+          "explanation": "存储对话历史索引与摘要的 SQLite 主数据库，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "gemini-protected-oauth",
+          "displayName": "Google 登录凭据 (oauth_creds.json)",
+          "path": "{home}/.gemini/oauth_creds.json",
+          "explanation": "包含账号 OAuth 认证令牌，删除后需要重新授权登录，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "multica",
+      "description": "Multica 桌面端缓存、自动更新包与本地代理会话记录",
+      "id": "multica",
+      "name": "Multica",
+      "protectedSummary": "已锁定保护 IndexedDB、Local Storage、Session Storage、~/.multica/profiles 与 daemon.id",
+      "symbolName": "square.stack.3d.up.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "multica-pi-sessions",
+          "displayName": "本地代理会话 (pi-sessions)",
+          "path": "{home}/.multica/pi-sessions",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "本地代理执行产生的单次会话目录，历史任务完成后可按需移入废纸篓。"
+        },
+        {
+          "id": "multica-updater-cache",
+          "displayName": "桌面端更新包缓存",
+          "path": "{caches}/@multicadesktop-updater",
+          "category": "temporary",
+          "mode": "directory",
+          "explanation": "自动更新器下载的临时安装包缓存，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "multica",
+            "root": "{appSupport}/Multica",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "multica-protected-profiles",
+          "displayName": "工作区配置与身份 (profiles)",
+          "path": "{home}/.multica/profiles",
+          "explanation": "保存工作区运行配置与认证信息，删除后需重新配置守护进程，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "multica-protected-indexeddb",
+          "displayName": "本地应用状态 (IndexedDB)",
+          "path": "{appSupport}/Multica/IndexedDB",
+          "explanation": "保存桌面端登录与界面本地状态，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "copilot",
+      "description": "GitHub Copilot CLI 与本地代理的会话状态、缓存和运行日志",
+      "id": "copilot",
+      "name": "GitHub Copilot",
+      "protectedSummary": "已锁定保护 ~/.copilot/mcp-config.json、skills 与 installed-plugins",
+      "symbolName": "chevron.left.slash.chevron.right",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "copilot-session-state",
+          "displayName": "Copilot 会话状态",
+          "path": "{home}/.copilot/session-state",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "Copilot CLI 保存的单条本地会话状态，确认一次性即可移入废纸篓。"
+        },
+        {
+          "id": "copilot-logs",
+          "displayName": "Copilot 运行日志",
+          "path": "{home}/.copilot/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Copilot 运行诊断日志，建议清理。"
+        },
+        {
+          "id": "copilot-sys-cache",
+          "displayName": "系统级 Copilot 缓存",
+          "path": "{caches}/copilot",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Copilot 缓存，建议清理。"
+        },
+        {
+          "id": "copilot-protected-mcp",
+          "displayName": "MCP 配置 (mcp-config.json)",
+          "path": "{home}/.copilot/mcp-config.json",
+          "explanation": "包含 MCP 服务配置，已锁定保护。",
+          "protected": true
+        },
+        {
+          "id": "copilot-protected-plugins",
+          "displayName": "已安装插件 (installed-plugins)",
+          "path": "{home}/.copilot/installed-plugins",
+          "explanation": "包含已安装 Copilot 插件，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "cherry",
+      "description": "Cherry Studio 多模型桌面客户端缓存与日志",
+      "id": "cherry-studio",
+      "name": "Cherry Studio",
+      "protectedSummary": "已锁定保护 IndexedDB 对话库、Local Storage、~/.cherrystudio/bin 与 mcp 配置",
+      "symbolName": "heart.circle.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "cherry-sys-cache",
+          "displayName": "系统级应用缓存",
+          "path": "{caches}/CherryStudio",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Cherry Studio 缓存，建议清理。"
+        },
+        {
+          "id": "cherry-sys-logs",
+          "displayName": "系统运行日志",
+          "path": "{logs}/CherryStudio",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Cherry Studio 运行日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "cherry",
+            "root": "{appSupport}/CherryStudio",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "cherry-protected-bin",
+          "displayName": "内置工具二进制 (bin)",
+          "path": "{home}/.cherrystudio/bin",
+          "explanation": "包含 Cherry Studio 内置运行时工具（如 uv/bun），删除后需重新下载，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "cherry-protected-indexeddb",
+          "displayName": "本地聊天与知识库数据 (IndexedDB)",
+          "path": "{appSupport}/CherryStudio/IndexedDB",
+          "explanation": "保存本地全部聊天记录、API Key 配置与助手设置，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "anythingllm",
+      "description": "AnythingLLM 本地知识库桌面端渲染缓存与日志",
+      "id": "anythingllm",
+      "name": "AnythingLLM",
+      "protectedSummary": "已锁定保护 storage 向量知识库、databases、Local Storage 与 Cookies",
+      "symbolName": "books.vertical.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "anythingllm-dawn-cache",
+          "displayName": "Dawn 图形缓存",
+          "path": "{appSupport}/anythingllm-desktop/DawnCache",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "图形渲染缓存，建议清理。"
+        },
+        {
+          "id": "anythingllm-sys-logs",
+          "displayName": "运行日志",
+          "path": "{logs}/anythingllm-desktop",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "桌面端诊断日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "anythingllm",
+            "root": "{appSupport}/anythingllm-desktop",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "anythingllm-protected-storage",
+          "displayName": "本地知识库与向量存储 (storage)",
+          "path": "{appSupport}/anythingllm-desktop/storage",
+          "explanation": "保存已上传文档、向量索引与对话数据库，删除将丢失全部知识库，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "t3",
+      "description": "T3 Code 编程助手桌面缓存与运行缓存",
+      "id": "t3-code",
+      "name": "T3 Code",
+      "protectedSummary": "已锁定保护 ~/.t3/tools、userdata、worktrees 与桌面端登录态",
+      "symbolName": "bolt.horizontal.circle.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "t3-cli-caches",
+          "displayName": "T3 本地缓存 (caches)",
+          "path": "{home}/.t3/caches",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "T3 运行缓存，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "t3code",
+            "root": "{appSupport}/t3code-v2",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "t3-protected-tools",
+          "displayName": "内置运行时工具 (tools)",
+          "path": "{home}/.t3/tools",
+          "explanation": "包含内置 CLI 工具链，删除后需重新下载，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "t3-protected-userdata",
+          "displayName": "用户核心数据 (userdata)",
+          "path": "{home}/.t3/userdata",
+          "explanation": "包含本地配置与项目元数据，不建议清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "stepfun",
+      "description": "阶跃星辰桌面客户端渲染缓存与日志",
+      "id": "stepfun",
+      "name": "阶跃星辰",
+      "protectedSummary": "已锁定保护 Cookies、Local Storage、Session Storage 与 setting.json",
+      "symbolName": "star.leadinghalf.filled",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "stepfun",
+            "root": "{appSupport}/stepfun-desktop",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "stepfun-protected-storage",
+          "displayName": "登录态与本地存储 (Local Storage)",
+          "path": "{appSupport}/stepfun-desktop/Local Storage",
+          "explanation": "包含桌面端登录状态与个人设置，不建议清理。",
+          "protected": true
+        },
+        {
+          "id": "stepfun-protected-cookies",
+          "displayName": "Cookie 凭据 (Cookies)",
+          "path": "{appSupport}/stepfun-desktop/Cookies",
+          "explanation": "包含账号登录态，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "kimi",
+      "description": "月之暗面 Kimi 桌面客户端缓存与运行日志",
+      "id": "kimi",
+      "name": "Kimi",
+      "protectedSummary": "已锁定保护 Cookies、Local Storage、Session Storage 与用户配置",
+      "symbolName": "moon.stars.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "kimi-sys-cache",
+          "displayName": "Kimi 系统缓存",
+          "path": "{caches}/com.moonshot.kimi",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 目录下的 Kimi 缓存，建议清理。"
+        },
+        {
+          "id": "kimi-sys-logs",
+          "displayName": "Kimi 运行日志",
+          "path": "{logs}/Kimi",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Kimi 客户端诊断日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "kimi",
+            "root": "{appSupport}/Kimi",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "kimi-protected-storage",
+          "displayName": "登录态与本地存储 (Local Storage)",
+          "path": "{appSupport}/Kimi/Local Storage",
+          "explanation": "包含账号登录与本地状态，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "yuanbao",
+      "description": "腾讯元宝 macOS 桌面客户端缓存与运行日志",
+      "id": "yuanbao",
+      "name": "腾讯元宝",
+      "protectedSummary": "已锁定保护 Cookies、Local Storage、Session Storage 与账号配置",
+      "symbolName": "sparkles.tv.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "yuanbao-sys-cache",
+          "displayName": "腾讯元宝系统缓存",
+          "path": "{caches}/com.tencent.yuanbao",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "macOS Caches 下的元宝缓存，建议清理。"
+        },
+        {
+          "id": "yuanbao-sys-logs",
+          "displayName": "腾讯元宝运行日志",
+          "path": "{logs}/Tencent Yuanbao",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "元宝运行日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "yuanbao",
+            "root": "{appSupport}/Tencent Yuanbao",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "yuanbao-protected-storage",
+          "displayName": "登录态与本地存储 (Local Storage)",
+          "path": "{appSupport}/Tencent Yuanbao/Local Storage",
+          "explanation": "包含账号登录态，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "ollama",
+      "description": "Ollama 本地大模型运行时日志（自动保护已下载大模型权重与密钥）",
+      "id": "ollama",
+      "name": "Ollama",
+      "protectedSummary": "已锁定保护 ~/.ollama/models 本地模型权重与 SSH 密钥对 (id_ed25519)",
+      "symbolName": "cube.transparent.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "ollama-logs",
+          "displayName": "Ollama 运行日志",
+          "path": "{home}/.ollama/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Ollama 推理服务运行日志，建议清理，不影响已下载模型。"
+        },
+        {
+          "id": "ollama-protected-models",
+          "displayName": "本地大模型权重库 (models)",
+          "path": "{home}/.ollama/models",
+          "explanation": "已下载的 Ollama 模型权重。移入后需重新下载才能使用。",
+          "protected": true
+        },
+        {
+          "id": "ollama-protected-key",
+          "displayName": "节点身份私钥 (id_ed25519)",
+          "path": "{home}/.ollama/id_ed25519",
+          "explanation": "Ollama 身份认证私钥，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "lmstudio",
+      "description": "LM Studio 本地大模型客户端缓存与运行日志",
+      "id": "lm-studio",
+      "name": "LM Studio",
+      "protectedSummary": "已锁定保护 ~/.lmstudio/models 与 ~/.cache/lm-studio/models 本地模型权重",
+      "symbolName": "cpu.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "lmstudio-logs",
+          "displayName": "推理与服务日志",
+          "path": "{home}/.cache/lm-studio/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "LM Studio 本地服务日志，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "lmstudio",
+            "root": "{appSupport}/LM Studio",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "lmstudio-protected-models",
+          "displayName": "本地模型权重目录 (models)",
+          "path": "{home}/.lmstudio/models",
+          "explanation": "存放已下载的 GGUF/MLX 模型文件，删除后需重新下载，不建议直接清理。",
+          "protected": true
+        },
+        {
+          "id": "lmstudio-protected-cache-models",
+          "displayName": "本地模型缓存目录 (cache/models)",
+          "path": "{home}/.cache/lm-studio/models",
+          "explanation": "存放已下载的本地模型权重文件，不建议直接清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "chatbox",
+      "description": "Chatbox 多模型桌面客户端缓存与日志",
+      "id": "chatbox",
+      "name": "Chatbox",
+      "protectedSummary": "已锁定保护 Local Storage、IndexedDB 对话历史与 API Key 配置",
+      "symbolName": "ellipsis.bubble.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "chatbox",
+            "root": "{appSupport}/xyz.chatboxapp.app",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "chatbox-protected-storage",
+          "displayName": "本地会话与密钥配置 (Local Storage)",
+          "path": "{appSupport}/xyz.chatboxapp.app/Local Storage",
+          "explanation": "保存聊天记录与各模型 API Key，已锁定保护。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "jan",
+      "description": "Jan 离线 AI 客户端缓存、日志与历史会话线程",
+      "id": "jan",
+      "name": "Jan",
+      "protectedSummary": "已锁定保护 ~/jan/models 本地模型权重与核心设置",
+      "symbolName": "brain.head.profile",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "jan-threads",
+          "displayName": "Jan 聊天会话线程 (threads)",
+          "path": "{home}/jan/threads",
+          "category": "sessions",
+          "mode": "children",
+          "explanation": "Jan 保存的单条本地对话线程目录，确认一次性后可移入废纸篓。"
+        },
+        {
+          "id": "jan-logs",
+          "displayName": "Jan 运行日志",
+          "path": "{home}/jan/logs",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Jan 运行日志文件，建议清理。"
+        },
+        {
+          "use": "electronCache",
+          "with": {
+            "prefix": "jan",
+            "root": "{appSupport}/Jan",
+            "includeCachedData": false
+          }
+        },
+        {
+          "id": "jan-protected-models",
+          "displayName": "Jan 本地模型目录 (models)",
+          "path": "{home}/jan/models",
+          "explanation": "包含本地大模型权重文件，不建议直接清理。",
+          "protected": true
+        }
+      ]
+    },
+    {
+      "accentToken": "zed",
+      "description": "Zed AI 编辑器系统缓存与运行日志",
+      "id": "zed",
+      "name": "Zed",
+      "protectedSummary": "已锁定保护 ~/.config/zed 核心配置与已安装扩展",
+      "symbolName": "chevron.forward.square.fill",
+      "platforms": [
+        "macos"
+      ],
+      "rules": [
+        {
+          "id": "zed-sys-cache",
+          "displayName": "Zed 系统缓存",
+          "path": "{caches}/dev.zed.Zed",
+          "category": "cache",
+          "mode": "directory",
+          "explanation": "Zed 编辑器运行缓存，清理后按需自动重建。"
+        },
+        {
+          "id": "zed-sys-logs",
+          "displayName": "Zed 运行日志",
+          "path": "{logs}/Zed",
+          "category": "logs",
+          "mode": "directory",
+          "explanation": "Zed 运行与诊断日志，建议清理。"
+        },
+        {
+          "id": "zed-protected-config",
+          "displayName": "Zed 核心配置 (~/.config/zed)",
+          "path": "{home}/.config/zed",
+          "explanation": "保存编辑器设置、快捷键与 AI 模型配置，已锁定保护。",
+          "protected": true
+        }
+      ]
+    }
+  ]
+}

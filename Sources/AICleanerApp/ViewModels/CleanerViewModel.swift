@@ -1242,9 +1242,9 @@ final class CleanerViewModel {
             age: selectedAgeFilter
         )
         let preSorted = sortOrder == .sizeDescending ? currentScope?.defaultSortedItems : nil
-        let filtered = filter.applying(to: preSorted ?? scopedItems) { id in
+        let filtered = filter.applying(to: preSorted ?? scopedItems, searchIndex: { id in
             presentationByID[id]?.searchableLowercased
-        }
+        })
         let sorted = preSorted == nil ? sortOrder.sorting(filtered) : filtered
         let buckets = ScanItemBuckets(items: sorted)
         filteredItems = sorted

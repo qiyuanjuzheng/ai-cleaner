@@ -311,9 +311,36 @@ enum CoreJSONValue: Decodable, Sendable {
     }
 }
 
-/// 用户数据存储损坏保护（ADR 0001 第 7.3 节）：
-/// JSON 解析失败时将原文件重命名为 `<name>.corrupt-<UTC 时间戳>.json` 保留下来，防止后续保存覆盖用户历史数据。
+public enum CoreStorageError: Error, Sendable, CustomStringConvertible {
+    case corruptFile(path: String, backupPath: String?)
+
+    public var description: String {
+        switch self {
+        case let .corruptFile(path, backupPath):
+            if let backupPath { return "数据文件无法解析：\(path)。原文件已备份至 \(backupPath)" }
+            return "数据文件无法解析：\(path)。原文件保留在原位置，请先修复。"
+        }
+    }
+}
+
+/// 用户数据存储损坏保护（ADR 0001 第 7.3 节）。
 public enum CoreStorageIO {
+    public static func readJSON<Value: Decodable>(
+        _ type: Value.Type, at url: URL, quarantineOnCorruption: Bool = true
+    ) throws -> Value? {
+        let path = PlatformPath.fileSystemPath(for: url)
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            return try decoder.decode(type, from: data)
+        } catch {
+            let backup = quarantineOnCorruption ? quarantineCorruptFile(at: url) : nil
+            throw CoreStorageError.corruptFile(path: path, backupPath: backup.map(PlatformPath.fileSystemPath))
+        }
+    }
+
     @discardableResult
     public static func quarantineCorruptFile(at storageURL: URL, now: Date = Date()) -> URL? {
         let fm = FileManager.default

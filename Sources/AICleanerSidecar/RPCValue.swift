@@ -1,3 +1,4 @@
+import AICleanerCore
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -115,6 +116,9 @@ struct RPCError: Error, Sendable {
     static let invalidConfirmation = Self(-32006, "Preview confirmation expired", name: "CONFIRMATION_TOKEN_INVALID")
 
     static func storage(_ error: Error) -> Self {
-        Self(-32020, "Storage error", name: "STORAGE_IO_ERROR", reason: String(describing: error))
+        if let error = error as? CoreStorageError {
+            return Self(-32021, "Storage data is corrupt", name: "STORAGE_CORRUPT", reason: error.description)
+        }
+        return Self(-32020, "Storage error", name: "STORAGE_IO_ERROR", reason: String(describing: error))
     }
 }

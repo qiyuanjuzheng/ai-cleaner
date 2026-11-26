@@ -17,11 +17,14 @@ actor SidecarServer {
         let itemsByID: [String: CleanableItem]
         let searchIndex: [String: String]
         let snapshots: [String: FileCleanupSnapshot]
+        let protectedPaths: Set<String>
 
         init(id: String, report: ScanReport, snapshots: [String: FileCleanupSnapshot],
-             protectedPaths: Set<String>, platform: any PlatformAdapter) {
+             protectedPaths: Set<String>, excludedItems: [ExcludedItemRecord], platform: any PlatformAdapter) {
             let catalog = ProjectSessionCatalog(items: report.projectItems)
-            let displayReport = report.applyingProjectProtection(catalog.protection(for: protectedPaths, platform: platform))
+            let matcher = ExcludedItemMatcher(records: excludedItems, caseInsensitive: platform.pathsAreCaseInsensitive)
+            let displayReport = report.filtering(excluding: matcher)
+                .applyingProjectProtection(catalog.protection(for: protectedPaths, platform: platform))
             let itemsByID = Dictionary(displayReport.allDisplayedItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             self.id = id
             self.rawReport = report
@@ -30,12 +33,19 @@ actor SidecarServer {
             self.itemsByID = itemsByID
             self.searchIndex = itemsByID.mapValues(ScanItemFilter.searchableText)
             self.snapshots = snapshots
+            self.protectedPaths = protectedPaths
         }
+    }
+
+    private struct ProjectScope {
+        let project: SessionProject
+        let clientID: String?
     }
 
     private struct ScopedItems {
         let all: [CleanableItem]
         let filtered: [CleanableItem]
+        let isProjectScope: Bool
     }
 
     private struct Preview {
@@ -53,6 +63,7 @@ actor SidecarServer {
     private let exclusions: ExcludedItemStore
     private let history: CleanupHistoryStore
     private let projectProtection: ProjectProtectionStore
+    private let settings: SettingsStore
     private let emit: @Sendable (RPCValue) -> Void
 
     private var handshaken = false
@@ -68,6 +79,7 @@ actor SidecarServer {
     private var preview: Preview?
 
     init(platform: any PlatformAdapter = HostPlatformAdapter.shared, scanner: (any ScanPerforming)? = nil,
+         legacyAppearance: @escaping @Sendable () -> AppearanceMode? = SettingsStore.installedAppearance,
          emit: @escaping @Sendable (RPCValue) -> Void) {
         let scanner = scanner ?? ScanEngine(platform: platform)
         self.scanner = scanner
@@ -77,6 +89,7 @@ actor SidecarServer {
         self.exclusions = ExcludedItemStore(platform: platform)
         self.history = CleanupHistoryStore(platform: platform)
         self.projectProtection = ProjectProtectionStore(platform: platform)
+        self.settings = SettingsStore(directory: platform.userDataDirectory(), legacyAppearance: legacyAppearance)
         self.emit = emit
     }
 
@@ -144,7 +157,9 @@ actor SidecarServer {
             return .object([
                 "protocolVersion": .string(Self.protocolVersion), "coreVersion": .string(Self.protocolVersion),
                 "platform": .string(platform.platform.rawValue),
-                "capabilities": .array(["scan", "scan.progress", "items", "selection", "trash", "customDirs", "history"].map(RPCValue.string))
+                "capabilities": .array([
+                    "scan", "scan.progress", "items", "selection", "trash", "customDirs", "history", "excluded", "projects", "settings"
+                ].map(RPCValue.string))
             ])
         }
         guard handshaken else { throw RPCError.versionMismatch }
@@ -169,6 +184,10 @@ actor SidecarServer {
             let scan = try requiredSession(params)
             let items = try requiredIDs("ids", in: params).map { id in try requiredItem(id, in: scan) }
             return .object(["items": .array(items.map { RPCWire.item($0, selected: selectedIDs) })])
+        case "items.resolvePath":
+            let scan = try requiredSession(params)
+            let item = try requiredItem(requiredString("itemId", in: params), in: scan)
+            return .object(["path": .string(PlatformPath.fileSystemPath(for: item.url))])
         case "selection.apply": return try applySelection(params, scan: requiredSession(params))
         case "selection.confirmRisk":
             let scan = try requiredSession(params)
@@ -179,7 +198,7 @@ actor SidecarServer {
             return selectionResult(scan)
         case "trash.preview": return try makePreview(requiredSession(params))
         case "trash.execute": return try executeTrash(params, scan: requiredSession(params))
-        case "history.list": return try .object(["records": .model(history.load().sorted { $0.timestamp < $1.timestamp })])
+        case "history.list": return try .object(["records": .model(withStorage { try history.loadChecked() })])
         case "history.delete":
             let id = try requiredUUID("id", in: params)
             do { _ = try history.delete(id: id) } catch { throw RPCError.storage(error) }
@@ -187,7 +206,25 @@ actor SidecarServer {
         case "history.clear":
             do { try history.clearAll() } catch { throw RPCError.storage(error) }
             return .object([:])
-        case "customDirs.list": return try .object(["directories": .model(directories.load())])
+        case "excluded.list": return try listExclusions()
+        case "excluded.add": return try excludeItem(params, scan: requiredSession(params))
+        case "excluded.restore":
+            let id = try requiredUUID("id", in: params)
+            return try restoreExclusions(id: id)
+        case "excluded.restoreAll": return try restoreExclusions(id: nil)
+        case "projects.list": return try listProjects(params, scan: requiredSession(params))
+        case "projects.sessions":
+            let scan = try requiredSession(params)
+            let project = try requiredProject(requiredString("projectId", in: params), scan: scan)
+            let scope = ProjectScope(project: project, clientID: try optionalString("clientId", in: params))
+            return try queryItems(params, scan: scan, project: scope)
+        case "projects.setProtection": return try setProjectProtection(params)
+        case "settings.get": return try .model(withStorage { try settings.load() })
+        case "settings.set":
+            let mode: AppearanceMode? = try optionalEnum("appearanceMode", in: params)
+            guard let mode else { throw RPCError.invalidParams }
+            return try .model(withStorage { try settings.setAppearance(mode) })
+        case "customDirs.list": return try .object(["directories": .model(withStorage { try directories.loadChecked() })])
         case "customDirs.validate": return try validateDirectory(params)
         case "customDirs.add": return try addDirectory(params)
         case "customDirs.remove":
@@ -205,8 +242,8 @@ actor SidecarServer {
     private func startScan() throws -> RPCValue {
         guard scanTask == nil else { throw RPCError.scanInProgress }
         let id = UUID().uuidString
-        let customDirectories = directories.load()
-        let excludedItems = exclusions.load()
+        let customDirectories = try withStorage { try directories.loadChecked() }
+        let excludedItems = try withStorage { try exclusions.loadChecked() }
         let scanner = self.scanner
         let platform = self.platform
         let progress = AsyncStream<ScanProgressEvent>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -252,7 +289,9 @@ actor SidecarServer {
         if !wasCancelled {
             do {
                 let paths = try projectProtection.load()
-                let next = Session(id: id, report: report, snapshots: snapshots, protectedPaths: paths, platform: platform)
+                let excludedItems = try exclusions.loadChecked()
+                let next = Session(id: id, report: report, snapshots: snapshots, protectedPaths: paths,
+                                   excludedItems: excludedItems, platform: platform)
                 session = next
                 reportRevision += 1
                 params["status"] = .string("completed")
@@ -273,15 +312,24 @@ actor SidecarServer {
         throw RPCError.scanNotFound
     }
 
-    private func scopedItems(_ params: [String: RPCValue], scan: Session) throws -> ScopedItems {
+    private func scopedItems(_ params: [String: RPCValue], scan: Session, project: ProjectScope? = nil) throws -> ScopedItems {
         let all: [CleanableItem]
-        if let value = params["scope"], value != .null {
+        var projectScope = project
+        if let project {
+            all = projectSessions(project, scan: scan)
+        } else if let value = params["scope"], value != .null {
             guard let scope = value.object else { throw RPCError.invalidParams }
             switch try requiredString("kind", in: scope) {
             case "all": all = scan.report.allDisplayedItems
             case "client":
                 let id = try requiredString("clientId", in: scope)
                 all = scan.report.clientSummaries.first { $0.id == id }?.allDisplayedItems ?? []
+            case "clientProjects":
+                let clientID = try requiredString("clientId", in: scope)
+                let id = try requiredString("projectId", in: scope)
+                let scope = ProjectScope(project: try requiredProject(id, scan: scan), clientID: clientID)
+                projectScope = scope
+                all = projectSessions(scope, scan: scan)
             default: throw RPCError.invalidParams
             }
         } else {
@@ -300,16 +348,21 @@ actor SidecarServer {
             recommendation: try optionalEnum("recommendation", in: values),
             age: try optionalEnum("age", in: values) ?? .all
         )
-        let filtered = filter.applying(to: all) { scan.searchIndex[$0] }
-        return ScopedItems(all: all, filtered: filtered)
+        let isProjectScope = projectScope != nil
+        let filtered = filter.applying(to: all, modificationDate: { item in
+            if isProjectScope { return item.cleanupSnapshot?.modifiedAt }
+            return item.isCleanable ? item.modifiedAt : nil
+        }, searchIndex: { scan.searchIndex[$0] })
+        return ScopedItems(all: all, filtered: filtered, isProjectScope: isProjectScope)
     }
 
-    private func queryItems(_ params: [String: RPCValue], scan: Session) throws -> RPCValue {
+    private func queryItems(_ params: [String: RPCValue], scan: Session, project: ProjectScope? = nil) throws -> RPCValue {
         let sort: ScanItemSort = try optionalEnum("sort", in: params) ?? .sizeDescending
         let offset = try optionalInt("offset", in: params) ?? 0
         let limit = try optionalInt("limit", in: params) ?? 200
         guard offset >= 0, (1...200).contains(limit) else { throw RPCError.invalidParams }
-        let items = sort.sorting(try scopedItems(params, scan: scan).filtered)
+        let scoped = try scopedItems(params, scan: scan, project: project)
+        let items = sort.sorting(scoped.filtered)
         let buckets = ScanItemBuckets(items: items)
         let fullySelected = ScanItemSelection.fullySelectedSections(in: buckets.bulkSelectable, selectedIDs: selectedIDs)
         let groups = buckets.sections.map { section in
@@ -319,8 +372,16 @@ actor SidecarServer {
             ])
         }
         let page = buckets.sections.lazy.flatMap(\.items).dropFirst(min(offset, items.count)).prefix(limit)
+        let selectedIDs = self.selectedIDs
+        let rows = Array(page.map { item in
+            let row = RPCWire.item(item, selected: selectedIDs)
+            guard scoped.isProjectScope, var fields = row.object else { return row }
+            let artifacts = scan.catalog.artifacts(for: item).compactMap { scan.itemsByID[$0.id] }
+            fields["artifacts"] = .array(artifacts.map { RPCWire.item($0, selected: selectedIDs) })
+            return .object(fields)
+        })
         return .object(["reportRevision": .count(reportRevision), "total": .count(items.count),
-                        "groups": .array(groups), "items": .array(page.map { RPCWire.item($0, selected: selectedIDs) })])
+                        "groups": .array(groups), "items": .array(rows)])
     }
 
     private func applySelection(_ params: [String: RPCValue], scan: Session) throws -> RPCValue {
@@ -333,7 +394,12 @@ actor SidecarServer {
         var next = selectedIDs
         switch op {
         case "toggle":
-            let visibleIDs = Set(scope.filtered.map(\.id))
+            var visibleIDs = Set(scope.filtered.map(\.id))
+            if scope.isProjectScope {
+                for item in scope.filtered {
+                    visibleIDs.formUnion(scan.catalog.artifacts(for: item).map(\.id))
+                }
+            }
             for id in Set(try requiredIDs("itemIds", in: params)) {
                 let item = try requiredItem(id, in: scan)
                 guard visibleIDs.contains(id) else { throw RPCError.invalidParams }
@@ -391,16 +457,15 @@ actor SidecarServer {
               preview.reportRevision == reportRevision, preview.selectionRevision == selectionRevision else {
             throw RPCError.invalidConfirmation
         }
-        let acknowledged: Bool
-        if let value = params["acknowledgedNotRecommendedRisk"] {
-            guard let flag = value.bool else { throw RPCError.invalidParams }
-            acknowledged = flag
-        } else {
-            acknowledged = false
-        }
+        let acknowledged = try optionalBool("acknowledgedNotRecommendedRisk", in: params) ?? false
         if !preview.summary.riskItems.isEmpty && !acknowledged { throw RPCError.riskConfirmation }
-        let protectedPaths: Set<String>
-        do { protectedPaths = try projectProtection.load() } catch { throw RPCError.storage(error) }
+        let protectedPaths = try withStorage { try projectProtection.load() }
+        let excludedItems = try withStorage { try exclusions.loadChecked() }
+        let matcher = ExcludedItemMatcher(records: excludedItems, caseInsensitive: platform.pathsAreCaseInsensitive)
+        if protectedPaths != scan.protectedPaths || preview.summary.items.contains(where: { matcher.isExcluded($0.url) }) {
+            refreshSession(scan, report: scan.rawReport, protectedPaths: protectedPaths, excludedItems: excludedItems)
+            throw RPCError.invalidConfirmation
+        }
 
         self.preview = nil
         let result = cleaner.trash(items: preview.summary.items, allowNotRecommendedOverride: acknowledged,
@@ -408,10 +473,7 @@ actor SidecarServer {
                                    verifyProjectSelection: true, scannedSnapshots: scan.snapshots)
         if !result.trashedItems.isEmpty {
             let report = scan.rawReport.removing(trashedRecords: result.trashedItems)
-            let next = Session(id: scan.id, report: report, snapshots: scan.snapshots, protectedPaths: protectedPaths, platform: platform)
-            session = next
-            reportRevision += 1
-            replaceSelection(selectedIDs.intersection(next.itemsByID.keys))
+            refreshSession(scan, report: report, protectedPaths: protectedPaths, excludedItems: excludedItems)
         }
         var reply: [String: RPCValue] = ["result": RPCWire.cleanup(result), "reportRevision": .count(reportRevision)]
         do {
@@ -421,6 +483,110 @@ actor SidecarServer {
             reply["historyError"] = RPCError.storage(error).value
         }
         return .object(reply)
+    }
+
+    private func listExclusions() throws -> RPCValue {
+        let records = try withStorage { try exclusions.loadChecked() }
+        let statuses = Dictionary(records.map { record in
+            (record.id.uuidString, RPCValue.bool((try? platform.identity(at: record.url)) != nil))
+        }, uniquingKeysWith: { first, _ in first })
+        return try .object(["records": .model(records), "statuses": .object(statuses)])
+    }
+
+    private func excludeItem(_ params: [String: RPCValue], scan: Session) throws -> RPCValue {
+        let id = try requiredString("itemId", in: params)
+        let item = try requiredItem(id, in: scan)
+        let protectedPaths = try withStorage { try projectProtection.load() }
+        let record = ExcludedItemRecord.from(item: item)
+        let records = try withStorage { try exclusions.add(record) }
+        let canonical = ExcludedItemMatcher.canonicalMatchPath(record.normalizedPath)
+        let key = PlatformPath.comparisonKey(canonical, caseInsensitive: platform.pathsAreCaseInsensitive)
+        let saved = records.first { candidate in
+            PlatformPath.comparisonKey(ExcludedItemMatcher.canonicalMatchPath(candidate.normalizedPath),
+                                       caseInsensitive: platform.pathsAreCaseInsensitive) == key
+        } ?? record
+        refreshSession(scan, report: scan.rawReport, protectedPaths: protectedPaths, excludedItems: records)
+        return try .object(["record": .model(saved), "reportRevision": .count(reportRevision)])
+    }
+
+    private func restoreExclusions(id: UUID?) throws -> RPCValue {
+        let previous = try withStorage { try exclusions.loadChecked() }
+        let remaining = id.map { id in previous.filter { $0.id != id } } ?? []
+        guard remaining.count != previous.count else { return .object([:]) }
+        let paths = try withStorage { try projectProtection.load() }
+        try withStorage { try exclusions.save(remaining) }
+        if let scan = session {
+            refreshSession(scan, report: scan.rawReport, protectedPaths: paths, excludedItems: remaining)
+        }
+        return .object([:])
+    }
+
+    private func listProjects(_ params: [String: RPCValue], scan: Session) throws -> RPCValue {
+        let clientID = try optionalString("clientId", in: params)
+        let includeAll = try optionalBool("includeAllClients", in: params) ?? false
+        let projects = scan.catalog.projects.compactMap { project -> RPCValue? in
+            if let clientID, !project.sessions.contains(where: { $0.clientID == clientID }) { return nil }
+            let path = project.id.workspacePath
+            let isProtected = path.map(scan.protectedPaths.contains) ?? false
+            let scope = ProjectScope(project: project, clientID: includeAll && path != nil ? nil : clientID)
+            let sessions = projectSessions(scope, scan: scan)
+            guard !sessions.isEmpty || isProtected else { return nil }
+            var fields: [String: RPCValue] = [
+                "projectId": .string(projectID(project.id)), "name": .string(project.id.name),
+                "sessionCount": .count(sessions.count), "sizeBytes": .integer(sessions.reduce(0) { $0 + $1.sizeBytes }),
+                "isProtected": .bool(isProtected)
+            ]
+            if let path { fields["workspacePath"] = .string(path) }
+            return .object(fields)
+        }
+        return .object(["projects": .array(projects)])
+    }
+
+    private func projectSessions(_ scope: ProjectScope, scan: Session) -> [CleanableItem] {
+        scope.project.sessions.compactMap { item in
+            guard scope.clientID == nil || item.clientID == scope.clientID else { return nil }
+            return scan.itemsByID[item.id]
+        }
+    }
+
+    private func projectID(_ project: SessionProjectID) -> String {
+        project.workspacePath.map { "workspace:\($0)" } ?? "unidentified"
+    }
+
+    private func requiredProject(_ id: String, scan: Session) throws -> SessionProject {
+        guard let project = scan.catalog.projects.first(where: { projectID($0.id) == id }) else {
+            throw RPCError.invalidParams
+        }
+        return project
+    }
+
+    private func setProjectProtection(_ params: [String: RPCValue]) throws -> RPCValue {
+        guard let scan = session else { throw RPCError.scanNotFound }
+        let project = try requiredProject(requiredString("projectId", in: params), scan: scan)
+        guard let path = project.id.workspacePath,
+              let enabled = try optionalBool("enabled", in: params) else { throw RPCError.invalidParams }
+        var paths = try withStorage { try projectProtection.load() }
+        let original = paths
+        if enabled { paths.insert(path) } else { paths.remove(path) }
+        if paths != scan.protectedPaths || paths != original {
+            let records = try withStorage { try exclusions.loadChecked() }
+            if paths != original { try withStorage { try projectProtection.save(paths) } }
+            refreshSession(scan, report: scan.rawReport, protectedPaths: paths, excludedItems: records)
+        }
+        return .object(["isProtected": .bool(enabled)])
+    }
+
+    private func refreshSession(_ scan: Session, report: ScanReport, protectedPaths: Set<String>,
+                                excludedItems: [ExcludedItemRecord]) {
+        let next = Session(id: scan.id, report: report, snapshots: scan.snapshots, protectedPaths: protectedPaths,
+                           excludedItems: excludedItems, platform: platform)
+        session = next
+        reportRevision += 1
+        preview = nil
+        replaceSelection(selectedIDs.filter { id in
+            guard let item = next.itemsByID[id] else { return false }
+            return item.hardProtectionReason == nil
+        })
     }
 
     private func validateDirectory(_ params: [String: RPCValue]) throws -> RPCValue {
@@ -504,6 +670,16 @@ actor SidecarServer {
         guard let value = try optionalString(key, in: params) else { return nil }
         guard let decoded = T(rawValue: value) else { throw RPCError.invalidParams }
         return decoded
+    }
+
+    private func optionalBool(_ key: String, in params: [String: RPCValue]) throws -> Bool? {
+        guard let value = params[key], value != .null else { return nil }
+        guard let flag = value.bool else { throw RPCError.invalidParams }
+        return flag
+    }
+
+    private func withStorage<Value>(_ operation: () throws -> Value) throws -> Value {
+        do { return try operation() } catch { throw RPCError.storage(error) }
     }
 
     private func safetyBlocked(_ reason: String) -> RPCError {

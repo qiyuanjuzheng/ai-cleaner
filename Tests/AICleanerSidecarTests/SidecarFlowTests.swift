@@ -1,4 +1,4 @@
-import AICleanerCore
+@testable import AICleanerCore
 import Foundation
 import XCTest
 @testable import AICleanerSidecar
@@ -103,6 +103,132 @@ final class SidecarFlowTests: XCTestCase {
         XCTAssertNoThrow(try DataDirectoryLock(directory: directory))
     }
 
+    func testExclusionUpdatesReportAndInvalidatesPendingTrash() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let client = fixture.client
+        let scanID = try await client.scan()
+        let item = try await client.firstItem(scanID)
+        let id = try XCTUnwrap(item["id"])
+        _ = try await client.call("selection.apply", ["scanId": scanID, "op": .string("selectAllVisible")])
+        let preview = try await client.call("trash.preview", ["scanId": scanID])
+        let excluded = try await client.call("excluded.add", ["scanId": scanID, "itemId": id])
+        let recordID = try XCTUnwrap(excluded["record"]?["id"])
+        let listing = try await client.call("excluded.list")
+        XCTAssertEqual(listing["records"]?.array?.count, 1)
+        XCTAssertEqual(listing["statuses"]?[try XCTUnwrap(recordID.string)], .bool(true))
+        let emptyQuery = try await client.call("items.query", ["scanId": scanID])
+        XCTAssertEqual(emptyQuery["total"], .integer(0))
+        try await client.expectError(-32006, from: "trash.execute", [
+            "scanId": scanID, "confirmationToken": try XCTUnwrap(preview["confirmationToken"])
+        ])
+        _ = try await client.call("excluded.restore", ["id": recordID])
+        let restored = try await client.firstItem(scanID)
+        XCTAssertEqual(restored["id"], id)
+        XCTAssertEqual(restored["selected"], .bool(false))
+        XCTAssertEqual(try Data(contentsOf: fixture.file), Data("payload".utf8))
+    }
+
+    func testProjectProtectionPersistsAndInvalidatesPendingTrash() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let workspace = fixture.root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let sessionID = "76cfd10c-14aa-4769-a102-075663169ac4"
+        let sessionURL = fixture.root.appendingPathComponent(".claude/projects/fixture/\(sessionID).jsonl")
+        try FileManager.default.createDirectory(at: sessionURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let json = try JSONSerialization.data(withJSONObject: [
+            "type": "user", "cwd": workspace.path, "sessionId": sessionID,
+            "message": ["role": "user", "content": "Project protection fixture"]
+        ])
+        try (json + Data([10])).write(to: sessionURL)
+        let scanner = ScanEngine(builtInProfiles: [BuiltInClientRules.claudeCode], systemTempRoot: nil, platform: fixture.platform)
+        let client = TestClient(platform: fixture.platform, scanner: scanner)
+        let scanID = try await client.scan()
+        let projects = try await client.call("projects.list", ["scanId": scanID, "clientId": .string("claude-code")])
+        let project = try XCTUnwrap(projects["projects"]?.array?.first)
+        let projectID = try XCTUnwrap(project["projectId"])
+        let scope: RPCValue = .object(["kind": .string("clientProjects"), "clientId": .string("claude-code"), "projectId": projectID])
+        let select: [String: RPCValue] = ["scanId": scanID, "scope": scope, "op": .string("selectAllVisible")]
+        let selection = try await client.call("selection.apply", select)
+        XCTAssertEqual(selection["selectedCount"], .integer(1))
+        let preview = try await client.call("trash.preview", ["scanId": scanID])
+        _ = try await client.call("projects.setProtection", ["projectId": projectID, "enabled": .bool(true)])
+        try await client.expectError(-32006, from: "trash.execute", [
+            "scanId": scanID, "confirmationToken": try XCTUnwrap(preview["confirmationToken"])
+        ])
+        let sessions = try await client.call("projects.sessions", ["scanId": scanID, "projectId": projectID])
+        let row = try XCTUnwrap(sessions["items"]?.array?.first)
+        XCTAssertNotNil(row["hardProtectionReason"]?.string)
+        XCTAssertEqual(row["selected"], .bool(false))
+        XCTAssertEqual(try ProjectProtectionStore(platform: fixture.platform).load().count, 1)
+        XCTAssertEqual(try Data(contentsOf: sessionURL), json + Data([10]))
+        _ = try await client.call("projects.setProtection", ["projectId": projectID, "enabled": .bool(false)])
+        let unlocked = try await client.call("projects.sessions", ["scanId": scanID, "projectId": projectID])
+        XCTAssertNil(unlocked["items"]?.array?.first?["hardProtectionReason"])
+    }
+
+    func testSettingsMigrationPersistenceAndCorruptBackup() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let dataDirectory = fixture.platform.userDataDirectory()
+        let client = TestClient(platform: fixture.platform,
+                                scanner: ScanEngine(builtInProfiles: [], systemTempRoot: nil, platform: fixture.platform),
+                                legacyAppearance: { .dark })
+        _ = try await client.call("core.handshake", ["protocolVersion": .string("1.0")])
+        let initial = try await client.call("settings.get")
+        XCTAssertEqual(initial["appearanceMode"], .string("dark"))
+        _ = try await client.call("settings.set", ["appearanceMode": .string("system")])
+        let persisted = try SettingsStore(directory: dataDirectory).load()
+        XCTAssertEqual(persisted.appearanceMode, .system)
+        let corrupted = Data("test corrupt settings".utf8)
+        try corrupted.write(to: dataDirectory.appendingPathComponent("settings.json"))
+        try await client.expectError(-32021, from: "settings.get")
+        let names = try FileManager.default.contentsOfDirectory(atPath: dataDirectory.path)
+        let backup = try XCTUnwrap(names.first { $0.hasPrefix("settings.corrupt-") })
+        XCTAssertEqual(try Data(contentsOf: dataDirectory.appendingPathComponent(backup)), corrupted)
+    }
+
+    func testReportsCorruptProtectionAndPreservesFile() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let path = ProjectProtectionStore(platform: fixture.platform).storageURL
+        let original = Data("corrupt project protection".utf8)
+        try original.write(to: path)
+        let client = fixture.client
+        _ = try await client.call("core.handshake", ["protocolVersion": .string("1.0")])
+        let scan = try await client.call("scan.start")
+        let result = try await client.completedScan(XCTUnwrap(scan["scanId"]))
+        XCTAssertEqual(result["status"], .string("failed"))
+        XCTAssertEqual(result["error"]?["code"], .integer(-32021))
+        XCTAssertEqual(try Data(contentsOf: path), original)
+        XCTAssertEqual(try Data(contentsOf: fixture.file), Data("payload".utf8))
+    }
+
+    func testSidecarRecyclesThroughTheNativeAdapter() async throws {
+        let fixture = try Fixture(nativeTrash: true)
+        defer { fixture.remove() }
+        let client = fixture.client
+        let scanID = try await client.scan()
+        let item = try await client.firstItem(scanID)
+        _ = try await client.call("selection.apply", [
+            "scanId": scanID, "op": .string("toggle"), "itemIds": .array([try XCTUnwrap(item["id"])])
+        ])
+        let preview = try await client.call("trash.preview", ["scanId": scanID])
+        let execution = try await client.call("trash.execute", [
+            "scanId": scanID, "confirmationToken": try XCTUnwrap(preview["confirmationToken"])
+        ])
+        let result = try XCTUnwrap(execution["result"])
+        XCTAssertEqual(result["trashedCount"], .integer(1), "\(result)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.file.path))
+        if let path = result["trashedItems"]?.array?.first?["resultingTrashPath"]?.string {
+            let trashed = URL(fileURLWithPath: path)
+            XCTAssertEqual(try Data(contentsOf: trashed), Data("payload".utf8))
+            try FileManager.default.moveItem(at: trashed, to: fixture.file)
+            XCTAssertEqual(try Data(contentsOf: fixture.file), Data("payload".utf8))
+        }
+    }
+
     func testHandshakeAndMalformedRequestsReturnProtocolErrors() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -124,18 +250,30 @@ private struct Fixture {
     let platform: SandboxPlatformAdapter
     let client: TestClient
 
-    init() throws {
+    init(nativeTrash: Bool = false) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("AICleanerSidecar-\(UUID())")
         let directory = root.appendingPathComponent("cache", isDirectory: true)
-        let file = directory.appendingPathComponent("sample.bin")
+        let filename = nativeTrash ? "AICleaner-CI-\(UUID().uuidString).bin" : "sample.bin"
+        let file = directory.appendingPathComponent(filename)
         let trash = root.appendingPathComponent("recycle", isDirectory: true)
+        let nativePerformer: (@Sendable (URL) throws -> TrashOutcome)?
+        if nativeTrash {
+            #if os(Linux)
+            nativePerformer = { try LinuxTrash.move($0, dataHome: trash, platform: HostPlatformAdapter.shared) }
+            #else
+            nativePerformer = { try HostPlatformAdapter.shared.moveToTrash($0) }
+            #endif
+        } else {
+            nativePerformer = nil
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("payload".utf8).write(to: file)
         let platform = SandboxPlatformAdapter(
             wrapping: HostPlatformAdapter.shared,
             homeDirectory: root,
             userDataDirectory: root.appendingPathComponent("data"),
-            mockTrashDirectory: trash
+            moveToTrashOverride: nativePerformer,
+            mockTrashDirectory: nativeTrash ? nil : trash
         )
         let scanner = ScanEngine(builtInProfiles: [], systemTempRoot: nil, platform: platform)
         let store = CustomDirectoryStore(platform: platform)
@@ -174,9 +312,10 @@ private final class TestClient {
     let messages = CoreLock<[RPCValue]>(initialState: [])
     private var nextID: Int64 = 0
 
-    init(platform: any PlatformAdapter, scanner: any ScanPerforming) {
+    init(platform: any PlatformAdapter, scanner: any ScanPerforming,
+         legacyAppearance: @escaping @Sendable () -> AppearanceMode? = { nil }) {
         let messages = self.messages
-        server = SidecarServer(platform: platform, scanner: scanner) { message in
+        server = SidecarServer(platform: platform, scanner: scanner, legacyAppearance: legacyAppearance) { message in
             messages.withLock { $0.append(message) }
         }
     }
@@ -189,6 +328,20 @@ private final class TestClient {
     func expectError(_ code: Int64, from method: String, _ params: [String: RPCValue] = [:]) async throws {
         let response = try await request(method, params)
         XCTAssertEqual(response["error"]?["code"], .integer(code), "Method: \(method)")
+    }
+
+    func scan() async throws -> RPCValue {
+        _ = try await call("core.handshake", ["protocolVersion": .string("1.0")])
+        let started = try await call("scan.start")
+        let scanID = try XCTUnwrap(started["scanId"])
+        let completed = try await completedScan(scanID)
+        XCTAssertEqual(completed["status"], .string("completed"), "\(completed)")
+        return scanID
+    }
+
+    func firstItem(_ scanID: RPCValue) async throws -> RPCValue {
+        let result = try await call("items.query", ["scanId": scanID, "limit": .integer(1)])
+        return try XCTUnwrap(result["items"]?.array?.first)
     }
 
     func completedScan(_ scanID: RPCValue) async throws -> RPCValue {

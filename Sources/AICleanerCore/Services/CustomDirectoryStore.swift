@@ -59,16 +59,11 @@ public struct CustomDirectoryStore: Sendable {
 
     /// 读取当前保存的所有自定义目录。若文件损坏则先备份保留再返回空数组（ADR 0001 第 7.3 节）。
     public func load() -> [CustomScanDirectory] {
-        guard let data = try? Data(contentsOf: storageURL) else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let directories = try? decoder.decode([CustomScanDirectory].self, from: data) else {
-            CoreStorageIO.quarantineCorruptFile(at: storageURL)
-            return []
-        }
-        return directories
+        (try? loadChecked()) ?? []
+    }
+
+    public func loadChecked() throws -> [CustomScanDirectory] {
+        try CoreStorageIO.readJSON([CustomScanDirectory].self, at: storageURL) ?? []
     }
 
     /// 校验并新增一个自定义扫描目录
@@ -97,7 +92,7 @@ public struct CustomDirectoryStore: Sendable {
             throw CustomDirectoryError.protectedPath(reason)
         }
 
-        var existing = load()
+        var existing = try loadChecked()
         let candidateKey = PlatformPath.comparisonKey(
             PlatformPath.normalize(resolvedTarget),
             caseInsensitive: platform.pathsAreCaseInsensitive
@@ -129,7 +124,7 @@ public struct CustomDirectoryStore: Sendable {
     /// 根据 ID 从扫描列表中移除自定义目录（仅移除配置记录，绝不删除磁盘目录）
     @discardableResult
     public func remove(id: UUID) throws -> [CustomScanDirectory] {
-        var existing = load()
+        var existing = try loadChecked()
         existing.removeAll { $0.id == id }
         try save(existing)
         return existing

@@ -71,6 +71,7 @@ public struct ScanItemFilter: Sendable {
         to items: [CleanableItem],
         now: Date = Date(),
         calendar: Calendar = .current,
+        modificationDate: (CleanableItem) -> Date? = { $0.isCleanable ? $0.modifiedAt : nil },
         searchIndex: (String) -> String? = { _ in nil }
     ) -> [CleanableItem] {
         let cutoff = age.cutoffDate(relativeTo: now, calendar: calendar)
@@ -78,7 +79,9 @@ public struct ScanItemFilter: Sendable {
         return items.filter { item in
             if let recommendation, item.recommendation != recommendation { return false }
             if let category, item.category != category { return false }
-            if let cutoff, !item.isCleanable || item.modifiedAt >= cutoff { return false }
+            if let cutoff {
+                guard let date = modificationDate(item), date < cutoff else { return false }
+            }
             if search.isEmpty { return true }
             return (searchIndex(item.id) ?? Self.searchableText(for: item)).contains(search)
         }

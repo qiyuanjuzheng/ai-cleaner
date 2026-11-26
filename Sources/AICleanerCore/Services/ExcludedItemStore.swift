@@ -129,22 +129,17 @@ public struct ExcludedItemStore: Sendable {
 
     /// 读取全部已排除记录（按规范化路径去重，最近排除排在前面）。若文件损坏则先备份保留再返回空数组（ADR 0001 第 7.3 节）。
     public func load() -> [ExcludedItemRecord] {
-        guard let data = try? Data(contentsOf: storageURL) else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let decoded = try? decoder.decode([ExcludedItemRecord].self, from: data) else {
-            CoreStorageIO.quarantineCorruptFile(at: storageURL)
-            return []
-        }
-        return deduplicateAndSort(decoded)
+        (try? loadChecked()) ?? []
+    }
+
+    public func loadChecked() throws -> [ExcludedItemRecord] {
+        deduplicateAndSort(try CoreStorageIO.readJSON([ExcludedItemRecord].self, at: storageURL) ?? [])
     }
 
     /// 新增排除记录（按规范化后的完整路径匹配，重复排除保持幂等）
     @discardableResult
     public func add(_ record: ExcludedItemRecord) throws -> [ExcludedItemRecord] {
-        var existing = load()
+        var existing = try loadChecked()
         let candidateCanonical = canonicalKey(record.normalizedPath)
         if existing.contains(where: {
             canonicalKey($0.normalizedPath) == candidateCanonical
@@ -167,7 +162,7 @@ public struct ExcludedItemStore: Sendable {
     /// 按记录 ID 从排除清单移除（恢复展示）
     @discardableResult
     public func remove(id: UUID) throws -> [ExcludedItemRecord] {
-        var existing = load()
+        var existing = try loadChecked()
         let beforeCount = existing.count
         existing.removeAll { $0.id == id }
         if existing.count != beforeCount {
@@ -179,7 +174,7 @@ public struct ExcludedItemStore: Sendable {
     /// 按路径从排除清单移除（按规范化路径匹配）
     @discardableResult
     public func remove(path: String) throws -> [ExcludedItemRecord] {
-        var existing = load()
+        var existing = try loadChecked()
         let targetCanonical = canonicalKey(path)
         let beforeCount = existing.count
         existing.removeAll {
@@ -194,6 +189,7 @@ public struct ExcludedItemStore: Sendable {
     /// 清空全部排除记录（全部恢复）
     @discardableResult
     public func removeAll() throws -> [ExcludedItemRecord] {
+        _ = try loadChecked()
         try save([])
         return []
     }

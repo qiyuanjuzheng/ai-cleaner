@@ -568,6 +568,8 @@ struct ScanReadyHeroView: View {
 
 struct OrbitalScannerHero: View {
     var isVisible: Bool = true
+    /// 扫描进度状态源（步骤条 / 客户端发现卡片 / 实时统计）；为 nil 时保持旧的纯动画布局
+    var progress: ScanProgressModel? = nil
     var onCancel: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -584,109 +586,122 @@ struct OrbitalScannerHero: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
-                let elapsed = reduceMotion ? 0.0 : motionClock.elapsed(at: timeline.date)
-                let sweepAngle = Angle.degrees((elapsed * 120).truncatingRemainder(dividingBy: 360))
-                let outerRotation = Angle.degrees((elapsed * 24).truncatingRemainder(dividingBy: 360))
-                let innerRotation = Angle.degrees((-elapsed * 40).truncatingRemainder(dividingBy: 360))
-                let pulse = reduceMotion ? 1.0 : (0.95 + 0.06 * sin(elapsed * 2.8))
-
-                ZStack {
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(colorScheme == .dark ? 0.26 : 0.20),
-                                    Color(red: 0.24, green: 0.56, blue: 1.00).opacity(colorScheme == .dark ? 0.10 : 0.07),
-                                    .clear
-                                ],
-                                center: .center,
-                                startRadius: 16,
-                                endRadius: 102
-                            )
-                        )
-                        .frame(width: 204, height: 204)
-                        .scaleEffect(pulse)
-
-                    Circle()
-                        .stroke(
-                            AngularGradient(
-                                colors: [
-                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.65),
-                                    Color(red: 0.24, green: 0.58, blue: 1.00).opacity(0.34),
-                                    Color.primary.opacity(0.06),
-                                    Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.65)
-                                ],
-                                center: .center
-                            ),
-                            style: StrokeStyle(lineWidth: 1.45, lineCap: .round, dash: [7, 8])
-                        )
-                        .frame(width: 164, height: 164)
-                        .rotationEffect(outerRotation)
-
-                    Circle()
-                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.11 : 0.08), lineWidth: 1)
-                        .frame(width: 116, height: 116)
-
-                    if !reduceMotion {
-                        Circle()
-                            .fill(
-                                AngularGradient(
-                                    gradient: Gradient(stops: [
-                                        .init(color: .clear, location: 0.0),
-                                        .init(color: .clear, location: 0.74),
-                                        .init(color: Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.16), location: 0.90),
-                                        .init(color: Color(red: 0.22, green: 0.92, blue: 0.72).opacity(0.46), location: 1.0)
-                                    ]),
-                                    center: .center
-                                )
-                            )
-                            .frame(width: 162, height: 162)
-                            .rotationEffect(sweepAngle)
-                    }
-
-                    Circle()
-                        .stroke(
-                            Color(red: 0.36, green: 0.64, blue: 1.00).opacity(0.44),
-                            style: StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: [2, 10])
-                        )
-                        .frame(width: 84, height: 84)
-                        .rotationEffect(innerRotation)
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 12) {
+                TimelineView(.animation(paused: playbackPolicy.isPaused)) { timeline in
+                    let elapsed = reduceMotion ? 0.0 : motionClock.elapsed(at: timeline.date)
+                    let sweepAngle = Angle.degrees((elapsed * 120).truncatingRemainder(dividingBy: 360))
+                    let outerRotation = Angle.degrees((elapsed * 24).truncatingRemainder(dividingBy: 360))
+                    let innerRotation = Angle.degrees((-elapsed * 40).truncatingRemainder(dividingBy: 360))
+                    let pulse = reduceMotion ? 1.0 : (0.95 + 0.06 * sin(elapsed * 2.8))
 
                     ZStack {
                         Circle()
-                            .fill(AppTheme.brandGradient)
-                            .frame(width: 58, height: 58)
-                            .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.48), radius: 14)
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        Color(red: 0.14, green: 0.84, blue: 0.62).opacity(colorScheme == .dark ? 0.26 : 0.20),
+                                        Color(red: 0.24, green: 0.56, blue: 1.00).opacity(colorScheme == .dark ? 0.10 : 0.07),
+                                        .clear
+                                    ],
+                                    center: .center,
+                                    startRadius: 16,
+                                    endRadius: 102
+                                )
+                            )
+                            .frame(width: 204, height: 204)
+                            .scaleEffect(pulse)
 
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 24, weight: .semibold))
-                            .foregroundStyle(.white)
+                        Circle()
+                            .stroke(
+                                AngularGradient(
+                                    colors: [
+                                        Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.65),
+                                        Color(red: 0.24, green: 0.58, blue: 1.00).opacity(0.34),
+                                        Color.primary.opacity(0.06),
+                                        Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.65)
+                                    ],
+                                    center: .center
+                                ),
+                                style: StrokeStyle(lineWidth: 1.45, lineCap: .round, dash: [7, 8])
+                            )
+                            .frame(width: 164, height: 164)
+                            .rotationEffect(outerRotation)
+
+                        Circle()
+                            .stroke(Color.primary.opacity(colorScheme == .dark ? 0.11 : 0.08), lineWidth: 1)
+                            .frame(width: 116, height: 116)
+
+                        if !reduceMotion {
+                            Circle()
+                                .fill(
+                                    AngularGradient(
+                                        gradient: Gradient(stops: [
+                                            .init(color: .clear, location: 0.0),
+                                            .init(color: .clear, location: 0.74),
+                                            .init(color: Color(red: 0.14, green: 0.84, blue: 0.62).opacity(0.16), location: 0.90),
+                                            .init(color: Color(red: 0.22, green: 0.92, blue: 0.72).opacity(0.46), location: 1.0)
+                                        ]),
+                                        center: .center
+                                    )
+                                )
+                                .frame(width: 162, height: 162)
+                                .rotationEffect(sweepAngle)
+                        }
+
+                        Circle()
+                            .stroke(
+                                Color(red: 0.36, green: 0.64, blue: 1.00).opacity(0.44),
+                                style: StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: [2, 10])
+                            )
+                            .frame(width: 84, height: 84)
+                            .rotationEffect(innerRotation)
+
+                        ZStack {
+                            Circle()
+                                .fill(AppTheme.brandGradient)
+                                .frame(width: 58, height: 58)
+                                .shadow(color: Color(red: 0.14, green: 0.80, blue: 0.64).opacity(0.48), radius: 14)
+
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .scaleEffect(pulse)
                     }
-                    .scaleEffect(pulse)
+                    .scaleEffect(hasAppeared || reduceMotion ? 1.0 : 0.95)
+                    .frame(width: 220, height: 220)
                 }
-                .scaleEffect(hasAppeared || reduceMotion ? 1.0 : 0.95)
-                .frame(width: 220, height: 220)
-            }
 
-            VStack(spacing: 6) {
-                Text("正在扫描 AI 客户端…")
-                    .font(.system(.title2, design: .rounded).weight(.bold))
-            }
-            .frame(height: 52, alignment: .top)
-
-            HStack {
-                if let onCancel {
-                    Button("取消扫描", action: onCancel)
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
+                VStack(spacing: 6) {
+                    Text("正在扫描 AI 客户端…")
+                        .font(.system(.title2, design: .rounded).weight(.bold))
                 }
+                .frame(height: 52, alignment: .top)
+
+                // 进度反馈区：步骤条 + 客户端发现卡片 + 实时统计（全部由引擎进度事件驱动）
+                if let progress {
+                    VStack(spacing: 14) {
+                        ScanStageProgressBar(progress: progress)
+                        ScanDiscoveryCardGrid(progress: progress)
+                        ScanLiveStatsRow(progress: progress)
+                    }
+                    .padding(.top, 2)
+                }
+
+                HStack {
+                    if let onCancel {
+                        Button("取消扫描", action: onCancel)
+                            .buttonStyle(.bordered)
+                            .controlSize(.regular)
+                    }
+                }
+                .padding(.top, 6)
+                .frame(height: 36)
             }
-            .padding(.top, 6)
-            .frame(height: 36)
+            .padding(32)
+            .frame(maxWidth: .infinity)
         }
-        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             motionClock.setPaused(playbackPolicy.isPaused)

@@ -22,7 +22,10 @@ struct ItemListView: View {
         if viewModel.report == nil {
             ZStack {
                 if viewModel.isScanning {
-                    OrbitalScannerHero(isVisible: isVisible) {
+                    OrbitalScannerHero(
+                        isVisible: isVisible,
+                        progress: viewModel.scanProgress
+                    ) {
                         viewModel.cancelScan()
                     }
                     .transition(.opacity)

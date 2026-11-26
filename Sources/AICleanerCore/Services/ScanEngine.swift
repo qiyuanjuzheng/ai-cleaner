@@ -12,6 +12,30 @@ public protocol ScanPerforming: Sendable {
         excludedItems: [ExcludedItemRecord],
         now: Date?
     ) -> ScanReport
+    /// 带进度上报的只读扫描：`onProgress` 在后台线程收到整包快照事件
+    /// （阶段切换、客户端发现 / 量出体积、统计增量），不依赖 UI 侧定时器。
+    func scan(
+        customDirectories: [CustomScanDirectory],
+        excludedItems: [ExcludedItemRecord],
+        now: Date?,
+        onProgress: ScanProgressHandler?
+    ) -> ScanReport
+}
+
+extension ScanPerforming {
+    /// 默认实现：未支持进度上报的执行器退化为普通扫描（事件流为空）
+    public func scan(
+        customDirectories: [CustomScanDirectory],
+        excludedItems: [ExcludedItemRecord],
+        now: Date?,
+        onProgress: ScanProgressHandler?
+    ) -> ScanReport {
+        scan(
+            customDirectories: customDirectories,
+            excludedItems: excludedItems,
+            now: now
+        )
+    }
 }
 
 /// 多客户端只读扫描引擎：
@@ -107,13 +131,30 @@ public struct ScanEngine: ScanPerforming, Sendable {
         excludedItems: [ExcludedItemRecord] = [],
         now: Date? = nil
     ) -> ScanReport {
+        scan(
+            customDirectories: customDirectories,
+            excludedItems: excludedItems,
+            now: now,
+            onProgress: nil
+        )
+    }
+
+    /// 执行全量只读扫描并按需上报进度快照（阶段切换 / 客户端发现 / 统计增量）
+    public func scan(
+        customDirectories: [CustomScanDirectory] = [],
+        excludedItems: [ExcludedItemRecord] = [],
+        now: Date? = nil,
+        onProgress: ScanProgressHandler? = nil
+    ) -> ScanReport {
         let referenceNow = now ?? fixedNow ?? Date()
         let excludedMatcher = ExcludedItemMatcher(records: excludedItems)
+        let progress = onProgress.map { ScanProgressEmitter(handler: $0) }
         let resultsLock = OSAllocatedUnfairLock(
             initialState: [ClientScanSummary?](repeating: nil, count: builtInProfiles.count)
         )
 
         // 1. 并发扫描所有内置 AI 客户端（每线程使用独立 FileManager 实例保证线程安全）
+        progress?.update(stage: .scanningClients)
         let profiles = builtInProfiles
         DispatchQueue.concurrentPerform(iterations: profiles.count) { index in
             if Task.isCancelled { return }
@@ -122,7 +163,8 @@ public struct ScanEngine: ScanPerforming, Sendable {
                 profiles[index],
                 referenceNow: referenceNow,
                 excludedMatcher: excludedMatcher,
-                fileManager: localFM
+                fileManager: localFM,
+                progress: progress
             )
             resultsLock.withLock { state in
                 state[index] = summary
@@ -131,7 +173,8 @@ public struct ScanEngine: ScanPerforming, Sendable {
 
         let builtInResults = resultsLock.withLock { $0 }.compactMap { $0 }
 
-        // 2. 分层扫描 `/private/tmp` 与系统用户临时目录（若已配置）
+        // 2. 分层扫描 `/private/tmp` 与系统用户临时目录（若已配置），并合并归属到对应客户端
+        progress?.update(stage: .analyzingCacheFiles)
         let tempScanResult: TempDirectoryScanResult
         if !Task.isCancelled && (systemTempRoot != nil || userTempRoot != nil) {
             let tempScanner = TempDirectoryScanner(
@@ -185,11 +228,29 @@ public struct ScanEngine: ScanPerforming, Sendable {
                     protectedItems: result.protectedItems,
                     skippedProtectedCount: result.skippedProtectedCount
                 )
+
+                // /tmp 归属新增条目计入统计增量，并把客户端卡片体积刷新为合并后的最终值
+                let extraFileCount = extraTempItems.reduce(0) { $0 + $1.fileCount }
+                let extraBytes = extraTempItems.reduce(Int64(0)) { $0 + $1.sizeBytes }
+                progress?.addScanStats(fileCount: extraFileCount, bytes: extraBytes)
             }
 
             if !mergedSummary.items.isEmpty || !mergedSummary.protectedItems.isEmpty {
                 detectedBuiltInCount += 1
                 summaries.append(mergedSummary)
+            }
+            // 仅更新本机真实检测到（scanProfile 期间已发出占位卡片）的客户端体积，不为本机不存在的客戶端补插卡片
+            if let progress {
+                progress.measureClient(
+                    id: mergedSummary.profile.id,
+                    name: mergedSummary.profile.name,
+                    symbolName: mergedSummary.profile.symbolName,
+                    accentToken: mergedSummary.profile.accentToken,
+                    kind: mergedSummary.profile.kind,
+                    cleanableBytes: mergedSummary.totalSizeBytes,
+                    itemCount: mergedSummary.items.count,
+                    insertIfMissing: false
+                )
             }
         }
 
@@ -206,9 +267,35 @@ public struct ScanEngine: ScanPerforming, Sendable {
 
         // 3. 追加系统临时目录独立分组（「其他 AI 临时文件（/tmp）」与「/tmp 未归属临时项」）
         if let otherAITempSummary = tempScanResult.otherAITempSummary {
+            let groupFiles = otherAITempSummary.items.reduce(0) { $0 + $1.fileCount }
+            let groupBytes = otherAITempSummary.items.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            progress?.addScanStats(fileCount: groupFiles, bytes: groupBytes)
+            progress?.measureClient(
+                id: otherAITempSummary.profile.id,
+                name: otherAITempSummary.profile.name,
+                symbolName: otherAITempSummary.profile.symbolName,
+                accentToken: otherAITempSummary.profile.accentToken,
+                kind: otherAITempSummary.profile.kind,
+                cleanableBytes: otherAITempSummary.totalSizeBytes,
+                itemCount: otherAITempSummary.items.count,
+                insertIfMissing: true
+            )
             summaries.append(otherAITempSummary)
         }
         if let unattributedTempSummary = tempScanResult.unattributedTempSummary {
+            let groupFiles = unattributedTempSummary.items.reduce(0) { $0 + $1.fileCount }
+            let groupBytes = unattributedTempSummary.items.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            progress?.addScanStats(fileCount: groupFiles, bytes: groupBytes)
+            progress?.measureClient(
+                id: unattributedTempSummary.profile.id,
+                name: unattributedTempSummary.profile.name,
+                symbolName: unattributedTempSummary.profile.symbolName,
+                accentToken: unattributedTempSummary.profile.accentToken,
+                kind: unattributedTempSummary.profile.kind,
+                cleanableBytes: unattributedTempSummary.totalSizeBytes,
+                itemCount: unattributedTempSummary.items.count,
+                insertIfMissing: true
+            )
             summaries.append(unattributedTempSummary)
         }
 
@@ -221,19 +308,25 @@ public struct ScanEngine: ScanPerforming, Sendable {
                 profile,
                 referenceNow: referenceNow,
                 excludedMatcher: excludedMatcher,
-                fileManager: customFM
+                fileManager: customFM,
+                progress: progress
             )
             totalSkippedProtected += result.skippedProtectedCount
             summaries.append(result)
         }
 
-        return ScanReport(
+        // 5. 汇总各客户端条目、过滤排除项并生成最终报告
+        progress?.update(stage: .tallyingCleanableSpace)
+        let report = ScanReport(
             scannedAt: referenceNow,
             clientSummaries: summaries,
             totalBuiltInProfilesCount: builtInProfiles.count,
             detectedBuiltInClientsCount: detectedBuiltInCount,
             skippedProtectedCount: totalSkippedProtected
         ).filtering(excluding: excludedMatcher)
+        progress?.flush()
+
+        return report
     }
 
     // MARK: - Private
@@ -242,13 +335,15 @@ public struct ScanEngine: ScanPerforming, Sendable {
         _ profile: AIClientProfile,
         referenceNow: Date,
         excludedMatcher userExclusions: ExcludedItemMatcher,
-        fileManager: FileManager
+        fileManager: FileManager,
+        progress: ScanProgressEmitter? = nil
     ) -> ClientScanSummary {
         var discoveredItems: [CleanableItem] = []
         var protectedItems: [CleanableItem] = []
         var seenCleanablePaths: Set<String> = []
         var seenProtectedPaths: Set<String> = []
         var skippedProtectedCount = 0
+        var hasDetectedClient = false
         var sessionIndex = profile.isCustom
             ? ClientSessionIndex()
             : sessionReader.loadClientSessionIndex(
@@ -271,6 +366,23 @@ public struct ScanEngine: ScanPerforming, Sendable {
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: targetURL.path, isDirectory: &isDir) else {
                 continue
+            }
+
+            // 首个真实存在的规则目标即认定客户端安装在本机：先弹「检测中」占位卡片
+            if !hasDetectedClient {
+                hasDetectedClient = true
+                progress?.detectClient(
+                    ScanProgressClient(
+                        id: profile.id,
+                        name: profile.name,
+                        symbolName: profile.symbolName,
+                        accentToken: profile.accentToken,
+                        kind: profile.kind,
+                        state: .detecting,
+                        cleanableBytes: 0,
+                        itemCount: 0
+                    )
+                )
             }
 
             if excludedMatcher.isExcluded(targetURL) {
@@ -376,6 +488,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                         requiresIndividualSelection: requiresIndividualSelection
                     )
                 )
+                if !userExclusions.isExcluded(targetURL) {
+                    progress?.addScanStats(fileCount: inspection.fileCount, bytes: inspection.sizeBytes)
+                }
 
             case .children:
                 let rootCheck = profile.isCustom
@@ -422,6 +537,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             requiresIndividualSelection: requiresIndividualSelection
                         )
                     )
+                    if !userExclusions.isExcluded(targetURL) {
+                        progress?.addScanStats(fileCount: 1, bytes: inspection.sizeBytes)
+                    }
                     continue
                 }
 
@@ -525,6 +643,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             cleanupSnapshot: snapshot
                         )
                     )
+                    if !userExclusions.isExcluded(childURL) {
+                        progress?.addScanStats(fileCount: inspection.fileCount, bytes: inspection.sizeBytes)
+                    }
                 }
 
             case .projectSessions:
@@ -641,6 +762,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                                 cleanupSnapshot: snapshot
                             )
                         )
+                        if !userExclusions.isExcluded(sessionURL) {
+                            progress?.addScanStats(fileCount: inspection.fileCount, bytes: inspection.sizeBytes)
+                        }
                     }
                 }
 
@@ -750,6 +874,9 @@ public struct ScanEngine: ScanPerforming, Sendable {
                             cleanupSnapshot: snapshot
                         )
                     )
+                    if !userExclusions.isExcluded(fileURL) {
+                        progress?.addScanStats(fileCount: 1, bytes: inspection.sizeBytes)
+                    }
                 }
             }
         }
@@ -766,6 +893,21 @@ public struct ScanEngine: ScanPerforming, Sendable {
                 return lhs.sizeBytes > rhs.sizeBytes
             }
             return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+
+        // 本机检测到的客户端把卡片从「检测中」刷新为已量出的体积（与结果页 totalSizeBytes 同口径）
+        if hasDetectedClient, let progress {
+            let totalBytes = discoveredItems.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            progress.measureClient(
+                id: profile.id,
+                name: profile.name,
+                symbolName: profile.symbolName,
+                accentToken: profile.accentToken,
+                kind: profile.kind,
+                cleanableBytes: totalBytes,
+                itemCount: discoveredItems.count,
+                insertIfMissing: false
+            )
         }
 
         return ClientScanSummary(

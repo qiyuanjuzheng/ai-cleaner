@@ -772,7 +772,7 @@ final class VirtualizedItemTableViewTests: XCTestCase {
         )
         XCTAssertGreaterThanOrEqual(model.builtInSidebarEntries.count, 20)
 
-        let hosting = NSHostingView(rootView: ContentView(viewModel: model)
+        let hosting = NSHostingView(rootView: ContentView(viewModel: model, diskUsage: DiskUsageRefreshCoordinator(read: { nil }))
             .environment(\.itemListLayoutProbe) { region in AnyView(ItemListFrameProbe(region: region)) })
         let window = attachToOffscreenWindow(hosting, size: NSSize(width: 1180, height: 760))
         defer { window.close() }

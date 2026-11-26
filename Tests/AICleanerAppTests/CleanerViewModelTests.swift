@@ -782,7 +782,7 @@ final class CleanerViewModelTests: XCTestCase {
         // 4. 在 Light / Dark 模式下验证侧栏「系统临时目录」分组与列表页（含未归属提示条、仅逐条手选徽标、来源与近期修改标签）布局
         // 注：直接挂载纯 SwiftUI 子视图而非无窗口 NavigationSplitView（ContentView），避免 macOS 15 离屏 NSHostingView 返回 (0, 0) fittingSize
         for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
-            let sidebarHost = NSHostingView(rootView: SidebarView(viewModel: model))
+            let sidebarHost = NSHostingView(rootView: SidebarView(viewModel: model, diskUsageState: .loading))
             sidebarHost.appearance = NSAppearance(named: appearanceName)
             sidebarHost.frame = NSRect(x: 0, y: 0, width: 252, height: 760)
             sidebarHost.layoutSubtreeIfNeeded()

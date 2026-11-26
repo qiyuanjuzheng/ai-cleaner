@@ -22,7 +22,11 @@ struct ProjectSessionsView: View {
                     }
                 }
             } else if viewModel.projectGroups.isEmpty {
-                ContentUnavailableView("此客户端没有项目会话", systemImage: "folder.badge.clock")
+                ContentUnavailableView {
+                    Label("此客户端没有项目会话", systemImage: "folder.badge.clock")
+                } actions: {
+                    backToCleanupLink
+                }
             } else {
                 HStack(spacing: 0) {
                     projectList
@@ -45,10 +49,14 @@ struct ProjectSessionsView: View {
 
     private var projectList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("项目")
-                .font(.system(.headline, design: .rounded).weight(.bold))
-                .padding(.horizontal, 14)
-                .padding(.top, 16)
+            HStack {
+                Text("项目")
+                    .font(.system(.headline, design: .rounded).weight(.bold))
+                Spacer(minLength: 8)
+                backToCleanupLink
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 16)
 
             ScrollView {
                 LazyVStack(spacing: 3) {
@@ -61,6 +69,16 @@ struct ProjectSessionsView: View {
             }
         }
         .background(AppTheme.glassCardFill(for: colorScheme))
+    }
+
+    private var backToCleanupLink: some View {
+        Button("返回清理条目") {
+            if let clientID = viewModel.sidebarSelection.projectClientID {
+                viewModel.selectBuiltInClient(clientID)
+            }
+        }
+        .buttonStyle(.link)
+        .font(.caption)
     }
 
     private func projectRow(_ group: SessionProject) -> some View {

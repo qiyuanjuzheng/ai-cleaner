@@ -496,7 +496,7 @@ struct ScanReadyHeroView: View {
                             Image(systemName: "chart.line.uptrend.xyaxis")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(AppTheme.color(for: .recommended))
-                            Text("累计已移入废纸篓 \(CleanerFormatting.formatBytes(historicalFreedBytes))")
+                            Text("\(CleanupHistoryCopy.cumulativeCleanedTitle) \(CleanerFormatting.formatBytes(historicalFreedBytes))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(isHistoryHovered ? .primary : .secondary)
                         }

@@ -228,8 +228,6 @@ public enum CleanupHistoryAnalytics {
         calendar: Calendar = .current
     ) -> CleanupHistorySummary {
         let sortedAsc = records.sorted { $0.timestamp < $1.timestamp }
-        let sortedDesc = Array(sortedAsc.reversed())
-
         let totalFreedBytes = sortedAsc.reduce(Int64(0)) { $0 + $1.freedBytes }
         let totalRuns = sortedAsc.count
         let totalTrashedItems = sortedAsc.reduce(0) { $0 + $1.trashedCount }
@@ -370,7 +368,7 @@ public enum CleanupHistoryAnalytics {
             usesWeeklyBuckets: usesWeeklyBuckets,
             points: points,
             topClients: topClients,
-            recentRecords: sortedDesc
+            recentRecords: Array(inRangeRecords.reversed())
         )
     }
 }

@@ -494,6 +494,9 @@ final class CleanupHistoryAndCelebrationTests: XCTestCase {
         XCTAssertEqual(CleanupHistoryCopy.clearOptionsHelp, "清理记录选项")
         XCTAssertEqual(CleanupHistoryCopy.deleteSingleRecordHelp, "删除这条清理记录（保留废纸篓文件）")
         XCTAssertEqual(CleanupHistoryCopy.emptyStateTitle, "暂无清理记录")
+        XCTAssertEqual(CleanupHistoryCopy.cumulativeCleanedTitle, "累计已清理")
+        XCTAssertEqual(CleanupHistoryCopy.clientRankingTitle, "客户端清理排行")
+        XCTAssertEqual(CleanupHistoryCopy.recentRecordsTitle, "最近清理记录")
         XCTAssertTrue(CleanupHistoryCopy.clearRecordsAlertMessage.contains("清理记录"))
         XCTAssertTrue(CleanupHistoryCopy.clearRecordsAlertMessage.contains("废纸篓中的文件会保留"))
 
@@ -513,7 +516,49 @@ final class CleanupHistoryAndCelebrationTests: XCTestCase {
         }
     }
 
+    func testRecentHistoryFitsOnOnePageWithFiveOrFewerRecords() {
+        let records = historyRecords(count: 5)
+        for count in [0, 4, 5] {
+            let expected = Array(records.prefix(count))
+            let page = CleanupHistoryRecentRecordsPage(records: expected, requestedNumber: 1)
+
+            XCTAssertEqual(page.count, 1)
+            XCTAssertEqual(Array(page.records), expected)
+        }
+    }
+
+    func testRecentHistoryPagesKeepAllFourteenRecordsInOrder() {
+        let records = historyRecords(count: 14)
+        let pages = (1...3).map { CleanupHistoryRecentRecordsPage(records: records, requestedNumber: $0) }
+
+        XCTAssertEqual(pages.map(\.count), [3, 3, 3])
+        XCTAssertEqual(pages.map { $0.records.count }, [5, 5, 4])
+        XCTAssertEqual(pages.flatMap(\.records), records)
+    }
+
+    func testRecentHistoryPageClampsAfterDeletingOnlyRecordOnLastPage() {
+        var records = historyRecords(count: 21)
+        let lastPage = CleanupHistoryRecentRecordsPage(records: records, requestedNumber: 5)
+        XCTAssertEqual(lastPage.records.map(\.id), [records[20].id])
+
+        records.removeLast()
+        let currentPage = CleanupHistoryRecentRecordsPage(records: records, requestedNumber: lastPage.number)
+        XCTAssertEqual(currentPage.number, 4)
+        XCTAssertEqual(currentPage.count, 4)
+        XCTAssertEqual(Array(currentPage.records), Array(records[15...19]))
+    }
+
     // MARK: - Helpers
+
+    private func historyRecords(count: Int) -> [CleanupHistoryRecord] {
+        (0..<count).map { index in
+            CleanupHistoryRecord(
+                timestamp: Date(timeIntervalSince1970: -Double(index)),
+                freedBytes: 1_000,
+                trashedCount: 1
+            )
+        }
+    }
 
     @MainActor
     private func makeViewModel(home: URL) -> CleanerViewModel {

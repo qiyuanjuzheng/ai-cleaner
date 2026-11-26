@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Bindable var viewModel: CleanerViewModel
+    let diskUsageState: DiskUsageRefreshCoordinator.State
     @Namespace private var sidebarNamespace
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,7 +57,7 @@ struct SidebarView: View {
                     ) {
                         select(.history)
                     }
-                    .help("累计已移入废纸篓 \(CleanerFormatting.formatBytes(viewModel.totalHistoricalFreedBytes))")
+                    .help("\(CleanupHistoryCopy.cumulativeCleanedTitle) \(CleanerFormatting.formatBytes(viewModel.totalHistoricalFreedBytes))")
 
                     SidebarClientTile(
                         title: "已排除",
@@ -236,21 +237,7 @@ struct SidebarView: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: viewModel.sidebarSelection)
             }
 
-            // 固定底栏高度，扫描结果切换时保持侧边栏布局稳定。
-            HStack(spacing: 6) {
-                if !viewModel.reportScannedTimeText.isEmpty {
-                    Image(systemName: "clock")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                    Text("上次扫描 \(viewModel.reportScannedTimeText)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 34)
+            DiskUsageFooterView(state: diskUsageState, lastScanTime: viewModel.reportScannedTimeText)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }

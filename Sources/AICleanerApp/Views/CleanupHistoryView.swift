@@ -12,6 +12,9 @@ enum CleanupHistoryCopy {
     static let clearOptionsHelp = "清理记录选项"
     static let deleteSingleRecordHelp = "删除这条清理记录（保留废纸篓文件）"
     static let emptyStateTitle = "暂无清理记录"
+    static let cumulativeCleanedTitle = "累计已清理"
+    static let clientRankingTitle = "客户端清理排行"
+    static let recentRecordsTitle = "最近清理记录"
 }
 
 enum CleanupHistoryChartGeometry {
@@ -79,6 +82,22 @@ enum CleanupHistoryChartGeometry {
     }
 }
 
+struct CleanupHistoryRecentRecordsPage {
+    private static let pageSize = 5
+
+    let number: Int
+    let count: Int
+    let records: ArraySlice<CleanupHistoryRecord>
+
+    init(records: [CleanupHistoryRecord], requestedNumber: Int) {
+        let pageSize = Self.pageSize
+        count = max(1, (records.count + pageSize - 1) / pageSize)
+        number = min(max(1, requestedNumber), count)
+        let start = (number - 1) * pageSize
+        self.records = records[start..<min(start + pageSize, records.count)]
+    }
+}
+
 struct CleanupHistoryView: View {
     @Bindable var viewModel: CleanerViewModel
     var initialHoveredPointDate: Date? = nil
@@ -86,6 +105,7 @@ struct CleanupHistoryView: View {
 
     @State private var chartRevealed: Bool = false
     @State private var showingClearAlert: Bool = false
+    @State private var requestedRecentPage = 1
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -94,25 +114,40 @@ struct CleanupHistoryView: View {
         viewModel.historySummary
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                headerRow
-                kpiStripCard
-                HistoryTrendChartCard(
-                    viewModel: viewModel,
-                    summary: summary,
-                    chartRevealed: chartRevealed,
-                    initialHoveredPointDate: initialHoveredPointDate
-                )
+    private var recentPage: CleanupHistoryRecentRecordsPage {
+        CleanupHistoryRecentRecordsPage(records: summary.recentRecords, requestedNumber: requestedRecentPage)
+    }
 
-                if !summary.isEmpty {
-                    bottomDetailGrid
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            headerRow
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    kpiStripCard
+                    HistoryTrendChartCard(
+                        viewModel: viewModel,
+                        summary: summary,
+                        chartRevealed: chartRevealed,
+                        initialHoveredPointDate: initialHoveredPointDate
+                    )
+
+                    if !summary.isEmpty {
+                        bottomDetailGrid
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 24)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 24)
+        }
+        .onChange(of: summary.range) { _, _ in
+            requestedRecentPage = 1
+        }
+        .onChange(of: summary.recentRecords.count) { _, _ in
+            requestedRecentPage = recentPage.number
         }
         .onAppear {
             if !chartRevealed {
@@ -200,7 +235,7 @@ struct CleanupHistoryView: View {
     private var kpiStripCard: some View {
         HStack(spacing: 0) {
             kpiMetricCell(
-                title: "累计已移入废纸篓",
+                title: CleanupHistoryCopy.cumulativeCleanedTitle,
                 value: formatKPIBytes(summary.totalFreedBytes),
                 subtitle: summary.totalRuns > 0
                     ? "共 \(summary.totalRuns) 次清理 · \(summary.totalTrashedItems) 项"
@@ -212,8 +247,8 @@ struct CleanupHistoryView: View {
 
             kpiMetricCell(
                 title: viewModel.historyRange == .allTime
-                    ? "全部时间已移入废纸篓"
-                    : "\(viewModel.historyRange.rawValue)已移入废纸篓",
+                    ? "全部时间已清理"
+                    : "\(viewModel.historyRange.rawValue)已清理",
                 value: formatKPIBytes(summary.rangeFreedBytes),
                 subtitle: summary.rangeRuns > 0
                     ? "周期内 \(summary.rangeRuns) 次清理 · \(summary.rangeTrashedItems) 项"
@@ -224,11 +259,11 @@ struct CleanupHistoryView: View {
             verticalDivider
 
             kpiMetricCell(
-                title: "单次移入废纸篓最大值",
+                title: "单次清理最大值",
                 value: formatKPIBytes(summary.largestSingleRunBytes),
                 subtitle: summary.totalRuns > 0
                     ? "平均每次 \(CleanerFormatting.formatBytes(summary.averagePerRunBytes))"
-                    : "按单次移入废纸篓统计",
+                    : "按单次清理统计",
                 accent: Color(red: 0.60, green: 0.50, blue: 0.98)
             )
         }
@@ -280,22 +315,31 @@ struct CleanupHistoryView: View {
             .frame(width: 1, height: 48)
     }
 
-    // MARK: - 4. 底部双栏：客户端移入废纸篓排行 + 最近移入废纸篓
+    // MARK: - 4. 底部双栏：客户端清理排行 + 最近清理记录
 
     private var bottomDetailGrid: some View {
-        HStack(alignment: .top, spacing: 14) {
-            clientRankingCard
-                .frame(minWidth: 260, maxWidth: 340)
+        Grid(alignment: .topLeading, horizontalSpacing: 14) {
+            GridRow {
+                clientRankingCard
+                    .frame(minWidth: 260, maxWidth: 340)
 
-            recentRecordsCard
-                .frame(maxWidth: .infinity)
+                recentRecordsCard
+                    .frame(maxWidth: .infinity)
+            }
         }
+    }
+
+    private var detailRowDivider: some View {
+        Rectangle()
+            .fill(AppTheme.hairlineDivider(for: colorScheme))
+            .frame(height: 0.5)
+            .padding(.horizontal, 14)
     }
 
     private var clientRankingCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("客户端移入废纸篓排行")
+                Text(CleanupHistoryCopy.clientRankingTitle)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text(viewModel.historyRange.rawValue)
@@ -379,14 +423,12 @@ struct CleanupHistoryView: View {
                         .frame(height: 46)
 
                         if index < topList.count - 1 {
-                            Rectangle()
-                                .fill(AppTheme.hairlineDivider(for: colorScheme))
-                                .frame(height: 0.5)
-                                .padding(.horizontal, 14)
+                            detailRowDivider
                         }
                     }
                 }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(AppTheme.glassCardFill(for: colorScheme))
@@ -399,9 +441,10 @@ struct CleanupHistoryView: View {
     }
 
     private var recentRecordsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let page = recentPage
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("最近移入废纸篓")
+                Text(CleanupHistoryCopy.recentRecordsTitle)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Text("共 \(summary.recentRecords.count) 条")
@@ -411,22 +454,25 @@ struct CleanupHistoryView: View {
             .padding(.horizontal, 4)
 
             VStack(spacing: 0) {
-                let displayed = Array(summary.recentRecords.prefix(20))
-                ForEach(Array(displayed.enumerated()), id: \.element.id) { index, record in
+                ForEach(page.records) { record in
                     HistoryLogRow(record: record) {
                         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.20)) {
                             viewModel.deleteHistoryRecord(id: record.id)
                         }
                     }
 
-                    if index < displayed.count - 1 {
-                        Rectangle()
-                            .fill(AppTheme.hairlineDivider(for: colorScheme))
-                            .frame(height: 0.5)
-                            .padding(.horizontal, 14)
+                    if record.id != page.records.last?.id {
+                        detailRowDivider
                     }
                 }
+
+                if page.count > 1 {
+                    Spacer(minLength: 0)
+                    detailRowDivider
+                    recentRecordsPagination(page)
+                }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(AppTheme.glassCardFill(for: colorScheme))
@@ -437,6 +483,24 @@ struct CleanupHistoryView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         }
+    }
+
+    private func recentRecordsPagination(_ page: CleanupHistoryRecentRecordsPage) -> some View {
+        HStack(spacing: 12) {
+            Button("上一页") { requestedRecentPage = page.number - 1 }
+                .disabled(page.number == 1)
+
+            Text("第 \(page.number) / \(page.count) 页")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button("下一页") { requestedRecentPage = page.number + 1 }
+                .disabled(page.number == page.count)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -470,9 +534,9 @@ struct HistoryTrendChartCard: View {
 
     private var chartMetricLabel: String {
         if viewModel.historyMetricMode == .cumulative {
-            return "累计已移入废纸篓"
+            return CleanupHistoryCopy.cumulativeCleanedTitle
         }
-        return summary.usesWeeklyBuckets ? "每周已移入废纸篓" : "单日已移入废纸篓"
+        return summary.usesWeeklyBuckets ? "每周已清理" : "单日已清理"
     }
 
     private var hoveredPoint: CleanupTrendPoint? {
@@ -489,12 +553,12 @@ struct HistoryTrendChartCard: View {
                             Text(CleanerFormatting.formatDay(point.date))
                                 .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
                                 .foregroundStyle(.primary)
-                            Text("\(periodLabel)已移入废纸篓 \(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
+                            Text("\(periodLabel)已清理 \(point.dailyFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.dailyFreedBytes))")
                                 .font(.caption.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(AppTheme.color(for: .recommended))
                         }
 
-                        Text("累计已移入废纸篓 \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : "")")
+                        Text("\(CleanupHistoryCopy.cumulativeCleanedTitle) \(point.cumulativeFreedBytes <= 0 ? "0 B" : CleanerFormatting.formatBytes(point.cumulativeFreedBytes))\(point.cleanupRuns > 0 ? " · \(point.cleanupRuns) 次清理 · \(point.trashedCount) 项" : "")")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -671,7 +735,7 @@ struct HistoryTrendChartCard: View {
             }
         }
         .chartYScale(domain: 0...yUpper)
-        .chartYAxisLabel("已移入废纸篓")
+        .chartYAxisLabel("已清理")
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6))
@@ -878,7 +942,7 @@ private struct HistoryLogRow: View {
 
     private var detailLine: String {
         if record.sampleItemNames.isEmpty {
-            return "已移入废纸篓"
+            return "已清理"
         }
         return record.sampleItemNames.joined(separator: " / ")
     }

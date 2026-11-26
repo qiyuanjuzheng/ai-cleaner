@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct AICleanerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewModel: CleanerViewModel
+    @State private var diskUsage = DiskUsageRefreshCoordinator()
     @StateObject private var updater = AppUpdater()
 
     init() {
@@ -71,7 +72,7 @@ struct AICleanerApp: App {
 
     var body: some Scene {
         WindowGroup("AI Cleaner") {
-            ContentView(viewModel: viewModel)
+            ContentView(viewModel: viewModel, diskUsage: diskUsage)
                 .frame(minWidth: 1020, minHeight: 660)
                 .preferredColorScheme(viewModel.appearanceMode.colorScheme)
                 .task { updater.start(viewModel: viewModel) }

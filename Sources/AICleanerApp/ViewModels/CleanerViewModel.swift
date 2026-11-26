@@ -401,7 +401,7 @@ final class CleanerViewModel {
             rebuildFilterCache(resetViewport: true)
         }
     }
-    var groupsSessionsByProject = false {
+    var groupsSessionsByProject = true {
         didSet {
             guard groupsSessionsByProject != oldValue, selectedCategory == .sessions else { return }
             rebuildDisplayedRows(resetViewport: true)

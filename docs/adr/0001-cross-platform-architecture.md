@@ -56,6 +56,22 @@ AICL-31 已经确定：三端（macOS / Windows / Linux）同时支持，功能�
 - 三端闲置内存（WebView + sidecar）> 200 MB；
 - Swift on Windows 出现阻塞 AICL-35 验收、且两周内无法绕过的 Foundation / 工具链缺陷。
 
+**AICL-33 实测（x64 Windows、x86_64 Linux、arm64 macOS，单位 MiB）**。Windows 和 Linux
+原样构建都遇到 Darwin 依赖。兼容探针在 Windows 仍有 11 条编译诊断，Linux 测试通过 68/71，
+macOS 原样通过 71/71。
+
+| Tauri 空壳 + Swift 后台进程 | 安装包 | 安装后 | 闲置 RSS / USS |
+| --- | --- | ---: | ---: |
+| Windows（Swift 占位进程） | NSIS 15.08 / MSI 22.82 | 59.42 | 325.21 / 134.82 |
+| Linux（Core 探针，Xvfb） | DEB 24.23 / RPM 24.23 / AppImage 100.99 | 58.47 | 556.13 / 232.80 |
+| macOS（Core 探针） | DMG 3.25 | 5.41 | 119.22 / — |
+
+Windows Swift DLL 在完整 Foundation 样本中为 56.24 MiB，在 FoundationEssentials 最小样本中为
+13.75 MiB。Linux 静态 musl 的对应样本为 53.45 和 10.25 MiB，完整 Foundation 的 Core 探针为
+55.05 MiB。体积数据支持继续当期的规则迁移。评估 200 MB 闲置内存阈值前，需在目标桌面环境用同一
+口径复测 WebView 和 Core。Linux CI 中 Core 探针的 USS 为 24.81 MiB。
+[实测报告与 CI](https://github.com/qiyuanjuzheng/ai-cleaner/actions/runs/45765556970)。
+
 ## 4. 目标架构
 
 ```mermaid

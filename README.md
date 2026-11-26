@@ -86,6 +86,9 @@ open "dist/AI Cleaner.app"
 > `AI_CLEANER_HOME=/path/to/sandbox-home swift run AICleanerApp`
 > 如需同时挂载模拟的 `/tmp` 与用户临时目录，可附加 `AI_CLEANER_SYSTEM_TMP=/path/to/mock-tmp` 与 `AI_CLEANER_USER_TMP=/path/to/mock-user-tmp`。
 
+内置清理规则定义在 `rules/`。编辑规则后，用装有 `jsonschema==4.23.0` 的 Python 环境运行
+`python3 scripts/generate-built-in-rules.py`，并提交生成的 Swift 文件。CI 会校验规则格式和生成结果。
+
 ## 后续发版流程
 
 仓库采用 **Release PR 自动发版（方案 B）**：日常合入 `main` 时仅轻量累计更新日志，成员审阅并合并 Release PR 后，在同一条 GitHub Actions 流水线中自动打标签、构建 macOS Universal 安装包并发布 GitHub Release。

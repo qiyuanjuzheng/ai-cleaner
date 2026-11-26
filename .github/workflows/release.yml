@@ -27,6 +27,8 @@ on:
       - Package.swift
       - Sources/**
       - Tests/**
+      - rules/**
+      - protocol/rules-v1.schema.json
       - scripts/**
 
 permissions: {}
@@ -73,6 +75,13 @@ jobs:
         run: |
           swift test
           ./scripts/test-release-pr.sh
+
+      - name: Verify embedded rules match the JSON packs
+        run: |
+          rules_venv="$RUNNER_TEMP/ai-cleaner-rules"
+          python3 -m venv "$rules_venv"
+          "$rules_venv/bin/python" -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+          "$rules_venv/bin/python" scripts/generate-built-in-rules.py --check
 
       - name: Prepare update signing
         id: signing

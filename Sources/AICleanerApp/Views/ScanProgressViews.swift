@@ -118,62 +118,126 @@ private struct StageSignature: Equatable {
     let isCompleted: Bool
 }
 
-/// 客户端发现卡片栅格：每扫描到一个客户端弹入一张卡片，检测中的客户端显示占位卡片
-struct ScanDiscoveryCardGrid: View {
+/// 客户端发现单行跑马灯：只展示已量出真实体积的客户端卡片，
+/// 新卡片从右侧滑入，超出一行容量时最早的卡片从左侧滚出消失（不出「检测中」占位卡）。
+struct ScanDiscoveryTickerRow: View {
     let progress: ScanProgressModel
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var ticker = ScanDiscoveryTickerState()
+    @State private var drainTask: Task<Void, Never>?
 
-    private let cardMinimumWidth: CGFloat = 118
+    static let cardWidth: CGFloat = 132
+    static let cardSpacing: CGFloat = 10
+    static let rowHeight: CGFloat = 92
+
+    private var revealed: [ScanProgressClient] { progress.revealedClients }
+    private var revealedIDs: [String] { revealed.map(\.id) }
+
+    private var rowWidth: CGFloat {
+        let count = CGFloat(ticker.visibleCapacity)
+        return count * Self.cardWidth + (count - 1) * Self.cardSpacing
+    }
 
     var body: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: cardMinimumWidth, maximum: 150), spacing: 10)],
-            alignment: .center,
-            spacing: 10
-        ) {
-            ForEach(progress.detectedClients) { client in
-                ScanDiscoveryCard(client: client)
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
+        HStack(spacing: Self.cardSpacing) {
+            ForEach(ticker.visibleIDs, id: \.self) { id in
+                if let client = revealed.first(where: { $0.id == id }) {
+                    ScanDiscoveryCard(client: client)
+                        .frame(width: Self.cardWidth)
+                        .transition(cardTransition)
+                }
             }
         }
-        .frame(maxWidth: 560)
-        .animation(
-            reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.82),
-            value: clientIDs
+        .frame(width: rowWidth, height: Self.rowHeight)
+        .clipped()
+        .mask(edgeFadeMask)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .onAppear { syncTicker(with: revealedIDs) }
+        .onChange(of: revealedIDs) { _, ids in syncTicker(with: ids) }
+        .onDisappear {
+            drainTask?.cancel()
+            drainTask = nil
+        }
+    }
+
+    private var cardTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: .trailing).combined(with: .opacity),
+            removal: .move(edge: .leading).combined(with: .opacity)
         )
     }
 
-    private var clientIDs: [String] {
-        progress.detectedClients.map(\.id)
+    /// 两侧渐隐，让滚入 / 滚出更柔和
+    private var edgeFadeMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black, location: 0.06),
+                .init(color: .black, location: 0.94),
+                .init(color: .clear, location: 1)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private var accessibilityLabel: String {
+        guard let latest = revealed.last else { return "正在发现 AI 客户端" }
+        return "已发现 \(revealed.count) 个客户端，最新：\(latest.name)，可清理 \(CleanerFormatting.formatBytes(latest.cleanableBytes))"
+    }
+
+    private func syncTicker(with ids: [String]) {
+        ticker.sync(with: ids)
+        if ids.isEmpty {
+            drainTask?.cancel()
+            drainTask = nil
+            return
+        }
+        scheduleDrain()
+    }
+
+    /// 按节奏逐张放出卡片（纯呈现节奏，数据仍完全来自引擎事件）
+    private func scheduleDrain() {
+        guard drainTask == nil, ticker.hasPending else { return }
+        drainTask = Task { @MainActor in
+            while ticker.hasPending, !Task.isCancelled {
+                if reduceMotion {
+                    ticker.advance()
+                } else {
+                    withAnimation(.easeInOut(duration: 0.55)) {
+                        _ = ticker.advance()
+                    }
+                }
+                try? await Task.sleep(for: .seconds(ticker.releaseInterval))
+            }
+            drainTask = nil
+        }
     }
 }
 
-/// 单张客户端发现卡片
+/// 单张客户端发现卡片：图标 + 名称 + 可清理体积（只用于已量出真实数据的客户端）
 private struct ScanDiscoveryCard: View {
     let client: ScanProgressClient
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isWindowVisibleOnScreen) private var isWindowVisibleOnScreen
-    @State private var shimmerClock = PausableAnimationClock()
 
-    private var isDetecting: Bool { client.state == .detecting }
     private var accent: Color { AppTheme.color(forAccentToken: client.accentToken) }
-    private var isShimmerPaused: Bool { reduceMotion || !isWindowVisibleOnScreen }
 
     var body: some View {
         VStack(spacing: 6) {
             iconTile
                 .frame(width: 36, height: 36)
 
-            Text(isDetecting ? "检测中…" : client.name)
+            Text(client.name)
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(isDetecting ? Color.secondary.opacity(0.8) : Color.primary)
+                .foregroundStyle(Color.primary)
                 .lineLimit(1)
+                .truncationMode(.tail)
 
-            Text(isDetecting ? "—" : CleanerFormatting.formatBytes(client.cleanableBytes))
+            Text(CleanerFormatting.formatBytes(client.cleanableBytes))
                 .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(isDetecting ? Color.secondary.opacity(0.55) : Color(red: 0.11, green: 0.72, blue: 0.55))
+                .foregroundStyle(Color(red: 0.11, green: 0.72, blue: 0.55))
                 .lineLimit(1)
         }
         .padding(.vertical, 10)
@@ -187,36 +251,13 @@ private struct ScanDiscoveryCard: View {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .strokeBorder(AppTheme.specularRimGradient(for: colorScheme), lineWidth: 0.7)
         )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(cardAccessibilityLabel)
-    }
-
-    private var cardAccessibilityLabel: String {
-        if isDetecting {
-            return "\(client.name)，检测中"
-        }
-        return "\(client.name)，可清理 \(CleanerFormatting.formatBytes(client.cleanableBytes))"
     }
 
     @ViewBuilder
     private var iconTile: some View {
         let cornerRadius: CGFloat = 10
 
-        if isDetecting {
-            shimmerTile
-                .overlay(
-                    Image(systemName: client.symbolName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.primary.opacity(0.18))
-                )
-                .frame(width: 36, height: 36)
-                .onAppear {
-                    shimmerClock.setPaused(isShimmerPaused)
-                }
-                .onChange(of: isShimmerPaused) { _, paused in
-                    shimmerClock.setPaused(paused)
-                }
-        } else if let image = ClientLogoResolver.shared.image(for: client.id, colorScheme: colorScheme) {
+        if let image = ClientLogoResolver.shared.image(for: client.id, colorScheme: colorScheme) {
             // 本机可解析到真实应用 / 品牌图标时直接展示（与侧栏同源）
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -226,7 +267,6 @@ private struct ScanDiscoveryCard: View {
                     .scaledToFit()
                     .padding(5)
             }
-            .frame(width: 36, height: 36)
         } else {
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -240,35 +280,6 @@ private struct ScanDiscoveryCard: View {
                 Image(systemName: client.symbolName)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
-            }
-            .frame(width: 36, height: 36)
-        }
-    }
-
-    /// 「检测中」占位光泽：轻微呼吸的高光（减弱动态效果或窗口不可见时静止）
-    @ViewBuilder
-    private var shimmerTile: some View {
-        let cornerRadius: CGFloat = 10
-        let baseOpacity: Double = colorScheme == .dark ? 0.09 : 0.07
-
-        if isShimmerPaused {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.primary.opacity(baseOpacity))
-        } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
-                let phase = (sin(shimmerClock.elapsed(at: timeline.date) * 2.2) + 1) / 2
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.primary.opacity(baseOpacity + 0.05 * phase),
-                                Color.primary.opacity(baseOpacity + 0.11 * phase),
-                                Color.primary.opacity(baseOpacity + 0.05 * phase)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
             }
         }
     }

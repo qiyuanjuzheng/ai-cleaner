@@ -60,6 +60,12 @@ final class ScanProgressModel: @unchecked Sendable {
 
     // MARK: - 派生视图数据
 
+    /// 发现卡片只展示有真实数据的客户端：已量出体积且可清理空间大于 0；
+    /// 「检测中」占位与 0 字节客户端不出卡（按发现顺序）
+    var revealedClients: [ScanProgressClient] {
+        detectedClients.filter { $0.state == .measured && $0.cleanableBytes > 0 }
+    }
+
     /// 步骤条中各阶段的呈现状态
     enum StageDisplayState: Equatable {
         case pending

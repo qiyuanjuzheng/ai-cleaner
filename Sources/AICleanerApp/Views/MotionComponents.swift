@@ -679,11 +679,11 @@ struct OrbitalScannerHero: View {
                 }
                 .frame(height: 52, alignment: .top)
 
-                // 进度反馈区：步骤条 + 客户端发现卡片 + 实时统计（全部由引擎进度事件驱动）
+                // 进度反馈区：步骤条 + 客户端发现单行跑马灯 + 实时统计（全部由引擎进度事件驱动）
                 if let progress {
                     VStack(spacing: 14) {
                         ScanStageProgressBar(progress: progress)
-                        ScanDiscoveryCardGrid(progress: progress)
+                        ScanDiscoveryTickerRow(progress: progress)
                         ScanLiveStatsRow(progress: progress)
                     }
                     .padding(.top, 2)

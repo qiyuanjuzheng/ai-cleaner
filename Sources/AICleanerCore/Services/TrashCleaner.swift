@@ -1,26 +1,28 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
-/// 抽象「移入废纸篓」动作，生产环境固定由 macOS `FileManager.trashItem(at:resultingItemURL:)` 实现，
-/// 单元测试可注入隔离替身以验证完整清理链路。
+/// 抽象「移入系统回收站」动作：生产环境固定由各平台 `PlatformAdapter.moveToTrash(_:)` 实现，
+/// 单元测试可注入隔离替身以验证完整清理链路。任何实现都绝不允许降级为永久删除。
 public protocol TrashPerforming: Sendable {
     func trashItem(at url: URL) throws -> URL?
 }
 
-/// 默认系统废纸篓实现：严格仅调用 `FileManager.trashItem(at:resultingItemURL:)`，绝不执行永久删除。
+/// System trash for the current platform.
 public struct SystemTrashPerformer: TrashPerforming {
     public init() {}
 
     public func trashItem(at url: URL) throws -> URL? {
-        var resultingURL: NSURL?
-        try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
-        return resultingURL as URL?
+        try PlatformTrashPerformer(platform: HostPlatformAdapter.shared).trashItem(at: url)
     }
 }
 
 /// 安全清理服务：
-/// - 每次移入废纸篓前再次执行 SafetyGuard 深度校验；
-/// - 统一通过 `TrashPerforming`（默认 macOS 系统废纸篓）执行可恢复移除；
-/// - 统计已移入废纸篓的大小与异常项。
+/// - 每次移入回收站前再次执行 SafetyGuard 深度校验；
+/// - 统一通过 `TrashPerforming` 执行可恢复移除；
+/// - 统计已移入回收站的大小与异常项。
 public struct TrashCleaner: Sendable {
     public let safetyGuard: SafetyGuard
     public let performer: any TrashPerforming
@@ -28,15 +30,29 @@ public struct TrashCleaner: Sendable {
 
     public init(
         safetyGuard: SafetyGuard = SafetyGuard(),
-        performer: any TrashPerforming = SystemTrashPerformer(),
-        sizer: DirectorySizer = DirectorySizer()
+        performer: (any TrashPerforming)? = nil,
+        sizer: DirectorySizer? = nil
     ) {
         self.safetyGuard = safetyGuard
-        self.performer = performer
-        self.sizer = sizer
+        self.performer = performer ?? PlatformTrashPerformer(platform: safetyGuard.platform)
+        self.sizer = sizer ?? DirectorySizer(platform: safetyGuard.platform)
     }
 
-    /// 将选中的条目批量安全移入系统废纸篓。
+    public init(
+        platform: any PlatformAdapter,
+        safetyGuard: SafetyGuard? = nil,
+        performer: (any TrashPerforming)? = nil,
+        sizer: DirectorySizer? = nil
+    ) {
+        let resolvedGuard = safetyGuard ?? SafetyGuard(platform: platform)
+        self.init(
+            safetyGuard: resolvedGuard,
+            performer: performer ?? PlatformTrashPerformer(platform: platform),
+            sizer: sizer ?? DirectorySizer(platform: platform)
+        )
+    }
+
+    /// 将选中的条目批量安全移入系统回收站。
     /// - Parameter allowNotRecommendedOverride: 默认 `false`（严格拦截任何「不建议清理」项）；
     ///   仅在用户通过双重风险提醒并显式确认覆盖后才应传入 `true`，此时仍会校验目标及其后代的硬保护规则。
     public func trash(
@@ -46,6 +62,7 @@ public struct TrashCleaner: Sendable {
         projectProtectionStore: ProjectProtectionStore? = nil,
         verifyProjectSelection: Bool = false
     ) -> CleanupResult {
+        let platform = safetyGuard.platform
         let fileManager = FileManager.default
         var trashed: [TrashedItemRecord] = []
         var skippedProtected: [CleanupFailure] = []
@@ -54,15 +71,24 @@ public struct TrashCleaner: Sendable {
 
         let catalog = projectCatalog ?? ProjectSessionCatalog(items: items)
         var checkedProjectPaths: Set<String> = []
-        var projectProtection = catalog.protection(for: checkedProjectPaths)
+        var projectProtection = catalog.protection(for: checkedProjectPaths, platform: platform)
         let sorted = items.sorted {
-            SafetyGuard.normalizeTempPath($0.url).path.count < SafetyGuard.normalizeTempPath($1.url).path.count
+            PlatformPath.normalize(SafetyGuard.normalizeTempPath($0.url, platform: platform)).count
+                < PlatformPath.normalize(SafetyGuard.normalizeTempPath($1.url, platform: platform)).count
         }
-        var trashedPaths: Set<String> = []
+        var trashedNormalizedPaths: [String] = []
 
         for item in sorted {
-            let url = SafetyGuard.normalizeTempPath(URL(fileURLWithPath: item.url.path))
-            if trashedPaths.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) {
+            let freshURL = URL(fileURLWithPath: PlatformPath.fileSystemPath(for: item.url))
+            let url = SafetyGuard.normalizeTempPath(freshURL, platform: platform)
+            let normalizedPath = PlatformPath.normalize(url)
+            if trashedNormalizedPaths.contains(where: {
+                PlatformPath.isEqualOrDescendant(
+                    normalizedPath,
+                    of: $0,
+                    caseInsensitive: platform.pathsAreCaseInsensitive
+                )
+            }) {
                 continue
             }
             let isOverride = !item.isCleanable && allowNotRecommendedOverride
@@ -85,8 +111,8 @@ public struct TrashCleaner: Sendable {
                 continue
             }
 
-            let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
-            if !fileManager.fileExists(atPath: url.path) && !isSymlink {
+            // 通过 platform.identity(at:) 原子检测存在性（含悬空符号链接与重解析点，绝不穿透）
+            guard (try? platform.identity(at: url)) != nil else {
                 failed.append(CleanupFailure(item: item, reason: "条目不存在或已被外部移除"))
                 continue
             }
@@ -96,7 +122,9 @@ public struct TrashCleaner: Sendable {
 
             // 使用新的 URL 读取当前类型，避免复用体积扫描缓存的文件属性。
             let safetyDecision = safetyGuard.validateTargetRecursively(
-                URL(fileURLWithPath: url.path), fileManager: fileManager, allowUserOverride: isOverride
+                URL(fileURLWithPath: PlatformPath.fileSystemPath(for: url)),
+                fileManager: fileManager,
+                allowUserOverride: isOverride
             )
             if let reason = safetyDecision.blockReason {
                 skippedProtected.append(CleanupFailure(item: item, reason: reason))
@@ -106,18 +134,18 @@ public struct TrashCleaner: Sendable {
             do {
                 let currentProjectPaths = try projectProtectionStore?.load() ?? []
                 if currentProjectPaths != checkedProjectPaths {
-                    projectProtection = catalog.protection(for: currentProjectPaths)
+                    projectProtection = catalog.protection(for: currentProjectPaths, platform: platform)
                     checkedProjectPaths = currentProjectPaths
                 }
             } catch {
                 failed.append(CleanupFailure(item: item, reason: "无法读取项目保护设置，请检查设置后重试"))
                 continue
             }
-            if projectProtection.blocks(item) {
+            if projectProtection.blocks(item, platform: platform) {
                 skippedProtected.append(CleanupFailure(item: item, reason: "此条目属于受保护的项目，或包含该项目的数据"))
                 continue
             }
-            if verifyProjectSelection && catalog.wouldRemoveWorkspace(item) {
+            if verifyProjectSelection && catalog.wouldRemoveWorkspace(item, platform: platform) {
                 skippedProtected.append(CleanupFailure(item: item, reason: "此条目是项目工作区，或包含项目工作区"))
                 continue
             }
@@ -127,7 +155,7 @@ public struct TrashCleaner: Sendable {
                     failed.append(CleanupFailure(item: item, reason: "扫描时无法验证条目的文件身份或修改时间，请重新扫描"))
                     continue
                 }
-                if let reason = snapshot.changeReason(at: url) {
+                if let reason = snapshot.changeReason(at: url, platform: platform) {
                     failed.append(CleanupFailure(item: item, reason: reason))
                     continue
                 }
@@ -135,15 +163,22 @@ public struct TrashCleaner: Sendable {
 
             do {
                 let resultingURL = try performer.trashItem(at: url)
-                trashedPaths.insert(url.path)
+                trashedNormalizedPaths.append(normalizedPath)
                 let record = TrashedItemRecord(item: item, resultingTrashURL: resultingURL, trashedBytes: liveSize)
                 trashed.append(record)
                 trashedBytes += record.trashedBytes
+            } catch let trashError as TrashError {
+                failed.append(
+                    CleanupFailure(
+                        item: item,
+                        reason: "移入废纸篓失败：\(trashError.description)"
+                    )
+                )
             } catch {
                 failed.append(
                     CleanupFailure(
                         item: item,
-                        reason: "移入废纸篓失败：\(error.localizedDescription)"
+                        reason: "移入废纸篓失败：\(String(describing: error))"
                     )
                 )
             }

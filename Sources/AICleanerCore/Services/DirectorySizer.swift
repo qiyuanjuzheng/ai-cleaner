@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 单次目录/文件只读体积与安全检测的统计结果
 public struct PathInspectionResult: Sendable {
@@ -25,54 +29,44 @@ public struct PathInspectionResult: Sendable {
 }
 
 /// 严格只读的目录体积与元数据计算器：
-/// - 不修改任何文件或目录属性；
-/// - 不递归穿透符号链接，避免循环引用与重复计费；
-/// - 同步检测内部是否存在受保护的凭据/配置/数据库文件。
+/// - 全部经由 `PlatformAdapter` 读取文件身份与目录子项，不修改任何文件或目录属性；
+/// - 绝不递归穿透符号链接或 Windows 重解析点/目录联接，避免循环引用、越界与重复计费；
+/// - 同步检测内部是否存在受保护的凭据/配置/数据库文件或特殊系统节点。
 public struct DirectorySizer: Sendable {
-    public init() {}
+    public let platform: any PlatformAdapter
+
+    public init(platform: any PlatformAdapter = HostPlatformAdapter.shared) {
+        self.platform = platform
+    }
 
     public func inspect(
         url: URL,
         safetyGuard: SafetyGuard? = nil,
         fileManager: FileManager = .default,
-        descendantValidator: ((URL, URLResourceValues) -> String?)? = nil
+        descendantValidator: ((URL, FileIdentity) -> String?)? = nil
     ) -> PathInspectionResult? {
-        let keys: Set<URLResourceKey> = [
-            .isDirectoryKey,
-            .isRegularFileKey,
-            .isSymbolicLinkKey,
-            .fileResourceTypeKey,
-            .fileSizeKey,
-            .totalFileSizeKey,
-            .contentModificationDateKey
-        ]
-
-        guard let rootValues = try? url.resourceValues(forKeys: keys) else {
+        guard let rootIdentity = try? platform.identity(at: url) else {
             return nil
         }
 
-        if safetyGuard != nil,
-           let rootType = rootValues.fileResourceType,
-           rootType == .socket || rootType == .namedPipe || rootType == .characterSpecial || rootType == .blockSpecial {
+        if safetyGuard != nil, rootIdentity.kind.isSpecialNode {
             return PathInspectionResult(
                 sizeBytes: 0,
                 fileCount: 0,
-                modifiedAt: rootValues.contentModificationDate ?? Date(),
+                modifiedAt: rootIdentity.modifiedAt,
                 isDirectory: false,
                 protectedDescendantReason: "\(url.lastPathComponent)：特殊系统节点（Socket/FIFO/设备文件）不允许清理"
             )
         }
 
-        let isSymlink = rootValues.isSymbolicLink ?? false
-        let isDirectory = (rootValues.isDirectory ?? false) && !isSymlink
-        var latestModified = rootValues.contentModificationDate ?? .distantPast
+        let isDirectory = rootIdentity.kind == .directory
+        var latestModified = rootIdentity.modifiedAt
 
         if !isDirectory {
-            let size = Int64(rootValues.totalFileSize ?? rootValues.fileSize ?? 0)
             return PathInspectionResult(
-                sizeBytes: max(0, size),
+                sizeBytes: max(0, rootIdentity.size),
                 fileCount: 1,
-                modifiedAt: latestModified == .distantPast ? Date() : latestModified,
+                modifiedAt: latestModified,
                 isDirectory: false,
                 protectedDescendantReason: nil
             )
@@ -82,26 +76,32 @@ public struct DirectorySizer: Sendable {
         var totalFiles = 0
         var protectedReason: String?
 
-        if let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: Array(keys),
-            options: []
-        ) {
-            while let childURL = autoreleasepool(invoking: { enumerator.nextObject() as? URL }) {
+        var dirStack: [URL] = [url]
+        while let currentDir = dirStack.popLast(), protectedReason == nil {
+            if Task.isCancelled {
+                break
+            }
+            let children: [URL]
+            do {
+                children = try withCoreAutoreleasePool {
+                    try platform.contentsOfDirectory(at: currentDir)
+                }
+            } catch {
+                continue
+            }
+
+            for childURL in children {
                 if Task.isCancelled {
                     break
                 }
-
-                guard let values = try? childURL.resourceValues(forKeys: keys) else {
+                guard let identity = try? platform.identity(at: childURL) else {
                     continue
                 }
 
-                let childIsSymlink = values.isSymbolicLink ?? false
-                let childIsDir = (values.isDirectory ?? false) && !childIsSymlink
+                let childIsLink = identity.kind.isLinkOrReparsePoint
+                let childIsDir = identity.kind == .directory
 
-                if safetyGuard != nil,
-                   let resourceType = values.fileResourceType,
-                   resourceType == .socket || resourceType == .namedPipe || resourceType == .characterSpecial || resourceType == .blockSpecial {
+                if safetyGuard != nil, identity.kind.isSpecialNode {
                     protectedReason = "\(childURL.lastPathComponent)：特殊系统节点（Socket/FIFO/设备文件）不允许清理"
                     break
                 }
@@ -114,27 +114,27 @@ public struct DirectorySizer: Sendable {
                     }
                 }
 
-                if let descendantValidator, let reason = descendantValidator(childURL, values) {
+                if let descendantValidator, let reason = descendantValidator(childURL, identity) {
                     protectedReason = reason
                     break
                 }
 
-                if let modDate = values.contentModificationDate, modDate > latestModified {
-                    latestModified = modDate
+                if identity.modifiedAt > latestModified {
+                    latestModified = identity.modifiedAt
                 }
 
-                if childIsSymlink {
-                    // 不跟随符号链接深入子目录，且按链接本身大小计入 1 项
-                    let linkSize = Int64(values.fileSize ?? 0)
-                    totalBytes += max(0, linkSize)
+                if childIsLink {
+                    // 绝不跟随符号链接或 Windows 重解析点/目录联接深入子目录，按链接本身大小计入 1 项
+                    totalBytes += max(0, identity.size)
                     totalFiles += 1
                     continue
                 }
 
-                if values.isRegularFile == true {
-                    let size = Int64(values.totalFileSize ?? values.fileSize ?? 0)
-                    totalBytes += max(0, size)
+                if identity.kind == .regular {
+                    totalBytes += max(0, identity.size)
                     totalFiles += 1
+                } else if childIsDir {
+                    dirStack.append(childURL)
                 }
             }
         }
@@ -142,7 +142,7 @@ public struct DirectorySizer: Sendable {
         return PathInspectionResult(
             sizeBytes: totalBytes,
             fileCount: totalFiles,
-            modifiedAt: latestModified == .distantPast ? Date() : latestModified,
+            modifiedAt: latestModified,
             isDirectory: true,
             protectedDescendantReason: protectedReason
         )

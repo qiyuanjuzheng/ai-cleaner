@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 单条被用户手动排除（不再在待清理列表中展示）的条目记录
 public struct ExcludedItemRecord: Identifiable, Codable, Hashable, Sendable {
@@ -50,7 +54,7 @@ public struct ExcludedItemRecord: Identifiable, Codable, Hashable, Sendable {
     /// 从扫描条目构造排除记录，优先保留会话可读标题与所属分组信息
     public static func from(item: CleanableItem, excludedAt: Date = Date()) -> ExcludedItemRecord {
         ExcludedItemRecord(
-            path: item.url.path,
+            path: PlatformPath.fileSystemPath(for: item.url),
             displayName: item.preferredDisplayTitle,
             clientID: item.clientID,
             clientName: item.clientName,

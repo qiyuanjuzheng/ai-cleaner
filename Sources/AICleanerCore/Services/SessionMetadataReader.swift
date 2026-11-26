@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 聊天会话元数据轻量预览（严格只读，仅读取文件头尾或压缩流头部的有限字节）
 public struct SessionPreview: Equatable, Sendable {
@@ -78,22 +82,22 @@ struct ClientSessionIndex: Sendable {
         }
         guard !record.isEmpty else { return }
 
-        if let rawID = sessionID?.trimmingCharacters(in: .whitespacesAndNewlines), !rawID.isEmpty {
+        if let rawID = sessionID?.trimmedWhitespaceAndNewlines(), !rawID.isEmpty {
             let key = rawID.lowercased()
             mergeEntry(key: key, into: &bySessionID, record: record, preferExisting: preferExisting)
         }
 
-        if let rawPath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPath.isEmpty {
-            let normalized = URL(fileURLWithPath: rawPath).standardizedFileURL.path.lowercased()
+        if let rawPath = workspacePath?.trimmedWhitespaceAndNewlines(), !rawPath.isEmpty {
+            let normalized = PlatformPath.normalize(rawPath).lowercased()
             mergeEntry(key: normalized, into: &byWorkspacePath, record: record, preferExisting: preferExisting)
 
-            let last = URL(fileURLWithPath: rawPath).lastPathComponent.lowercased()
+            let last = PlatformPath.lastPathComponent(rawPath).lowercased()
             if !last.isEmpty && last != "/" {
                 mergeEntry(key: last, into: &byWorkspaceFolderName, record: record, preferExisting: preferExisting)
             }
         }
 
-        if let rawFolder = folderName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawFolder.isEmpty {
+        if let rawFolder = folderName?.trimmedWhitespaceAndNewlines(), !rawFolder.isEmpty {
             mergeEntry(key: rawFolder.lowercased(), into: &byWorkspaceFolderName, record: record, preferExisting: preferExisting)
         }
     }
@@ -118,17 +122,17 @@ struct ClientSessionIndex: Sendable {
     }
 
     func lookup(sessionID: String) -> SessionRecord? {
-        let key = sessionID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let key = sessionID.trimmedWhitespaceAndNewlines().lowercased()
         guard !key.isEmpty else { return nil }
         return bySessionID[key]
     }
 
     func lookup(workspaceURL: URL) -> SessionRecord? {
-        let normalized = workspaceURL.standardizedFileURL.path.lowercased()
+        let normalized = PlatformPath.normalize(workspaceURL).lowercased()
         if let exact = byWorkspacePath[normalized] {
             return exact
         }
-        let folder = workspaceURL.lastPathComponent.lowercased()
+        let folder = PlatformPath.lastPathComponent(PlatformPath.normalize(workspaceURL)).lowercased()
         return byWorkspaceFolderName[folder]
     }
 
@@ -204,7 +208,11 @@ public struct SessionMetadataReader: Sendable {
         "png", "jpg", "jpeg", "webp", "gif", "heic", "heif", "bmp", "tiff", "svg"
     ]
 
-    public init() {}
+    public let platform: (any PlatformAdapter)?
+
+    public init(platform: (any PlatformAdapter)? = nil) {
+        self.platform = platform
+    }
 
     // MARK: - Client-Level Static Index Loading (Strictly Read-Only)
 
@@ -278,12 +286,12 @@ public struct SessionMetadataReader: Sendable {
             let siblingJSONL = itemURL
                 .deletingLastPathComponent()
                 .appendingPathComponent(String(entryName.dropLast(".file-rollback.ndjson".count)) + ".jsonl")
-            if fileManager.fileExists(atPath: siblingJSONL.path) {
+            if fileManager.fileExists(atPath: PlatformPath.fileSystemPath(for: siblingJSONL)) {
                 preview = readJSONLPreview(from: siblingJSONL)
             }
         } else if isDirectory {
             // 1. 优先检查目录内部是否直接存放主会话归档（如 DeepSeek Harness 的 `session-<uuid>/session.v4.jsonl.zstd`）
-            if let embeddedSessionFile = Self.findEmbeddedSessionFile(in: itemURL, fileManager: fileManager) {
+            if let embeddedSessionFile = Self.findEmbeddedSessionFile(in: itemURL, platform: platform, fileManager: fileManager) {
                 preview = readJSONLPreview(from: embeddedSessionFile)
                 isPrimarySessionDir = true
             } else {
@@ -291,7 +299,7 @@ public struct SessionMetadataReader: Sendable {
                 let siblingJSONL = itemURL
                     .deletingLastPathComponent()
                     .appendingPathComponent(entryName + ".jsonl")
-                if fileManager.fileExists(atPath: siblingJSONL.path) {
+                if fileManager.fileExists(atPath: PlatformPath.fileSystemPath(for: siblingJSONL)) {
                     preview = readJSONLPreview(from: siblingJSONL)
                     hasSiblingSession = true
                 }
@@ -575,7 +583,7 @@ public struct SessionMetadataReader: Sendable {
                 ruleExplanation: rule.explanation,
                 candidateID: candidateID,
                 isUUIDLike: isUUIDLike,
-                countDescription: Self.describeImageDirectoryCount(at: itemURL, fallbackFileCount: fileCount, fileManager: fileManager),
+                countDescription: Self.describeImageDirectoryCount(at: itemURL, fallbackFileCount: fileCount, platform: platform, fileManager: fileManager),
                 sessionIndex: sessionIndex
             )
 
@@ -720,11 +728,11 @@ public struct SessionMetadataReader: Sendable {
             return readCompressedJSONLPreview(from: url)
         }
 
-        guard let handle = Self.openRegularFile(url) else {
+        guard let handle = Self.openRegularFile(url, platform: platform) else {
             return SessionPreview()
         }
         defer {
-            try? handle.close()
+            handle.close()
         }
 
         // 逐块读取头部（每次 64 KB，最多 256 KB），一旦提取到项目名与首条用户提问即提前结束，兼顾大系统提示词与扫描性能
@@ -742,7 +750,7 @@ public struct SessionMetadataReader: Sendable {
         var reachedEOF = false
 
         while headData.count < Self.maxHeadBytes {
-            guard let chunk = try? handle.read(upToCount: Self.headChunkBytes), !chunk.isEmpty else {
+            guard let chunk = handle.read(upToCount: Self.headChunkBytes), !chunk.isEmpty else {
                 reachedEOF = true
                 break
             }
@@ -821,10 +829,10 @@ public struct SessionMetadataReader: Sendable {
             if Self.mayContainTitleMarker(headData) {
                 titleLineDatas = Self.splitLineSlices(headData)
             }
-            if let end = try? handle.seekToEnd(),
+            if let end = handle.seekToEnd(),
                end > UInt64(headData.count),
-               (try? handle.seek(toOffset: end - UInt64(min(UInt64(Self.maxTailBytes), end)) - (end > UInt64(Self.maxTailBytes) ? 1 : 0))) != nil,
-               let tail = try? handle.read(upToCount: Self.maxTailBytes + 1),
+               handle.seek(toOffset: end - UInt64(min(UInt64(Self.maxTailBytes), end)) - (end > UInt64(Self.maxTailBytes) ? 1 : 0)),
+               let tail = handle.read(upToCount: Self.maxTailBytes + 1),
                Self.mayContainTitleMarker(tail) {
                 if end > UInt64(Self.maxTailBytes), let firstNewline = tail.firstIndex(of: 0x0A) {
                     // 从边界前一字节开始读取，以区分恰好在行首和截断了首行的情况
@@ -920,6 +928,7 @@ public struct SessionMetadataReader: Sendable {
             at: url,
             maxCompressedBytes: Self.maxCompressedReadBytes,
             maxOutputBytes: Self.maxDecompressedBytes,
+            platform: platform,
             shouldStop: { partialBytes in
                 scanIncrementalLines(in: partialBytes, includeTrailingIncomplete: false)
                 if expectsEmbeddedTitle {
@@ -1077,7 +1086,7 @@ public struct SessionMetadataReader: Sendable {
     ]
 
     private static func mayContainTitleMarker(_ data: Data) -> Bool {
-        titleMarkerNeedles.contains { data.range(of: $0) != nil }
+        titleMarkerNeedles.contains { data.containsSubsequence($0) }
     }
 
     private static func splitLineSlices(_ data: Data) -> [Data] {
@@ -1172,8 +1181,8 @@ public struct SessionMetadataReader: Sendable {
 
         // 2. 严格只读回退读取 `.codex/state_*.sqlite`（优先最新版本号，仅作未命中 session_index 时的补充）
         let codexRoot = homeDirectory.appendingPathComponent(".codex")
-        if let stateDB = Self.findLatestCodexStateDB(in: codexRoot, fileManager: fileManager) {
-            ReadOnlySQLiteReader.withReadOnlyDatabase(at: stateDB) { db in
+        if let stateDB = Self.findLatestCodexStateDB(in: codexRoot, platform: platform, fileManager: fileManager) {
+            ReadOnlySQLiteReader.withReadOnlyDatabase(at: stateDB, platform: platform) { db in
                 var rows = ReadOnlySQLiteReader.queryStringRows(
                     db: db,
                     sql: "SELECT id, SUBSTR(title, 1, 512), cwd, SUBSTR(source, 1, 512), SUBSTR(first_user_message, 1, 256) FROM threads LIMIT \(ReadOnlySQLiteReader.defaultRowLimit)",
@@ -1290,20 +1299,15 @@ public struct SessionMetadataReader: Sendable {
     ) {
         let projectsRoot = homeDirectory.appendingPathComponent(".claude/projects")
         guard safetyGuard.validateBuiltInContainer(projectsRoot).isAllowed,
-              let projectDirs = try? fileManager.contentsOfDirectory(
-                  at: projectsRoot,
-                  includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                  options: []
-              ) else {
+              let projectDirs = Self.listDirectoryEntries(at: projectsRoot, skipHidden: false, platform: platform, fileManager: fileManager) else {
             return
         }
 
         for dir in projectDirs {
             if Task.isCancelled { break }
-            let values = try? dir.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard values?.isDirectory == true, values?.isSymbolicLink != true else { continue }
+            guard Self.isDirectoryNonSymlink(dir, platform: platform) else { continue }
             let idxFile = dir.appendingPathComponent("sessions-index.json")
-            guard let data = Self.readBoundedRegularFile(idxFile, maxBytes: 1_048_576),
+            guard let data = Self.readBoundedRegularFile(idxFile, maxBytes: 1_048_576, platform: platform),
                   let root = Self.parseJSON(data),
                   let entries = root["entries"] as? [[String: Any]] else {
                 continue
@@ -1338,8 +1342,8 @@ public struct SessionMetadataReader: Sendable {
             homeDirectory.appendingPathComponent(".workbuddy/workbuddy.db"),
             homeDirectory.appendingPathComponent(".workbuddy-ai/workbuddy.db")
         ]
-        for dbURL in candidates where fileManager.fileExists(atPath: dbURL.path) {
-            ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL) { db in
+        for dbURL in candidates where fileManager.fileExists(atPath: PlatformPath.fileSystemPath(for: dbURL)) {
+            ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL, platform: platform) { db in
                 let rows = ReadOnlySQLiteReader.queryStringRows(
                     db: db,
                     sql: "SELECT id, cwd, SUBSTR(title, 1, 256), SUBSTR(custom_title, 1, 256) FROM sessions ORDER BY updated_at DESC LIMIT \(ReadOnlySQLiteReader.defaultRowLimit)",
@@ -1376,7 +1380,7 @@ public struct SessionMetadataReader: Sendable {
             homeDirectory.appendingPathComponent(".gemini/antigravity-cli/conversation_summaries.db")
         ]
         for dbURL in dbPaths {
-            ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL) { db in
+            ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL, platform: platform) { db in
                 let summaryRows = ReadOnlySQLiteReader.queryStringRows(
                     db: db,
                     sql: "SELECT conversation_id, SUBSTR(title, 1, 256), SUBSTR(preview, 1, 256), SUBSTR(workspace_uris, 1, 1024), project_id FROM conversation_summaries LIMIT \(ReadOnlySQLiteReader.defaultRowLimit)",
@@ -1425,7 +1429,7 @@ public struct SessionMetadataReader: Sendable {
         homeDirectory: URL
     ) {
         let dbURL = homeDirectory.appendingPathComponent(".local/share/opencode/opencode.db")
-        ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL) { db in
+        ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL, platform: platform) { db in
             var rows = ReadOnlySQLiteReader.queryStringRows(
                 db: db,
                 sql: "SELECT id, SUBSTR(title, 1, 256), directory, path, slug FROM session_v2 LIMIT \(ReadOnlySQLiteReader.defaultRowLimit)",
@@ -1462,7 +1466,7 @@ public struct SessionMetadataReader: Sendable {
         homeDirectory: URL
     ) {
         let dbURL = homeDirectory.appendingPathComponent(".zcode/v2/tasks-index.sqlite")
-        ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL) { db in
+        ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL, platform: platform) { db in
             let taskRows = ReadOnlySQLiteReader.queryStringRows(
                 db: db,
                 sql: "SELECT task_id, SUBSTR(title, 1, 256), SUBSTR(cli_title, 1, 256), workspace_key, workspace_path, root_path FROM tasks ORDER BY updated_at DESC LIMIT \(ReadOnlySQLiteReader.defaultRowLimit)",
@@ -1598,7 +1602,7 @@ public struct SessionMetadataReader: Sendable {
         if let data = Self.readBoundedRegularFile(yamlURL, maxBytes: 16_384) {
             let text = String(decoding: data, as: UTF8.self)
             for rawLine in text.split(whereSeparator: \.isNewline) {
-                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                let line = String(rawLine).trimmedHorizontalWhitespace()
                 if title == nil, line.hasPrefix("summary:") {
                     title = Self.cleanYAMLValue(String(line.dropFirst("summary:".count)))
                 } else if projectName == nil, line.hasPrefix("cwd:") {
@@ -1613,7 +1617,7 @@ public struct SessionMetadataReader: Sendable {
         // 2. events.jsonl 回退
         let eventsURL = dirURL.appendingPathComponent("events.jsonl")
         var snippet: String?
-        if (title == nil || projectName == nil), fileManager.fileExists(atPath: eventsURL.path) {
+        if (title == nil || projectName == nil), fileManager.fileExists(atPath: PlatformPath.fileSystemPath(for: eventsURL)) {
             let preview = readJSONLPreview(from: eventsURL)
             title = title ?? preview.title
             snippet = preview.summary ?? preview.promptSnippet
@@ -1647,7 +1651,7 @@ public struct SessionMetadataReader: Sendable {
 
         var snippet: String?
         let messagesJSONL = dirURL.appendingPathComponent("messages.jsonl")
-        if title == nil, fileManager.fileExists(atPath: messagesJSONL.path) {
+        if title == nil, fileManager.fileExists(atPath: PlatformPath.fileSystemPath(for: messagesJSONL)) {
             let preview = readJSONLPreview(from: messagesJSONL)
             title = preview.title
             snippet = preview.summary ?? preview.promptSnippet
@@ -1668,11 +1672,7 @@ public struct SessionMetadataReader: Sendable {
         sessionIndex: ClientSessionIndex,
         fileManager: FileManager
     ) -> SessionItemMetadata? {
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: dirURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        guard let children = Self.listDirectoryEntries(at: dirURL, skipHidden: true, platform: platform, fileManager: fileManager) else {
             return nil
         }
 
@@ -1753,7 +1753,7 @@ public struct SessionMetadataReader: Sendable {
         ).filter { $0.lastPathComponent == "store.db" }
 
         for dbURL in storeDBs {
-            if let record = ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL, { db -> SessionRecord? in
+            if let record = ReadOnlySQLiteReader.withReadOnlyDatabase(at: dbURL, platform: platform, { db -> SessionRecord? in
                 let rows = ReadOnlySQLiteReader.queryStringRows(
                     db: db,
                     sql: "SELECT value FROM meta WHERE key = '0' LIMIT 1",
@@ -1835,11 +1835,7 @@ public struct SessionMetadataReader: Sendable {
         let chatsDir = dirURL.appendingPathComponent("chats")
         var sessionTitle: String?
         var sessionSnippet: String?
-        if let chatFiles = try? fileManager.contentsOfDirectory(
-            at: chatsDir,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
+        if let chatFiles = Self.listDirectoryEntries(at: chatsDir, skipHidden: true, platform: platform, fileManager: fileManager) {
             for file in chatFiles.filter({ $0.pathExtension.lowercased() == "json" }).prefix(4) {
                 let preview = readJSONSessionMetadata(from: file)
                 sessionTitle = sessionTitle ?? preview.title
@@ -1917,8 +1913,8 @@ public struct SessionMetadataReader: Sendable {
     // MARK: - Codex Index Reader
 
     func readCodexTitles(from url: URL) -> [UUID: String] {
-        guard let handle = Self.openRegularFile(url) else { return [:] }
-        defer { try? handle.close() }
+        guard let handle = Self.openRegularFile(url, platform: platform) else { return [:] }
+        defer { handle.close() }
 
         var titles: [UUID: String] = [:]
         var pendingLine = Data()
@@ -1932,7 +1928,7 @@ public struct SessionMetadataReader: Sendable {
 
         // 索引为追加写入格式。按行读完整索引即可匹配较早的归档，同一 ID 以最后一条为准。
         while !Task.isCancelled,
-              let chunk = try? handle.read(upToCount: Self.headChunkBytes), !chunk.isEmpty {
+              let chunk = handle.read(upToCount: Self.headChunkBytes), !chunk.isEmpty {
             for (index, part) in chunk.split(separator: 0x0A, omittingEmptySubsequences: false).enumerated() {
                 if index > 0 {
                     consumeLine()
@@ -1949,12 +1945,31 @@ public struct SessionMetadataReader: Sendable {
 
     // MARK: - Helpers
 
-    private static func findLatestCodexStateDB(in codexRoot: URL, fileManager: FileManager) -> URL? {
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: codexRoot,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+    private static func listDirectoryEntries(
+        at dir: URL,
+        skipHidden: Bool,
+        platform: (any PlatformAdapter)?,
+        fileManager: FileManager
+    ) -> [URL]? {
+        guard let entries = try? (platform ?? HostPlatformAdapter.shared).contentsOfDirectory(at: dir) else { return nil }
+        if !skipHidden { return entries }
+        return entries.filter { !$0.lastPathComponent.hasPrefix(".") }
+    }
+
+    private static func isRegularNonSymlink(_ url: URL, platform: (any PlatformAdapter)?) -> Bool {
+        (try? (platform ?? HostPlatformAdapter.shared).identity(at: url))?.kind == .regular
+    }
+
+    private static func isDirectoryNonSymlink(_ url: URL, platform: (any PlatformAdapter)?) -> Bool {
+        (try? (platform ?? HostPlatformAdapter.shared).identity(at: url))?.kind == .directory
+    }
+
+    private static func findLatestCodexStateDB(
+        in codexRoot: URL,
+        platform: (any PlatformAdapter)? = nil,
+        fileManager: FileManager
+    ) -> URL? {
+        guard let entries = listDirectoryEntries(at: codexRoot, skipHidden: true, platform: platform, fileManager: fileManager) else {
             return nil
         }
 
@@ -1963,8 +1978,7 @@ public struct SessionMetadataReader: Sendable {
         for url in entries {
             let name = url.lastPathComponent
             guard name.hasPrefix("state"), name.hasSuffix(".sqlite") else { continue }
-            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
+            guard isRegularNonSymlink(url, platform: platform) else { continue }
             let stem = String(name.dropLast(".sqlite".count))
             let version: Int
             if stem == "state" {
@@ -1982,19 +1996,18 @@ public struct SessionMetadataReader: Sendable {
         return bestURL
     }
 
-    private static func findEmbeddedSessionFile(in dirURL: URL, fileManager: FileManager) -> URL? {
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: dirURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+    private static func findEmbeddedSessionFile(
+        in dirURL: URL,
+        platform: (any PlatformAdapter)? = nil,
+        fileManager: FileManager
+    ) -> URL? {
+        guard let entries = listDirectoryEntries(at: dirURL, skipHidden: true, platform: platform, fileManager: fileManager) else {
             return nil
         }
         // DeepSeek Harness: `session.v4.jsonl.zstd` / `session.jsonl.zst` / `session.jsonl`
         let sorted = entries.sorted { $0.lastPathComponent > $1.lastPathComponent }
         for url in sorted {
-            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
+            guard isRegularNonSymlink(url, platform: platform) else { continue }
             let lower = url.lastPathComponent.lowercased()
             if lower.hasPrefix("session") && isJSONLOrCompressedJSONL(lower) {
                 return url
@@ -2008,6 +2021,7 @@ public struct SessionMetadataReader: Sendable {
         maxDepth: Int,
         maxFiles: Int,
         extensions: Set<String>,
+        platform: (any PlatformAdapter)? = nil,
         fileManager: FileManager
     ) -> [URL] {
         var found: [URL] = []
@@ -2018,23 +2032,17 @@ public struct SessionMetadataReader: Sendable {
         while !queue.isEmpty && found.count < maxFiles && visitedDirs < maxDirsToVisit {
             let (dir, depth) = queue.removeFirst()
             visitedDirs += 1
-            guard let children = try? fileManager.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
-                options: [.skipsHiddenFiles]
-            ) else {
+            guard let children = listDirectoryEntries(at: dir, skipHidden: true, platform: platform, fileManager: fileManager) else {
                 continue
             }
             for child in children {
-                let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
-                guard values?.isSymbolicLink != true else { continue }
-                if values?.isRegularFile == true {
+                if isRegularNonSymlink(child, platform: platform) {
                     let ext = child.pathExtension.lowercased()
                     if extensions.contains(ext) {
                         found.append(child)
                         if found.count >= maxFiles { break }
                     }
-                } else if values?.isDirectory == true && depth < maxDepth {
+                } else if isDirectoryNonSymlink(child, platform: platform) && depth < maxDepth {
                     queue.append((child, depth + 1))
                 }
             }
@@ -2045,21 +2053,17 @@ public struct SessionMetadataReader: Sendable {
     private static func describeImageDirectoryCount(
         at dirURL: URL,
         fallbackFileCount: Int,
+        platform: (any PlatformAdapter)? = nil,
         fileManager: FileManager
     ) -> String? {
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: dirURL,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        guard let children = listDirectoryEntries(at: dirURL, skipHidden: true, platform: platform, fileManager: fileManager) else {
             return fallbackFileCount > 0 ? "\(fallbackFileCount) 个文件" : nil
         }
 
         var imageCount = 0
         var totalRegular = 0
         for child in children {
-            let isRegular = (try? child.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-            guard isRegular else { continue }
+            guard isRegularNonSymlink(child, platform: platform) else { continue }
             totalRegular += 1
             if imageExtensions.contains(child.pathExtension.lowercased()) {
                 imageCount += 1
@@ -2130,7 +2134,7 @@ public struct SessionMetadataReader: Sendable {
         for suffix in suffixes where lower.hasSuffix(suffix) {
             return String(name.dropLast(suffix.count))
         }
-        return (name as NSString).deletingPathExtension
+        return PlatformPath.deletingPathExtension(name)
     }
 
     private static func extractEmbeddedUUID(from text: String) -> String? {
@@ -2154,42 +2158,44 @@ public struct SessionMetadataReader: Sendable {
         return nil
     }
 
-    private static func openRegularFile(_ url: URL) -> FileHandle? {
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
-              values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
-        return try? FileHandle(forReadingFrom: url)
+    private static func openRegularFile(_ url: URL, platform: (any PlatformAdapter)? = nil) -> (any ReadOnlyFileReader)? {
+        (platform ?? HostPlatformAdapter.shared).openReadOnlyRegularFile(at: url)
     }
 
-    private static func readBoundedRegularFile(_ url: URL, maxBytes: Int) -> Data? {
-        guard let handle = openRegularFile(url) else { return nil }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: maxBytes), !data.isEmpty else { return nil }
+    private static func readBoundedRegularFile(
+        _ url: URL,
+        maxBytes: Int,
+        platform: (any PlatformAdapter)? = nil
+    ) -> Data? {
+        guard let handle = openRegularFile(url, platform: platform) else { return nil }
+        defer { handle.close() }
+        guard let data = handle.read(upToCount: maxBytes), !data.isEmpty else { return nil }
         return data
     }
 
     private static func parseJSON(_ data: Data) -> [String: Any]? {
-        try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        CoreJSONValue.decodeObject(from: data)
     }
 
     private static func nonBlank(_ value: Any?) -> String? {
-        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let text = (value as? String)?.trimmedWhitespaceAndNewlines(),
               !text.isEmpty else { return nil }
         return text
     }
 
     private static func cleanYAMLValue(_ raw: String) -> String? {
-        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var value = raw.trimmedWhitespaceAndNewlines()
         if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
             if value.count >= 2 {
                 value = String(value.dropFirst().dropLast())
             }
         }
-        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        value = value.trimmedWhitespaceAndNewlines()
         return value.isEmpty ? nil : value
     }
 
     private static func decodeHexData(_ hex: String) -> Data? {
-        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = hex.trimmedWhitespaceAndNewlines()
         guard trimmed.count >= 2, trimmed.count.isMultiple(of: 2) else { return nil }
         var bytes: [UInt8] = []
         bytes.reserveCapacity(trimmed.count / 2)
@@ -2216,25 +2222,27 @@ public struct SessionMetadataReader: Sendable {
     }
 
     private static func projectName(fromPath path: String) -> String? {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = path.trimmedWhitespaceAndNewlines()
         guard !trimmed.isEmpty else { return nil }
-        let url = URL(fileURLWithPath: trimmed).standardizedFileURL
-        let last = url.lastPathComponent
-        guard !last.isEmpty && last != "/" else { return nil }
+        let normalized = PlatformPath.normalize(trimmed)
+        let last = PlatformPath.lastPathComponent(normalized)
+        guard !last.isEmpty && !PlatformPath.isRoot(normalized) else { return nil }
         // 若末级目录为通用 workdir / worktree，补充上一级任务目录名以提高辨识度
         if last == "workdir" || last == "worktree" {
-            let parent = url.deletingLastPathComponent().lastPathComponent
-            if !parent.isEmpty && parent != "/" {
-                return parent
+            if let parentPath = PlatformPath.parent(of: normalized), !PlatformPath.isRoot(parentPath) {
+                let parent = PlatformPath.lastPathComponent(parentPath)
+                if !parent.isEmpty {
+                    return parent
+                }
             }
         }
         return last
     }
 
     private static func readableProjectToken(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = raw.trimmedWhitespaceAndNewlines()
         guard !trimmed.isEmpty, UUID(uuidString: trimmed) == nil else { return nil }
-        if trimmed.contains("/") {
+        if trimmed.contains("/") || trimmed.contains("\\") {
             return projectName(fromPath: trimmed)
         }
         return trimmed
@@ -2245,7 +2253,7 @@ public struct SessionMetadataReader: Sendable {
         var uriStrings: [String] = []
         if raw.hasPrefix("["),
            let data = raw.data(using: .utf8),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String] {
+           let parsed = try? JSONDecoder().decode([String].self, from: data) {
             uriStrings = parsed
         } else {
             uriStrings = [raw]
@@ -2254,10 +2262,10 @@ public struct SessionMetadataReader: Sendable {
         let paths: [String] = uriStrings.compactMap { uri in
             if let url = URL(string: uri), url.isFileURL {
                 guard url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
-                return url.path
+                return PlatformPath.normalize(url)
             }
-            if uri.hasPrefix("/") {
-                return uri
+            if PlatformPath.isAbsolute(uri) {
+                return PlatformPath.normalize(uri)
             }
             return nil
         }
@@ -2271,14 +2279,14 @@ public struct SessionMetadataReader: Sendable {
         }
         guard let preferred = projectPaths.first ?? paths.first else { return (nil, nil, false) }
         let plausible = projectPaths.isEmpty ? paths : projectPaths
-        let distinctPaths = Set(plausible.compactMap(SessionProjectEvidence.workspacePath))
+        let distinctPaths = Set(plausible.compactMap { SessionProjectEvidence.workspacePath($0) })
         return (projectName(fromPath: preferred), preferred, distinctPaths.count > 1)
     }
 
     /// 从常见编码后的项目目录名提取简短可读名称：
     /// 例如 `-Users-alice-workspace-my-app` / `--Users-alice-workspace-my-app--` -> `my-app`
     public static func decodeEncodedProjectName(_ encoded: String) -> String? {
-        let trimmed = encoded.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let trimmed = encoded.trimmed(character: "-")
         guard !trimmed.isEmpty else { return nil }
 
         // 常见路径编码前缀剥离：Users-<username>-(workspace|Documents|Projects|Desktop|github|multica-workspaces...)

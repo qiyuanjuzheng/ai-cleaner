@@ -52,7 +52,7 @@ final class SessionScanningTests: XCTestCase {
         // 活跃 sessions/*.key 也绝不可扫描
         try sandbox.createFile(relativeToHome: ".claude/sessions/12345.abc.key", byteCount: 64)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         let claude = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "claude-code" }))
@@ -109,7 +109,7 @@ final class SessionScanningTests: XCTestCase {
         )
         try sandbox.createFile(relativeToHome: ".pi/agent/auth.json", byteCount: 64)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         let codex = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "codex" }))
@@ -139,7 +139,7 @@ final class SessionScanningTests: XCTestCase {
         let memoryFile = try sandbox.createFile(relativeToHome: "\(projectRel)/memory/MEMORY.md", byteCount: 512)
 
         let safetyGuard = SafetyGuard(homeDirectory: sandbox.homeURL)
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL, safetyGuard: safetyGuard)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles, safetyGuard: safetyGuard)
         let cleaner = TrashCleaner(
             safetyGuard: safetyGuard,
             performer: try SessionSandboxTrashPerformer(trashDir: sandbox.rootURL.appendingPathComponent("Trash", isDirectory: true))
@@ -194,7 +194,7 @@ final class SessionScanningTests: XCTestCase {
         )
         try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: staleClaude.path)
 
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let items = [compressed, archived, doubao, staleClaude].compactMap { url in
             report.allItems.first { $0.url == url }
         }

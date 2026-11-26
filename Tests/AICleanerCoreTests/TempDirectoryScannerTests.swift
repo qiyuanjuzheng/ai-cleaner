@@ -1,5 +1,10 @@
+#if os(macOS) || os(Linux)
 import AICleanerCore
+#if os(macOS)
 import Darwin
+#else
+import Glibc
+#endif
 import Foundation
 import XCTest
 
@@ -53,7 +58,7 @@ final class TempDirectoryScannerTests: XCTestCase {
     }
 
     func testDefaultSandboxScanEngineDoesNotScanHostTempDirectories() {
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         XCTAssertNil(engine.systemTempRoot)
         XCTAssertNil(engine.userTempRoot)
     }
@@ -95,6 +100,7 @@ final class TempDirectoryScannerTests: XCTestCase {
 
         let engine = ScanEngine(
             homeDirectory: sandbox.homeURL,
+            builtInProfiles: BuiltInClientRules.allProfiles,
             systemTempRoot: tmpSymlinkDir,
             userTempRoot: userTmpDir,
             currentUID: getuid(),
@@ -214,6 +220,7 @@ final class TempDirectoryScannerTests: XCTestCase {
 
         let engine = ScanEngine(
             homeDirectory: sandbox.homeURL,
+            builtInProfiles: BuiltInClientRules.allProfiles,
             systemTempRoot: tmpSymlinkDir,
             userTempRoot: userTmpDir,
             currentUID: myUID,
@@ -324,6 +331,7 @@ final class TempDirectoryScannerTests: XCTestCase {
 
         let engine = ScanEngine(
             homeDirectory: sandbox.homeURL,
+            builtInProfiles: BuiltInClientRules.allProfiles,
             systemTempRoot: tmpSymlinkDir,
             userTempRoot: nil,
             currentUID: getuid(),
@@ -399,10 +407,12 @@ final class TempDirectoryScannerTests: XCTestCase {
         )
 
         // 同时验证 SafetyGuard.normalizeTempPath 对 /tmp/... 字面路径的规范化
-        XCTAssertEqual(
-            SafetyGuard.normalizeTempPath(URL(fileURLWithPath: "/tmp/codex-demo")).path,
-            "/private/tmp/codex-demo"
-        )
+        #if os(macOS)
+        let expected = "/private/tmp/codex-demo"
+        #else
+        let expected = "/tmp/codex-demo"
+        #endif
+        XCTAssertEqual(SafetyGuard.normalizeTempPath(URL(fileURLWithPath: "/tmp/codex-demo")).path, expected)
 
         let result = cleaner.trash(items: [safeItem, secretItem], allowNotRecommendedOverride: true)
         XCTAssertEqual(result.trashedCount, 1)
@@ -433,6 +443,7 @@ final class TempDirectoryScannerTests: XCTestCase {
         // 先扫描（此时目录内还没有 socket，正常扫出）
         let engine = ScanEngine(
             homeDirectory: sandbox.homeURL,
+            builtInProfiles: BuiltInClientRules.allProfiles,
             systemTempRoot: tmpSymlinkDir,
             userTempRoot: privateTmpDir, // 与 systemTempRoot 指向同一规范目录，验证不重复
             currentUID: getuid(),
@@ -538,12 +549,18 @@ final class TempDirectoryScannerTests: XCTestCase {
 
     private func createUnixDomainSocket(in directory: URL, name: String) throws -> URL {
         let socketURL = directory.appendingPathComponent(name)
+        #if os(macOS)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        #else
+        let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+        #endif
         XCTAssertGreaterThanOrEqual(fd, 0)
         defer { close(fd) }
 
         var addr = sockaddr_un()
+        #if os(macOS)
         addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        #endif
         addr.sun_family = sa_family_t(AF_UNIX)
         let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
 
@@ -571,7 +588,11 @@ final class TempDirectoryScannerTests: XCTestCase {
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                #if os(macOS)
                 Darwin.bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                #else
+                Glibc.bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                #endif
             }
         }
         XCTAssertEqual(bindResult, 0, "创建测试用 Unix Domain Socket 失败，errno=\(errno)")
@@ -588,3 +609,4 @@ final class TempDirectoryScannerTests: XCTestCase {
         return fifoURL.standardizedFileURL
     }
 }
+#endif

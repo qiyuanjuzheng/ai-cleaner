@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 清理条目分类，附带面向用户的安全说明，降低误删风险。
 public enum ScanCategory: String, CaseIterable, Codable, Hashable, Sendable, Identifiable {

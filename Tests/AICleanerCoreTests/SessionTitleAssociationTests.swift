@@ -1,6 +1,6 @@
 import AICleanerCore
 import Foundation
-import SQLite3
+import CSQLite
 import XCTest
 
 final class SessionTitleAssociationTests: XCTestCase {
@@ -156,7 +156,7 @@ final class SessionTitleAssociationTests: XCTestCase {
         )
 
         let beforeBytes = try Data(contentsOf: validArchive)
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let codex = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "codex" }))
 
         let validItem = try XCTUnwrap(codex.items.first(where: { $0.url.path == validArchive.path }))
@@ -234,7 +234,7 @@ final class SessionTitleAssociationTests: XCTestCase {
         _ = try sandbox.createFile(relativeToHome: ".codex/generated_images/\(orphanUUID)/c.png", byteCount: 512)
 
         let dbBefore = try Data(contentsOf: stateDBURL)
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let codex = try XCTUnwrap(report.clientSummaries.first(where: { $0.profile.id == "codex" }))
         let imageItems = Dictionary(
             uniqueKeysWithValues: codex.items
@@ -394,7 +394,7 @@ final class SessionTitleAssociationTests: XCTestCase {
         let windsurfUUID = "ffffffff-ffff-7fff-8fff-ffffffffffff"
         _ = try sandbox.createFile(relativeToHome: ".codeium/windsurf/cascade/\(windsurfUUID).pb", byteCount: 256)
 
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan()
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan()
         let byClient = Dictionary(uniqueKeysWithValues: report.clientSummaries.map { ($0.profile.id, $0) })
 
         // DeepSeek Harness 断言

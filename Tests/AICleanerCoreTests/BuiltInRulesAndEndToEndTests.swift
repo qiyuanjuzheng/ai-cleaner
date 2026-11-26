@@ -143,7 +143,7 @@ final class BuiltInRulesAndEndToEndTests: XCTestCase {
             try sandbox.createFile(relativeToHome: path, byteCount: size, modifiedAt: now)
         }
 
-        let report = ScanEngine(homeDirectory: sandbox.homeURL).scan(now: now)
+        let report = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles).scan(now: now)
         let snapshot = report.allDisplayedItems.map { item in
             let path = item.url.path.replacingOccurrences(of: sandbox.homeURL.path + "/", with: "")
             return "\(item.ruleID)|\(path)|\(item.category.rawValue)|\(item.recommendation.rawValue)|\(item.sizeBytes)|\(item.isBulkSelectable)"
@@ -170,7 +170,7 @@ final class BuiltInRulesAndEndToEndTests: XCTestCase {
         try sandbox.createFile(relativeToHome: "Library/Application Support/Windsurf/GPUCache/shader.bin", byteCount: 5_000)
 
         let safetyGuard = SafetyGuard(homeDirectory: sandbox.homeURL)
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL, safetyGuard: safetyGuard)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles, safetyGuard: safetyGuard)
         let trashPerformer = try IsolatedTrashPerformer(
             trashDir: sandbox.rootURL.appendingPathComponent("IsolatedTrash", isDirectory: true)
         )

@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 单次清理中按客户端统计的移入明细
 public struct ClientCleanupDelta: Identifiable, Codable, Hashable, Sendable {
@@ -88,7 +92,7 @@ public struct CleanupHistoryRecord: Identifiable, Codable, Hashable, Sendable {
             if lhs.freedBytes != rhs.freedBytes {
                 return lhs.freedBytes > rhs.freedBytes
             }
-            return lhs.clientName.localizedCaseInsensitiveCompare(rhs.clientName) == .orderedAscending
+            return CoreTextCompare.caseInsensitiveAscending(lhs.clientName, rhs.clientName)
         }
 
         let byCategory = Dictionary(grouping: items, by: \.item.category)
@@ -352,7 +356,7 @@ public enum CleanupHistoryAnalytics {
                 if lhs.totalFreedBytes != rhs.totalFreedBytes {
                     return lhs.totalFreedBytes > rhs.totalFreedBytes
                 }
-                return lhs.clientName.localizedCaseInsensitiveCompare(rhs.clientName) == .orderedAscending
+                return CoreTextCompare.caseInsensitiveAscending(lhs.clientName, rhs.clientName)
             }
 
         return CleanupHistorySummary(

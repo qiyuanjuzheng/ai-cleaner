@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 public enum SessionProjectEvidence: Hashable, Sendable {
     case reported(String)
@@ -18,13 +22,8 @@ public enum SessionProjectEvidence: Hashable, Sendable {
         return first.path != nil && first.path == second.path ? first : .conflict
     }
 
-    static func workspacePath(_ raw: String?) -> String? {
-        guard let raw, raw.hasPrefix("/"), !raw.contains("\0") else { return nil }
-        let url = URL(fileURLWithPath: raw, isDirectory: true)
-        let resolved = url.resolvingSymlinksInPath()
-        let canonical = (try? resolved.resourceValues(forKeys: [.canonicalPathKey]))?.canonicalPath
-        let path = ExcludedItemMatcher.normalizePath(canonical ?? resolved.path)
-        return path == "/" ? nil : path
+    static func workspacePath(_ raw: String?, platform: (any PlatformAdapter)? = nil) -> String? {
+        PlatformPath.normalizeWorkspacePath(raw, platform: platform)
     }
 }
 
@@ -38,7 +37,7 @@ public enum SessionProjectID: Hashable, Sendable {
     }
 
     public var name: String {
-        workspacePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "未识别项目"
+        workspacePath.map { PlatformPath.lastPathComponent($0) } ?? "未识别项目"
     }
 }
 
@@ -122,8 +121,9 @@ public struct ProjectSessionCatalog: Sendable {
         projects = groups.map { SessionProject(id: $0.key, sessions: $0.value) }.sorted { lhs, rhs in
             if lhs.id == .unidentified { return false }
             if rhs.id == .unidentified { return true }
-            let order = lhs.id.name.localizedStandardCompare(rhs.id.name)
-            if order != .orderedSame { return order == .orderedAscending }
+            if lhs.id.name.lowercased() != rhs.id.name.lowercased() || lhs.id.name != rhs.id.name {
+                return CoreTextCompare.naturalAscending(lhs.id.name, rhs.id.name)
+            }
             return (lhs.id.workspacePath ?? "") < (rhs.id.workspacePath ?? "")
         }
     }
@@ -137,65 +137,79 @@ public struct ProjectSessionCatalog: Sendable {
         projectIDsByItemID[item.id] ?? .unidentified
     }
 
-    public func protection(for projects: Set<String>) -> ProjectLocationMatcher {
-        ProjectLocationMatcher(urls: projects.flatMap { ownedLocations[$0] ?? [] })
+    public func protection(for projects: Set<String>, platform: (any PlatformAdapter)? = nil) -> ProjectLocationMatcher {
+        ProjectLocationMatcher(urls: projects.flatMap { ownedLocations[$0] ?? [] }, platform: platform)
     }
 
-    func wouldRemoveWorkspace(_ item: CleanableItem) -> Bool {
-        workspacePaths.contains(atOrBelow: item.url)
+    func wouldRemoveWorkspace(_ item: CleanableItem, platform: (any PlatformAdapter)? = nil) -> Bool {
+        workspacePaths.contains(atOrBelow: item.url, platform: platform)
     }
 }
 
 public struct ProjectLocationMatcher: Sendable {
     private let paths: Set<String>
     private let ancestors: Set<String>
+    private let caseInsensitive: Bool
 
-    init(urls: [URL]) {
+    init(urls: [URL], platform: (any PlatformAdapter)? = nil) {
+        let caseInsensitive = platform?.pathsAreCaseInsensitive ?? Self.defaultCaseInsensitive
+        self.caseInsensitive = caseInsensitive
         var paths: Set<String> = []
         var ancestors: Set<String> = []
         for url in urls {
-            for path in Self.pathVariants(url) where paths.insert(path).inserted {
-                Self.forEachAncestor(of: path) { ancestors.insert($0) }
+            for path in Self.pathVariants(url, platform: platform, caseInsensitive: caseInsensitive) where paths.insert(path).inserted {
+                PlatformPath.forEachAncestor(of: path) { ancestors.insert($0) }
             }
         }
         self.paths = paths
         self.ancestors = ancestors
     }
 
-    public func blocks(_ item: CleanableItem) -> Bool {
+    public func blocks(_ item: CleanableItem, platform: (any PlatformAdapter)? = nil) -> Bool {
         guard !paths.isEmpty else { return false }
-        for path in Self.pathVariants(item.url) {
+        for path in Self.pathVariants(item.url, platform: platform, caseInsensitive: caseInsensitive) {
             if paths.contains(path) || ancestors.contains(path) { return true }
             var insideProtectedItem = false
-            Self.forEachAncestor(of: path) { insideProtectedItem = insideProtectedItem || paths.contains($0) }
+            PlatformPath.forEachAncestor(of: path) { insideProtectedItem = insideProtectedItem || paths.contains($0) }
             if insideProtectedItem { return true }
         }
         return false
     }
 
-    func contains(atOrBelow url: URL) -> Bool {
+    func contains(atOrBelow url: URL, platform: (any PlatformAdapter)? = nil) -> Bool {
         guard !paths.isEmpty else { return false }
-        return Self.pathVariants(url).contains { paths.contains($0) || ancestors.contains($0) }
+        return Self.pathVariants(url, platform: platform, caseInsensitive: caseInsensitive).contains {
+            paths.contains($0) || ancestors.contains($0)
+        }
     }
 
-    private static func pathVariants(_ url: URL) -> Set<String> {
-        let raw = ExcludedItemMatcher.normalizePath(SafetyGuard.normalizeTempPath(url))
-        let resolved = ExcludedItemMatcher.canonicalMatchPath(raw)
+    private static var defaultCaseInsensitive: Bool {
+        #if os(Linux)
+        return false
+        #else
+        return true
+        #endif
+    }
+
+    private static func pathVariants(
+        _ url: URL,
+        platform: (any PlatformAdapter)?,
+        caseInsensitive: Bool
+    ) -> Set<String> {
+        let tempNormalized = SafetyGuard.normalizeTempPath(url, platform: platform)
+        let raw = PlatformPath.normalize(tempNormalized)
+        let resolved = PlatformPath.normalize(PlatformPath.resolveSymlinks(tempNormalized, platform: platform))
         var variants: Set<String> = [raw, resolved]
-        // Match alternate spelling only on a volume that reports case-insensitive names.
-        let volumeURL = URL(fileURLWithPath: resolved)
-        if (try? volumeURL.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
-            .volumeSupportsCaseSensitiveNames == false {
-            variants.insert(resolved.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX")))
+        let volumeCaseInsensitive: Bool
+        if let platform {
+            volumeCaseInsensitive = !platform.volumeIsCaseSensitive(at: URL(fileURLWithPath: resolved))
+        } else {
+            volumeCaseInsensitive = caseInsensitive
+        }
+        if volumeCaseInsensitive {
+            variants.insert(raw.lowercased())
+            variants.insert(resolved.lowercased())
         }
         return variants
-    }
-
-    private static func forEachAncestor(of path: String, _ visit: (String) -> Void) {
-        var suffix = path[...]
-        while let end = suffix.lastIndex(of: "/"), end != suffix.startIndex {
-            suffix = suffix[..<end]
-            visit(String(suffix))
-        }
     }
 }

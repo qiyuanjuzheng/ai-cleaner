@@ -1,41 +1,36 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 基于规范化路径的排除条目匹配器：
 /// - 支持精确路径匹配与目录子树边界匹配（`/a/dir` 匹配 `/a/dir` 及 `/a/dir/...`，绝不误匹配 `/a/dir2` 或 `/a/dir.jsonl`）；
-/// - 同时兼容 macOS `/var` ↔ `/private/var` 等符号链接路径标准化。
+/// - 平台感知：兼容 macOS `/var` ↔ `/private/var`、Windows 盘符与大小写不敏感、Linux 大小写敏感。
 public struct ExcludedItemMatcher: Sendable, Hashable {
     private let exactPaths: Set<String>
     private let directoryPrefixes: [String]
+    private let caseInsensitive: Bool
 
     public var isEmpty: Bool {
         exactPaths.isEmpty
     }
 
-    public init(records: [ExcludedItemRecord] = []) {
-        var exact: Set<String> = []
-        var prefixes: Set<String> = []
-
-        for record in records {
-            for variant in Self.pathVariants(for: record.normalizedPath) {
-                exact.insert(variant)
-                if variant != "/" {
-                    prefixes.insert(variant + "/")
-                }
-            }
-        }
-
-        self.exactPaths = exact
-        self.directoryPrefixes = Array(prefixes)
+    public init(records: [ExcludedItemRecord] = [], caseInsensitive: Bool? = nil) {
+        self.init(paths: records.map(\.normalizedPath), caseInsensitive: caseInsensitive)
     }
 
-    public init(paths: [String]) {
+    public init(paths: [String], caseInsensitive: Bool? = nil) {
+        let ci = caseInsensitive ?? Self.defaultCaseInsensitive
+        self.caseInsensitive = ci
+
         var exact: Set<String> = []
         var prefixes: Set<String> = []
 
         for raw in paths {
-            for variant in Self.pathVariants(for: raw) {
+            for variant in Self.pathVariants(for: raw, caseInsensitive: ci) {
                 exact.insert(variant)
-                if variant != "/" {
+                if !PlatformPath.isRoot(variant) {
                     prefixes.insert(variant + "/")
                 }
             }
@@ -47,19 +42,21 @@ public struct ExcludedItemMatcher: Sendable, Hashable {
 
     public func isExcluded(_ url: URL) -> Bool {
         guard !exactPaths.isEmpty else { return false }
-        return isExcluded(path: url.standardizedFileURL.path)
+        return isExcluded(path: PlatformPath.fileSystemPath(for: url))
     }
 
     public func isExcluded(path: String) -> Bool {
         guard !exactPaths.isEmpty else { return false }
 
         let normalized = Self.normalizePath(path)
-        if matchesDirect(normalized) {
+        let directKey = caseInsensitive ? normalized.lowercased() : normalized
+        if matchesDirect(directKey) {
             return true
         }
 
         let resolved = Self.canonicalMatchPath(normalized)
-        if resolved != normalized && matchesDirect(resolved) {
+        let resolvedKey = caseInsensitive ? resolved.lowercased() : resolved
+        if resolvedKey != directKey && matchesDirect(resolvedKey) {
             return true
         }
 
@@ -77,52 +74,60 @@ public struct ExcludedItemMatcher: Sendable, Hashable {
     }
 
     public static func normalizePath(_ url: URL) -> String {
-        normalizePath(url.standardizedFileURL.path)
+        PlatformPath.normalize(url)
     }
 
     public static func normalizePath(_ path: String) -> String {
-        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
-        guard standardized.count > 1 else { return standardized }
-        var trimmed = standardized
-        while trimmed.count > 1 && trimmed.hasSuffix("/") {
-            trimmed.removeLast()
-        }
-        return trimmed
+        PlatformPath.normalize(path)
     }
 
     public static func canonicalMatchPath(_ path: String) -> String {
-        let normalized = normalizePath(path)
-        let resolved = URL(fileURLWithPath: normalized).resolvingSymlinksInPath().standardizedFileURL.path
-        return normalizePath(resolved)
+        let normalized = PlatformPath.normalize(path)
+        let resolved = PlatformPath.resolveSymlinks(URL(fileURLWithPath: normalized))
+        return PlatformPath.normalize(resolved)
     }
 
-    private static func pathVariants(for path: String) -> [String] {
+    private static var defaultCaseInsensitive: Bool {
+        #if os(Linux)
+        return false
+        #else
+        return true
+        #endif
+    }
+
+    private static func pathVariants(for path: String, caseInsensitive: Bool) -> [String] {
         let normalized = normalizePath(path)
         let resolved = canonicalMatchPath(normalized)
-        if normalized == resolved {
-            return [normalized]
+        let nKey = caseInsensitive ? normalized.lowercased() : normalized
+        let rKey = caseInsensitive ? resolved.lowercased() : resolved
+        if nKey == rKey {
+            return [nKey]
         }
-        return [normalized, resolved]
+        return [nKey, rKey]
     }
 }
 
-/// 持久化管理用户排除的清理条目清单（存储于独立 JSON 文件，支持测试与沙箱路径注入）。
+/// 持久化管理用户排除的清理条目清单（存储于独立 JSON 文件，支持平台适配器与测试路径注入）。
 public struct ExcludedItemStore: Sendable {
     public let storageURL: URL
+    private let caseInsensitive: Bool
 
-    public init(storageURL: URL? = nil) {
-        if let storageURL {
-            self.storageURL = storageURL
-        } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-            self.storageURL = appSupport
-                .appendingPathComponent("AICleaner", isDirectory: true)
-                .appendingPathComponent("excluded-items.json")
-        }
+    public init(storageURL: URL, caseInsensitive: Bool? = nil) {
+        self.storageURL = storageURL
+        #if os(Linux)
+        self.caseInsensitive = caseInsensitive ?? false
+        #else
+        self.caseInsensitive = caseInsensitive ?? true
+        #endif
     }
 
-    /// 读取全部已排除记录（按规范化路径去重，最近排除排在前面）
+    public init(platform: any PlatformAdapter = HostPlatformAdapter.shared) {
+        self.storageURL = platform.userDataDirectory()
+            .appendingPathComponent("excluded-items.json")
+        self.caseInsensitive = platform.pathsAreCaseInsensitive
+    }
+
+    /// 读取全部已排除记录（按规范化路径去重，最近排除排在前面）。若文件损坏则先备份保留再返回空数组（ADR 0001 第 7.3 节）。
     public func load() -> [ExcludedItemRecord] {
         guard let data = try? Data(contentsOf: storageURL) else {
             return []
@@ -130,24 +135,25 @@ public struct ExcludedItemStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let decoded = try? decoder.decode([ExcludedItemRecord].self, from: data) else {
+            CoreStorageIO.quarantineCorruptFile(at: storageURL)
             return []
         }
-        return Self.deduplicateAndSort(decoded)
+        return deduplicateAndSort(decoded)
     }
 
     /// 新增排除记录（按规范化后的完整路径匹配，重复排除保持幂等）
     @discardableResult
     public func add(_ record: ExcludedItemRecord) throws -> [ExcludedItemRecord] {
         var existing = load()
-        let candidateCanonical = ExcludedItemMatcher.canonicalMatchPath(record.normalizedPath)
+        let candidateCanonical = canonicalKey(record.normalizedPath)
         if existing.contains(where: {
-            ExcludedItemMatcher.canonicalMatchPath($0.normalizedPath) == candidateCanonical
+            canonicalKey($0.normalizedPath) == candidateCanonical
         }) {
             return existing
         }
 
         existing.append(record)
-        let sorted = Self.deduplicateAndSort(existing)
+        let sorted = deduplicateAndSort(existing)
         try save(sorted)
         return sorted
     }
@@ -174,10 +180,10 @@ public struct ExcludedItemStore: Sendable {
     @discardableResult
     public func remove(path: String) throws -> [ExcludedItemRecord] {
         var existing = load()
-        let targetCanonical = ExcludedItemMatcher.canonicalMatchPath(path)
+        let targetCanonical = canonicalKey(path)
         let beforeCount = existing.count
         existing.removeAll {
-            ExcludedItemMatcher.canonicalMatchPath($0.normalizedPath) == targetCanonical
+            canonicalKey($0.normalizedPath) == targetCanonical
         }
         if existing.count != beforeCount {
             try save(existing)
@@ -201,12 +207,17 @@ public struct ExcludedItemStore: Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
 
-        let sorted = Self.deduplicateAndSort(records)
+        let sorted = deduplicateAndSort(records)
         let data = try encoder.encode(sorted)
         try data.write(to: storageURL, options: .atomic)
     }
 
-    private static func deduplicateAndSort(_ records: [ExcludedItemRecord]) -> [ExcludedItemRecord] {
+    private func canonicalKey(_ path: String) -> String {
+        let canonical = ExcludedItemMatcher.canonicalMatchPath(path)
+        return caseInsensitive ? canonical.lowercased() : canonical
+    }
+
+    private func deduplicateAndSort(_ records: [ExcludedItemRecord]) -> [ExcludedItemRecord] {
         let sorted = records.sorted { lhs, rhs in
             if lhs.excludedAt != rhs.excludedAt {
                 return lhs.excludedAt > rhs.excludedAt
@@ -217,7 +228,7 @@ public struct ExcludedItemStore: Sendable {
         var unique: [ExcludedItemRecord] = []
         unique.reserveCapacity(sorted.count)
         for record in sorted {
-            let key = ExcludedItemMatcher.canonicalMatchPath(record.normalizedPath)
+            let key = canonicalKey(record.normalizedPath)
             if seen.insert(key).inserted {
                 unique.append(record)
             }

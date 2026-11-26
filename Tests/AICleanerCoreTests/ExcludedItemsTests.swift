@@ -199,7 +199,7 @@ final class ExcludedItemsTests: XCTestCase {
             mode: .children
         )
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let baseline = engine.scan(customDirectories: [customEntry, customNestedEntry])
 
         let baselinePaths = Set(baseline.allItems.map(\.url.path))

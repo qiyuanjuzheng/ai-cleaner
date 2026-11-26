@@ -1,5 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
-import os
+#endif
 
 /// 扫描进度页的三个阶段，与扫描引擎的执行顺序一一对应：
 /// 1. 扫描客户端 —— 并发扫描所有内置 AI 客户端规则；
@@ -107,23 +110,23 @@ public typealias ScanProgressHandler = @Sendable (ScanProgressEvent) -> Void
 /// - 阶段切换与客户端发现 / 量出体积立即发布；
 /// - 纯统计增量按最小间隔节流（默认 0.15s），避免逐文件事件淹没主线程。
 public final class ScanProgressEmitter: @unchecked Sendable {
-    private struct State {
+    private struct State: Sendable {
         var stage: ScanStage = .scanningClients
         var clients: [String: ScanProgressClient] = [:]
         var order: [String] = []
         var scannedFileCount = 0
         var cleanableBytes: Int64 = 0
-        var lastStatsEmitAt: TimeInterval = 0
+        var lastStatsEmitAt: ContinuousClock.Instant?
         var hasEmitted = false
     }
 
-    private let lock = OSAllocatedUnfairLock(initialState: State())
+    private let lock = CoreLock(initialState: State())
     private let handler: ScanProgressHandler
-    private let statsMinInterval: TimeInterval
+    private let statsMinInterval: Duration
 
     public init(handler: @escaping ScanProgressHandler, statsMinInterval: TimeInterval = 0.15) {
         self.handler = handler
-        self.statsMinInterval = statsMinInterval
+        self.statsMinInterval = .seconds(max(0, statsMinInterval))
     }
 
     /// 切换扫描阶段并立即发布快照（任何发布都会开启统计增量的节流窗口）
@@ -131,7 +134,7 @@ public final class ScanProgressEmitter: @unchecked Sendable {
         let event = lock.withLock { state -> ScanProgressEvent in
             state.stage = stage
             state.hasEmitted = true
-            state.lastStatsEmitAt = CFAbsoluteTimeGetCurrent()
+            state.lastStatsEmitAt = ContinuousClock.now
             return Self.makeEvent(from: state, isFinal: false)
         }
         handler(event)
@@ -193,8 +196,9 @@ public final class ScanProgressEmitter: @unchecked Sendable {
         let event = lock.withLock { state -> ScanProgressEvent? in
             state.scannedFileCount += max(0, fileCount)
             state.cleanableBytes += max(0, bytes)
-            let now = CFAbsoluteTimeGetCurrent()
-            guard state.hasEmitted, now - state.lastStatsEmitAt >= statsMinInterval else {
+            let now = ContinuousClock.now
+            guard state.hasEmitted else { return nil }
+            if let last = state.lastStatsEmitAt, last.duration(to: now) < statsMinInterval {
                 return nil
             }
             state.lastStatsEmitAt = now
@@ -217,7 +221,7 @@ public final class ScanProgressEmitter: @unchecked Sendable {
     private func emitCurrentState() {
         let event = lock.withLock { state -> ScanProgressEvent in
             state.hasEmitted = true
-            state.lastStatsEmitAt = CFAbsoluteTimeGetCurrent()
+            state.lastStatsEmitAt = ContinuousClock.now
             return Self.makeEvent(from: state, isFinal: false)
         }
         handler(event)

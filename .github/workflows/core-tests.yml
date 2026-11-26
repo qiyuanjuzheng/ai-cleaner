@@ -1,0 +1,57 @@
+name: Core tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/core-tests.yml'
+      - 'Package.swift'
+      - 'Sources/**'
+      - 'Tests/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/core-tests.yml'
+      - 'Package.swift'
+      - 'Sources/**'
+      - 'Tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS Swift tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: swift test
+
+  linux:
+    name: Linux Swift tests
+    runs-on: ubuntu-latest
+    container: swift:6.4.3-noble
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: swift test
+
+  windows:
+    name: Windows Swift tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
+        with:
+          swift-version: swift-6.4.3-release
+          swift-build: 6.4.3-RELEASE
+      - run: swift test

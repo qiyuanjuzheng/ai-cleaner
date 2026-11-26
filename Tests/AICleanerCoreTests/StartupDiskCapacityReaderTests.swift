@@ -9,8 +9,9 @@ final class StartupDiskCapacityReaderTests: XCTestCase {
             (1_000, 0, 0),
             (0, 1_000, 1)
         ] {
+            let startupVolume = HostPlatformAdapter.shared.startupVolumeURL
             let reader = StartupDiskCapacityReader { url in
-                XCTAssertEqual(url.path, "/System/Volumes/Data")
+                XCTAssertEqual(PlatformPath.normalize(url), PlatformPath.normalize(startupVolume))
                 return (total: 1_000, available: available)
             }
             let snapshot = try XCTUnwrap(reader.read())

@@ -1,13 +1,21 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 自定义扫描目录管理错误
-public enum CustomDirectoryError: LocalizedError, Equatable, Sendable {
+public enum CustomDirectoryError: Error, Equatable, Sendable, CustomStringConvertible {
     case directoryNotFound(String)
     case notADirectory(String)
     case protectedPath(String)
     case duplicatePath(String)
 
     public var errorDescription: String? {
+        description
+    }
+
+    public var description: String {
         switch self {
         case let .directoryNotFound(path):
             return "目录不存在：\(path)"
@@ -21,35 +29,46 @@ public enum CustomDirectoryError: LocalizedError, Equatable, Sendable {
     }
 }
 
-/// 持久化管理用户新增与移除的自定义扫描目录（存储于独立 JSON 文件，支持测试注入路径）。
+#if !canImport(FoundationEssentials)
+extension CustomDirectoryError: LocalizedError {}
+#endif
+
+/// 持久化管理用户新增与移除的自定义扫描目录（存储于独立 JSON 文件，支持平台适配器与测试路径注入）。
 public struct CustomDirectoryStore: Sendable {
     public let storageURL: URL
     public let safetyGuard: SafetyGuard
 
     public init(
-        storageURL: URL? = nil,
-        safetyGuard: SafetyGuard = SafetyGuard()
+        storageURL: URL,
+        safetyGuard: SafetyGuard
     ) {
-        if let storageURL {
-            self.storageURL = storageURL
-        } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-            self.storageURL = appSupport
-                .appendingPathComponent("AICleaner", isDirectory: true)
-                .appendingPathComponent("custom-directories.json")
-        }
+        self.storageURL = storageURL
         self.safetyGuard = safetyGuard
     }
 
-    /// 读取当前保存的所有自定义目录
+    public init(
+        platform: any PlatformAdapter = HostPlatformAdapter.shared,
+        storageURL: URL? = nil,
+        safetyGuard: SafetyGuard? = nil
+    ) {
+        let platform = safetyGuard?.platform ?? platform
+        self.storageURL = storageURL ?? platform.userDataDirectory()
+            .appendingPathComponent("custom-directories.json")
+        self.safetyGuard = safetyGuard ?? SafetyGuard(platform: platform)
+    }
+
+    /// 读取当前保存的所有自定义目录。若文件损坏则先备份保留再返回空数组（ADR 0001 第 7.3 节）。
     public func load() -> [CustomScanDirectory] {
         guard let data = try? Data(contentsOf: storageURL) else {
             return []
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([CustomScanDirectory].self, from: data)) ?? []
+        guard let directories = try? decoder.decode([CustomScanDirectory].self, from: data) else {
+            CoreStorageIO.quarantineCorruptFile(at: storageURL)
+            return []
+        }
+        return directories
     }
 
     /// 校验并新增一个自定义扫描目录
@@ -61,14 +80,16 @@ public struct CustomDirectoryStore: Sendable {
         mode: ScanTargetMode = .children,
         fileManager: FileManager = .default
     ) throws -> CustomScanDirectory {
+        let platform = safetyGuard.platform
         let standardized = url.standardizedFileURL
-        var isDir: ObjCBool = false
+        let normalizedPath = PlatformPath.normalize(standardized)
 
-        guard fileManager.fileExists(atPath: standardized.path, isDirectory: &isDir) else {
-            throw CustomDirectoryError.directoryNotFound(standardized.path)
+        let resolvedTarget = platform.resolveSymlinks(at: standardized)
+        guard let targetIdentity = try? platform.identity(at: resolvedTarget) else {
+            throw CustomDirectoryError.directoryNotFound(normalizedPath)
         }
-        guard isDir.boolValue else {
-            throw CustomDirectoryError.notADirectory(standardized.path)
+        guard targetIdentity.kind == .directory else {
+            throw CustomDirectoryError.notADirectory(normalizedPath)
         }
 
         let decision = safetyGuard.validateCustomDirectoryRoot(standardized)
@@ -77,18 +98,26 @@ public struct CustomDirectoryStore: Sendable {
         }
 
         var existing = load()
-        let resolvedCandidate = standardized.resolvingSymlinksInPath().standardizedFileURL.path
+        let candidateKey = PlatformPath.comparisonKey(
+            PlatformPath.normalize(resolvedTarget),
+            caseInsensitive: platform.pathsAreCaseInsensitive
+        )
         if existing.contains(where: {
-            URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().standardizedFileURL.path == resolvedCandidate
+            let existingResolved = platform.resolveSymlinks(at: URL(fileURLWithPath: $0.path))
+            let existingKey = PlatformPath.comparisonKey(
+                PlatformPath.normalize(existingResolved),
+                caseInsensitive: platform.pathsAreCaseInsensitive
+            )
+            return existingKey == candidateKey
         }) {
-            throw CustomDirectoryError.duplicatePath(standardized.path)
+            throw CustomDirectoryError.duplicatePath(normalizedPath)
         }
 
-        let trimmedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let resolvedName = trimmedName.isEmpty ? standardized.lastPathComponent : trimmedName
+        let trimmedName = displayName?.trimmedWhitespaceAndNewlines() ?? ""
+        let resolvedName = trimmedName.isEmpty ? PlatformPath.lastPathComponent(normalizedPath) : trimmedName
         let entry = CustomScanDirectory(
             displayName: resolvedName,
-            path: standardized.path,
+            path: normalizedPath,
             category: category,
             mode: mode
         )

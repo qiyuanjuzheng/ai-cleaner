@@ -1,4 +1,8 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 
 /// 条目清理建议等级：明确区分「建议清理」「按需清理」与「不建议清理」，让用户一眼辨别风险。
 public enum CleanupRecommendation: String, CaseIterable, Codable, Hashable, Sendable, Identifiable {

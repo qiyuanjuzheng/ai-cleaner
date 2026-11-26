@@ -29,7 +29,7 @@ final class ScanEngineTests: XCTestCase {
         try sandbox.createFile(relativeToHome: ".codex/cache/item.bin", byteCount: 4_000)
         try sandbox.createFile(relativeToHome: ".codex/cache/.env", byteCount: 64)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         // 仅检测到实际存在且通过安全校验的 Cursor 与 Claude Code；未安装的 Windsurf/ChatGPT/OpenCode 及被拦截的 Codex 不展示
@@ -58,7 +58,7 @@ final class ScanEngineTests: XCTestCase {
         )
         let originalData = try Data(contentsOf: fileURL)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         XCTAssertEqual(report.totalItemCount, 1)
@@ -80,7 +80,7 @@ final class ScanEngineTests: XCTestCase {
             CustomScanDirectory(displayName: "空草稿目录", path: emptyCustomDir.path, category: .custom, mode: .children)
         ]
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan(customDirectories: customList)
 
         XCTAssertEqual(report.clientSummaries.count, 2)
@@ -103,7 +103,7 @@ final class ScanEngineTests: XCTestCase {
         try sandbox.createFile(relativeToHome: ".claude/skills/my-skill/SKILL.md", byteCount: 4_100)
         try sandbox.createFile(relativeToHome: "Library/Application Support/Cursor/GPUCache/data_0", byteCount: 6_200)
 
-        let engine = ScanEngine(homeDirectory: sandbox.homeURL)
+        let engine = ScanEngine(homeDirectory: sandbox.homeURL, builtInProfiles: BuiltInClientRules.allProfiles)
         let report = engine.scan()
 
         for summary in report.clientSummaries {

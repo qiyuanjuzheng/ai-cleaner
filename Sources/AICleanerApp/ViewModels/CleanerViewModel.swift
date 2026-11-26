@@ -176,6 +176,17 @@ struct ProjectHeaderRow: Equatable, Sendable {
     let title: String
     let summaryText: String
     let isFirstSection: Bool
+    let bulkSelectableCount: Int
+    let individualOnlyCount: Int
+    let selectBulkTooltip: String
+
+    var supportsBulkSelection: Bool { bulkSelectableCount > 0 }
+}
+
+/// 「按项目会话分组」下每个项目分组当前可见的条目 ID，用于分组头一键全选/取消
+struct ProjectGroupSelectionScope: Equatable, Sendable {
+    let visibleItemIDs: [String]
+    let bulkSelectableItemIDs: [String]
 }
 
 /// 扁平虚拟化列表中的单条文件行模型（纯值类型，预计算全部文案与提示以实现零滚动热路径拼接）
@@ -508,6 +519,7 @@ final class CleanerViewModel {
     private(set) var groupedSelectedItems: [SelectedClientGroup] = []
     /// 当前筛选可见范围内，所有可批量勾选项均已被选中的分组集合
     private(set) var fullySelectedBulkSections: Set<CleanupRecommendation> = []
+    private var projectGroupSelectionScopes: [SessionProjectID: ProjectGroupSelectionScope] = [:]
 
     private(set) var historySummary: CleanupHistorySummary = CleanupHistoryAnalytics.summarize(records: [], range: .days30)
     private(set) var totalHistoricalFreedBytes: Int64 = 0
@@ -1026,15 +1038,28 @@ final class CleanerViewModel {
         }
 
         var rows: [FlatListRow] = []
+        var scopes: [SessionProjectID: ProjectGroupSelectionScope] = [:]
         rows.reserveCapacity(filteredItems.count + projectOrder.count)
         for (index, project) in projectOrder.enumerated() {
             guard let items = groups[project] else { continue }
             let bytes = items.reduce(Int64(0)) { $0 + $1.sizeBytes }
+            let bulkIDs = items.filter(\.isBulkSelectable).map(\.id)
+            let individualOnlyCount = items.filter { $0.isCleanable && $0.requiresIndividualSelection }.count
+            scopes[project] = ProjectGroupSelectionScope(
+                visibleItemIDs: items.map(\.id),
+                bulkSelectableItemIDs: bulkIDs
+            )
+            let tooltip = individualOnlyCount > 0
+                ? "全选本项目当前可见的 \(bulkIDs.count) 条可批量会话（自动跳过 \(individualOnlyCount) 条近期修改或仅手选项）"
+                : "全选本项目当前可见的 \(bulkIDs.count) 条会话"
             rows.append(.projectHeader(ProjectHeaderRow(
                 project: project,
                 title: project.name,
                 summaryText: "\(items.count) 项 · \(CleanerFormatting.formatBytes(bytes))",
-                isFirstSection: index == 0
+                isFirstSection: index == 0,
+                bulkSelectableCount: bulkIDs.count,
+                individualOnlyCount: individualOnlyCount,
+                selectBulkTooltip: tooltip
             )))
             Self.appendItemRows(
                 items, to: &rows, safeMaxBytes: Double(max(1, maxDisplayedItemBytes)),
@@ -1042,6 +1067,7 @@ final class CleanerViewModel {
                 homeDirectory: scanEngine.homeDirectory
             )
         }
+        projectGroupSelectionScopes = scopes
         return rows
     }
 
@@ -1370,6 +1396,7 @@ final class CleanerViewModel {
         if selectedCategory == .sessions && groupsSessionsByProject {
             displayedRows = buildProjectRows(showClientBadge: showClientBadge)
         } else {
+            projectGroupSelectionScopes = [:]
             displayedRows = Self.buildFlatRows(
                 from: displayedSections,
                 maxBytes: maxDisplayedItemBytes,
@@ -1743,6 +1770,26 @@ final class CleanerViewModel {
         } else {
             selectSection(recommendation)
         }
+    }
+
+    /// 判断「按项目会话分组」下指定项目当前可见的可批量会话是否已全部勾选
+    func isProjectGroupAllBulkSelected(_ project: SessionProjectID) -> Bool {
+        guard let scope = projectGroupSelectionScopes[project], !scope.bulkSelectableItemIDs.isEmpty else {
+            return false
+        }
+        return scope.bulkSelectableItemIDs.allSatisfy(selectedItemIDs.contains)
+    }
+
+    /// 一键切换指定项目分组的勾选：未全选时勾选本项目当前可见的可批量会话，已全选时取消本项目当前可见条目
+    func toggleProjectGroupSelection(_ project: SessionProjectID) {
+        guard sidebarSelection.isListScope, let scope = projectGroupSelectionScopes[project] else { return }
+        var next = selectedItemIDs
+        if isProjectGroupAllBulkSelected(project) {
+            next.subtract(scope.visibleItemIDs)
+        } else {
+            next.formUnion(scope.bulkSelectableItemIDs)
+        }
+        selectedItemIDs = next
     }
 
     func selectAllVisible() {

@@ -81,7 +81,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev \
-            librsvg2-dev rpm xvfb python3-psutil >/dev/null
+            librsvg2-dev rpm dbus xvfb python3-psutil >/dev/null
           rustup update stable --no-self-update
 
       - name: Stage static musl sidecar
@@ -97,7 +97,7 @@ jobs:
 
       - name: Measure
         run: |
-          xvfb-run -a python3 scripts/xplat-probe/measure_shell.py \
+          dbus-run-session -- xvfb-run -a python3 scripts/xplat-probe/measure_shell.py \
             --bundle-dir scripts/xplat-probe/tauri-shell/src-tauri/target/release/bundle --out shell-linux.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

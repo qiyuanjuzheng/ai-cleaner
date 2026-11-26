@@ -59,7 +59,11 @@ struct SidecarState(Mutex<Option<Sidecar>>);
 fn hello(state: tauri::State<'_, SidecarState>) -> Result<serde_json::Value, String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     let sidecar = guard.as_mut().ok_or("sidecar not running")?;
-    sidecar.call("hello")
+    let response = sidecar.call("hello")?;
+    if let Some(path) = std::env::var_os("AICL33_HELLO_FILE") {
+        std::fs::write(path, response.to_string()).map_err(|e| e.to_string())?;
+    }
+    Ok(response)
 }
 
 fn main() {

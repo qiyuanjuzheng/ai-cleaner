@@ -39,22 +39,16 @@ def dir_size(path: Path) -> int:
     return total
 
 
-def idle_memory(exe: Path, settle: float) -> dict:
-    before = {p.pid for p in psutil.process_iter()}
-    proc = subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(settle)
+def sample_memory(root: psutil.Process, before: set[int]) -> list[dict]:
     procs: dict[int, psutil.Process] = {}
-    try:
-        root = psutil.Process(proc.pid)
-        procs[root.pid] = root
-        for child in root.children(recursive=True):
-            procs[child.pid] = child
-    except psutil.NoSuchProcess:
-        return {"error": f"app exited early with code {proc.poll()}"}
+    procs[root.pid] = root
+    for child in root.children(recursive=True):
+        procs[child.pid] = child
     # macOS WebKit XPC services are launchd children, not app children: pick up new ones by name.
-    for p in psutil.process_iter(["name"]):
-        if p.pid not in before and p.pid not in procs and any(h in (p.info["name"] or "").lower() for h in WEBVIEW_HINTS):
-            procs[p.pid] = p
+    if sys.platform == "darwin":
+        for p in psutil.process_iter(["name"]):
+            if p.pid not in before and (p.info["name"] or "").startswith("com.apple.WebKit."):
+                procs[p.pid] = p
     rows = []
     for p in procs.values():
         try:
@@ -67,22 +61,63 @@ def idle_memory(exe: Path, settle: float) -> dict:
             rows.append(row)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    result = {
-        "settle_seconds": settle,
-        "processes": sorted(rows, key=lambda r: r["name"]),
-        "total_rss_mib": round(sum(r["rss_mib"] or 0 for r in rows), 2),
-        "total_uss_mib": round(sum(r.get("uss_mib") or 0 for r in rows), 2) if all("uss_mib" in r for r in rows) else None,
-        "sidecar_running": any("aicleaner-core" in r["name"] for r in rows),
-    }
-    for p in list(procs.values()):
+    return sorted(rows, key=lambda row: row["name"])
+
+
+def idle_memory(exe: Path, settle: float) -> dict:
+    before = {p.pid for p in psutil.process_iter()} if sys.platform == "darwin" else set()
+    with tempfile.TemporaryDirectory(prefix="aicl33-hello-") as scratch, tempfile.TemporaryFile() as log:
+        hello_file = Path(scratch) / "hello.json"
+        env = dict(os.environ, AICL33_HELLO_FILE=str(hello_file))
+        proc = subprocess.Popen([str(exe)], env=env, stdout=log, stderr=log)
+        started = time.monotonic()
+        rows = []
+        result: dict = {"settle_seconds": settle}
         try:
-            if p.pid != proc.pid:
-                p.kill()
-        except psutil.Error:
-            pass
-    proc.kill()
-    proc.wait(timeout=10)
-    return result
+            while proc.poll() is None and time.monotonic() - started < 60:
+                if hello_file.is_file():
+                    try:
+                        hello = json.loads(hello_file.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        result["hello"] = hello
+                        result["startup_seconds"] = round(time.monotonic() - started, 2)
+                        break
+                time.sleep(0.1)
+            hello = result.get("hello", {})
+            if hello.get("jsonrpc") == "2.0" and hello.get("id") == 1 and hello.get("result", {}).get("protocol") == 1:
+                time.sleep(settle)
+            else:
+                result["error"] = f"sidecar hello did not complete (app exit: {proc.poll()})"
+            if proc.poll() is None:
+                rows = sample_memory(psutil.Process(proc.pid), before)
+            else:
+                result.setdefault("error", f"app exited with code {proc.returncode}")
+        finally:
+            if proc.poll() is None:
+                try:
+                    for child in psutil.Process(proc.pid).children(recursive=True):
+                        try:
+                            child.kill()
+                        except psutil.NoSuchProcess:
+                            pass
+                except psutil.NoSuchProcess:
+                    pass
+                proc.kill()
+            proc.wait(timeout=10)
+        result["processes"] = rows
+        result["sidecar_running"] = any("aicleaner-core" in row["name"] for row in rows)
+        result["webview_running"] = any(any(hint in row["name"].lower() for hint in WEBVIEW_HINTS) for row in rows)
+        if result["sidecar_running"] and result["webview_running"] and "error" not in result:
+            result["total_rss_mib"] = round(sum(row["rss_mib"] for row in rows), 2)
+            result["total_uss_mib"] = round(sum(row["uss_mib"] for row in rows), 2) if all("uss_mib" in row for row in rows) else None
+        else:
+            result.setdefault("error", "sidecar or WebView processes missing at the idle sample")
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 8192))
+            result["app_log"] = log.read().decode(errors="replace")
+        return result
 
 
 def files_matching(bundle: Path, pattern: str) -> dict:

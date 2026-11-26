@@ -1,0 +1,9 @@
+binaries/
+target/
+Cargo.lock
+gen/
+swift-runtime/
+tauri.windows.conf.json
+# The repo root ignores `Icon?` (matches `icons` on case-insensitive checkouts).
+!icons/
+!icons/*

@@ -1,0 +1,162 @@
+name: Cross-platform probe (AICL-33)
+
+# Spike for AICL-31 / AICL-33: build AICleanerCore and run AICleanerCoreTests on Windows and
+# Linux, measure Swift runtime / sidecar sizes, and measure an empty Tauri 2 shell + sidecar.
+# Report-only: every step is allowed to fail and results land in the job summary and artifacts.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/xplat-probe.yml
+      - scripts/xplat_probe.py
+      - scripts/xplat-probe/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xplat-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SWIFT_VERSION: 6.4.3
+  TAURI_CLI: "@tauri-apps/cli@2.12.6"
+
+jobs:
+  linux-core:
+    name: Linux · Swift build / test / size
+    runs-on: ubuntu-latest
+    container: swift:6.4.3-noble
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install tools and static Linux SDK
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq python3 binutils >/dev/null
+          swift sdk install \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/static-sdk/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz" \
+            --checksum 529e6982974de78793c8348c1459105a772f54b464a51edf074e5b9c4bfe7c73
+
+      - name: Probe (raw + shimmed, tests, sizes)
+        run: |
+          musl="$(uname -m)-swift-linux-musl"
+          python3 scripts/xplat_probe.py --out probe-out --measure \
+            --extra-build="--swift-sdk $musl" \
+            --extra-build="--swift-sdk $musl -Xswiftc -Osize -Xlinker -s"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: probe-linux
+          path: |
+            probe-out/*.md
+            probe-out/*.json
+            probe-out/*.log
+            probe-out/bin/**
+
+  linux-shell:
+    name: Linux · Tauri shell + sidecar
+    needs: linux-core
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: probe-linux
+          path: probe-out
+
+      - name: Install Tauri prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev \
+            librsvg2-dev rpm dbus xvfb python3-psutil >/dev/null
+          rustup update stable --no-self-update
+
+      - name: Stage static musl sidecar
+        run: |
+          bin="$(ls -d probe-out/bin/swift_sdk_*_swift_linux_musl_Xswiftc_Osize_Xlinker_s/aicleaner-core-probe | head -1)"
+          python3 scripts/xplat-probe/stage_sidecar.py "$bin"
+
+      - name: Build bundles
+        working-directory: scripts/xplat-probe/tauri-shell/src-tauri
+        run: |
+          npx -y "$TAURI_CLI" build --bundles deb,rpm
+          npx -y "$TAURI_CLI" build --bundles appimage || echo "::warning::AppImage bundling failed"
+
+      - name: Measure
+        run: |
+          dbus-run-session -- xvfb-run -a python3 scripts/xplat-probe/measure_shell.py \
+            --bundle-dir scripts/xplat-probe/tauri-shell/src-tauri/target/release/bundle --out shell-linux.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: shell-linux
+          path: shell-linux.json
+
+  windows:
+    name: Windows · Swift build / test / size + Tauri shell
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
+        with:
+          swift-version: swift-${{ env.SWIFT_VERSION }}-release
+          swift-build: ${{ env.SWIFT_VERSION }}-RELEASE
+
+      - name: Probe (raw + shimmed, tests, sizes)
+        run: |
+          swift --version
+          python scripts/xplat_probe.py --out probe-out --measure --extra-build=--static-swift-stdlib
+
+      - name: Stage sidecar with Swift runtime DLLs
+        run: |
+          $summary = Get-Content probe-out/summary.json -Raw | ConvertFrom-Json
+          $measure = $summary.passes.shimmed.measure.dynamic.products
+          $product = if ($measure.'aicleaner-core-probe'.build_exit -eq 0) { 'aicleaner-core-probe' } else { 'sidecar-standin' }
+          "Using sidecar: $product" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $paths = $measure.$product.runtime.paths.PSObject.Properties.Value
+          $dllArgs = @(); foreach ($p in $paths) { $dllArgs += @('--runtime-dll', $p) }
+          python scripts/xplat-probe/stage_sidecar.py "probe-out/bin/dynamic/$product.exe" @dllArgs
+
+      - name: Build bundles
+        working-directory: scripts/xplat-probe/tauri-shell/src-tauri
+        run: |
+          rustup update stable --no-self-update
+          npx -y $env:TAURI_CLI build --bundles nsis,msi
+
+      - name: Measure
+        run: |
+          python -m pip install --quiet psutil
+          python scripts/xplat-probe/measure_shell.py `
+            --bundle-dir scripts/xplat-probe/tauri-shell/src-tauri/target/release/bundle --out shell-windows.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: probe-windows
+          path: |
+            probe-out/*.md
+            probe-out/*.json
+            probe-out/*.log
+            shell-windows.json

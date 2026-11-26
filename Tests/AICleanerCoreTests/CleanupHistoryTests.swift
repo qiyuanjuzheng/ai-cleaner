@@ -160,6 +160,31 @@ final class CleanupHistoryTests: XCTestCase {
         XCTAssertEqual(summaryAll.topClients.first?.totalFreedBytes, 2_500_000_000)
     }
 
+    func testRecentRecordsMatchTheSelectedRangeInNewestFirstOrder() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_790_000_000))
+        let newest = CleanupHistoryRecord(timestamp: today, freedBytes: 10, trashedCount: 1)
+        let firstDayInRange = CleanupHistoryRecord(
+            timestamp: today.addingTimeInterval(-6 * 86_400), freedBytes: 20, trashedCount: 1
+        )
+        let older = CleanupHistoryRecord(
+            timestamp: firstDayInRange.timestamp.addingTimeInterval(-1), freedBytes: 30, trashedCount: 1
+        )
+        let records = [firstDayInRange, older, newest]
+
+        let week = CleanupHistoryAnalytics.summarize(
+            records: records, range: .days7, referenceDate: today, calendar: calendar
+        )
+        XCTAssertEqual(week.recentRecords, [newest, firstDayInRange])
+        XCTAssertEqual(week.recentRecords.count, week.rangeRuns)
+
+        let allTime = CleanupHistoryAnalytics.summarize(
+            records: records, range: .allTime, referenceDate: today, calendar: calendar
+        )
+        XCTAssertEqual(allTime.recentRecords, [newest, firstDayInRange, older])
+    }
+
     func testAnalyticsEmptyHistoryProducesCleanZeroBaselinePoints() {
         let now = Date()
         let summary = CleanupHistoryAnalytics.summarize(records: [], range: .days7, referenceDate: now)

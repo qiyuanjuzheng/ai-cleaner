@@ -130,16 +130,8 @@ export function CleanupHistoryView({
   const barWidth = points.length > 0 ? Math.max(4, Math.min(28, (plotW / points.length) * 0.62)) : 12;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="cleanup-history-view">
-      <div
-        style={{
-          padding: '4px 20px 10px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          flexShrink: 0,
-        }}
-      >
+    <div className="history-scroll" data-testid="cleanup-history-view">
+      <div className="history-header">
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>清理记录</h1>
         <span style={{ flex: 1 }} />
 
@@ -195,7 +187,7 @@ export function CleanupHistoryView({
         )}
       </div>
 
-      <div className="history-scroll">
+      <div className="history-content">
         <div className="glass-hero-card kpi-grid">
           <div className="kpi-cell">
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>

@@ -1050,6 +1050,20 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.history-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 20px 10px;
+  background: var(--canvas-bg);
+}
+
+.history-content {
   padding: 6px 20px 24px;
   display: flex;
   flex-direction: column;

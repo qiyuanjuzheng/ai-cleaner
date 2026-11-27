@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -122,6 +123,41 @@ test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () =
       await page.keyboard.press(shortcut);
       await expect(page.getByTestId('item-list-view')).toBeVisible();
       await expect(page.getByTestId('toolbar-scan')).toBeEnabled();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test('cleanup history scrolls from the fixed page heading', async ({ page }) => {
+    const bridge = await startE2EBridge({ repoRoot, distDir });
+    try {
+      const records = Array.from({ length: 6 }, (_, index) => ({
+        id: randomUUID(),
+        timestamp: new Date(Date.now() - index * 3_600_000).toISOString().replace(/\.\d+Z$/, 'Z'),
+        freedBytes: 2048,
+        trashedCount: 1,
+        clientBreakdown: [],
+        categoryBreakdown: [],
+        sampleItemNames: [`history-scroll-${index}.log`],
+      }));
+      const dataDir = path.join(bridge.fixtureInfo.sandboxHome, '.aicleaner-data');
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(dataDir, 'cleanup-history.json'), JSON.stringify(records));
+
+      await page.setViewportSize({ width: 1180, height: 660 });
+      await page.goto(`${bridge.baseUrl}/?bridge=${encodeURIComponent(bridge.baseUrl)}`);
+      await page.getByTestId('nav-history').click();
+      const heading = page.getByRole('heading', { name: '清理记录', exact: true });
+      const lastRecord = page.getByTestId('history-recent-list').getByText('history-scroll-4.log');
+      await expect(lastRecord).toBeAttached();
+      await expect(lastRecord).not.toBeInViewport();
+      const top = await heading.evaluate((element) => element.getBoundingClientRect().top);
+
+      await heading.hover();
+      await page.mouse.wheel(0, 600);
+      await expect(lastRecord).toBeInViewport();
+      await expect(heading).toBeInViewport();
+      expect(await heading.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
     } finally {
       await bridge.close();
     }

@@ -336,11 +336,9 @@ assert_contains "$NOTES_V030" "AICL-14: 支持 /tmp 分层扫描与清理（AI �
 
 TAURI_NOTES_V030="$("${WORK_REPO}/scripts/generate-release-notes.sh" --tauri v0.3.0)"
 assert_eq "$NOTES_V030" "$TAURI_NOTES_V030" "the --tauri option must produce the same notes as the default"
-
-TAURI_AD_HOC_NOTES="$(TAURI_PLATFORM_SIGNING=false "${WORK_REPO}/scripts/generate-release-notes.sh" --tauri v0.3.0)"
-assert_contains "$TAURI_AD_HOC_NOTES" "ad-hoc" "ad-hoc Tauri notes must describe the macOS signature"
-assert_contains "$TAURI_AD_HOC_NOTES" "Authenticode" "ad-hoc Tauri notes must describe Windows signing status"
-assert_contains "$TAURI_AD_HOC_NOTES" "Tauri 更新签名" "ad-hoc Tauri notes must explain update verification"
+assert_contains "$NOTES_V030" "ad-hoc" "release notes must describe the macOS signature"
+assert_contains "$NOTES_V030" "Authenticode" "release notes must describe Windows signing status"
+assert_contains "$NOTES_V030" "Tauri 更新签名" "release notes must explain update verification"
 
 echo "==> [5/6] 验证新一轮周期（Major 破坏性变更 -> v1.0.0）、Squash 合并与 GitHub API 识别及防误触发"
 git -C "$WORK_REPO" push --quiet origin --delete release-pr/main

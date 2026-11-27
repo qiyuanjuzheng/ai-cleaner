@@ -27,34 +27,18 @@ fi
 VERSION="${TAG#v}"
 
 LOCAL=false
-AD_HOC=false
 DESTINATION="$ROOT_DIR/dist/tauri-release/$TAG"
-case "${3:-}" in
-  --local)
-    LOCAL=true
-    AD_HOC=true
-    DESTINATION="$ROOT_DIR/dist/tauri-local/$TAG"
-    ;;
-  --ad-hoc) AD_HOC=true ;;
-  "") ;;
-  *) usage >&2; exit 2 ;;
-esac
-
-if [[ "$LOCAL" == false ]]; then
+if [[ ${3:-} == --local ]]; then
+  LOCAL=true
+  DESTINATION="$ROOT_DIR/dist/tauri-local/$TAG"
+else
   : "${TAURI_SIGNING_PRIVATE_KEY:?需要 Tauri 更新签名私钥}"
 fi
-if [[ "$AD_HOC" == true ]]; then
-  # Tauri attempts certificate import and notarization when the variables exist, even if empty.
-  unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
-  unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
-  export APPLE_SIGNING_IDENTITY="-"
-else
-  : "${APPLE_SIGNING_IDENTITY:?需要 Developer ID Application 签名身份}"
-  if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
-    echo "错误: 正式产物必须使用 Developer ID Application 签名。" >&2
-    exit 2
-  fi
-fi
+
+# Ad-hoc signing applies to release and local builds. Clear inherited notarization credentials.
+unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
+export APPLE_SIGNING_IDENTITY="-"
 
 if [[ -e "$DESTINATION" ]]; then
   echo "错误: 产物目录已存在: $DESTINATION" >&2
@@ -110,10 +94,6 @@ test "$(plist_value LSMinimumSystemVersion)" = "14.0"
 lipo "$APP/Contents/MacOS/$(plist_value CFBundleExecutable)" -verify_arch arm64 x86_64
 lipo "$APP/Contents/MacOS/aicleaner-core" -verify_arch arm64 x86_64
 codesign --verify --deep --strict "$APP"
-if [[ "$AD_HOC" == false ]]; then
-  xcrun stapler validate "$APP"
-  spctl --assess --type execute --verbose "$APP"
-fi
 
 DMG="AI-Cleaner-${TAG}-macOS.dmg"
 ZIP="AI-Cleaner-${TAG}-macOS.zip"

@@ -31,6 +31,9 @@ DESTINATION="$ROOT_DIR/dist/tauri-release/$TAG"
 if [[ ${3:-} == --local ]]; then
   LOCAL=true
   DESTINATION="$ROOT_DIR/dist/tauri-local/$TAG"
+  # Tauri attempts certificate import and notarization when the variables exist, even if empty.
+  unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+  unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
   export APPLE_SIGNING_IDENTITY="-"
 else
   : "${APPLE_SIGNING_IDENTITY:?需要 Developer ID Application 签名身份}"

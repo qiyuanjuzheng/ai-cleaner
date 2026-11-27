@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [v1.0.1] - 2026-11-27
+
+### 修复
+
+- **desktop**：register updater plugin only when configured (#48)
+- 修复各页面标题区域无法滚动 (#47)
+
 ## [v1.0.0] - 2026-11-27
 
 ### 新增

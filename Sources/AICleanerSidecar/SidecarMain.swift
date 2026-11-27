@@ -68,12 +68,7 @@ private struct SandboxOverridePlatformAdapter: PlatformAdapter {
     func volumeIsCaseSensitive(at url: URL) -> Bool { base.volumeIsCaseSensitive(at: url) }
 
     func moveToTrash(_ url: URL) throws -> TrashOutcome {
-        #if os(Linux)
-        let dataHome = resolve(.xdgData) ?? homeDirectory.appendingPathComponent(".local/share", isDirectory: true)
-        return try LinuxTrash.move(url, dataHome: dataHome, platform: base)
-        #else
-        return try base.moveToTrash(url)
-        #endif
+        try base.moveToTrash(url)
     }
 }
 

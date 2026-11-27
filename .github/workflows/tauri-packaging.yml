@@ -83,9 +83,9 @@ jobs:
         run: |
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            binutils build-essential ca-certificates cpio curl file libayatana-appindicator3-dev \
+            binutils build-essential ca-certificates curl file libarchive-tools libayatana-appindicator3-dev \
             libfuse2 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config \
-            python3 rpm rpm2cpio squashfs-tools
+            python3 rpm squashfs-tools
           swift sdk install \
             https://download.swift.org/swift-6.4.3-release/static-sdk/swift-6.4.3-RELEASE/swift-6.4.3-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz \
             --checksum 529e6982974de78793c8348c1459105a772f54b464a51edf074e5b9c4bfe7c73
@@ -132,7 +132,7 @@ jobs:
           echo "Extracting DEB: ${deb[0]}"
           dpkg-deb -x "${deb[0]}" "$unpacked/deb"
           echo "Extracting RPM: ${rpm[0]}"
-          (cd "$unpacked/rpm" && rpm2cpio "${rpm[0]}" | cpio -idm --quiet)
+          bsdtar -xf "${rpm[0]}" -C "$unpacked/rpm"
           echo "Extracting AppImage: ${appimage[0]}"
           offset="$("${appimage[0]}" --appimage-offset)"
           if [[ ! "$offset" =~ ^[0-9]+$ || "$offset" == 0 ]]; then

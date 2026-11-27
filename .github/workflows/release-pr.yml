@@ -190,4 +190,4 @@ jobs:
           TAG: ${{ needs.release-pr.outputs.release_tag }}
         run: |
           release_url="https://github.com/${GH_REPO}/releases/tag/${TAG}"
-          gh pr comment "$PR_NUMBER" --body "已自动创建标签 \`${TAG}\` 并完成 macOS Universal 安装包构建与发布：${release_url}" || true
+          gh pr comment "$PR_NUMBER" --body "已创建版本标签 \`${TAG}\`，并发布 macOS、Windows、Linux 安装包及 Tauri 更新清单。${release_url}" || true

@@ -126,7 +126,9 @@ open "dist/AI Cleaner.app"
 
 在 `apps/desktop` 运行 `npm run tauri -- signer generate --write-keys /安全目录/ai-cleaner-updater.key`。将私钥文件内容保存到 Actions Secret `TAURI_SIGNING_PRIVATE_KEY`，将密钥密码保存到 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，将 `.pub` 文件内容保存到仓库变量 `TAURI_UPDATER_PUBLIC_KEY`。备份私钥，后续发布继续使用同一密钥。
 
-macOS 发布需配置 `APPLE_CERTIFICATE`（Base64 编码的 `.p12`）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`（Developer ID Application）、`APPLE_ID`、`APPLE_PASSWORD`（应用专用密码）和 `APPLE_TEAM_ID`。Windows 发布需配置 `WINDOWS_SIGN_CERTIFICATE`（Base64 编码的 `.pfx`）和 `WINDOWS_SIGN_CERTIFICATE_PASSWORD`。
+`v1.0.0` 的 macOS 安装包使用 ad-hoc 签名，Windows 安装包跳过 Authenticode。macOS 首次打开可能需要在「系统设置 → 隐私与安全性」确认。Windows 可能提示未知发布者，启用 Smart App Control 的设备可能拦截安装包。
+
+采用平台证书签名的后续版本需要配置 Apple Developer ID 和公证凭据（`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`）。Windows 当前的证书导入路径使用 `WINDOWS_SIGN_CERTIFICATE`（Base64 编码的 `.pfx`）和 `WINDOWS_SIGN_CERTIFICATE_PASSWORD`。
 
 正式构建将更新公钥嵌入客户端。发布工作流从签名更新包生成 `latest.json`，应用通过 `releases/latest/download/latest.json` 检查更新，并验证签名与公告版本是否匹配。
 

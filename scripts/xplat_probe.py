@@ -316,6 +316,7 @@ def pe_imports(path: Path) -> list[str]:
 def windows_runtime_closure(binary: Path) -> dict:
     """Walk PE imports and keep the DLLs that ship with the Swift runtime (not system DLLs)."""
     search = [Path(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve()
     seen: dict[str, Path] = {}
     queue = [binary]
     while queue:
@@ -331,10 +332,9 @@ def windows_runtime_closure(binary: Path) -> dict:
             hit = next((d / dll for d in search if (d / dll).is_file()), None)
             if hit is None:
                 continue
-            low = str(hit).lower()
             # Keep only what ships with the Swift toolchain / runtime installer; system and
-            # VC++ redistributable DLLs are present on stock Windows and are not counted.
-            if "\\windows\\" in low or "system32" in low or "swift" not in low:
+            # VC++ redistributable DLLs are outside the Swift runtime closure.
+            if hit.resolve().is_relative_to(system_root) or "swift" not in str(hit).lower():
                 continue
             seen[key] = hit
             queue.append(hit)

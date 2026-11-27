@@ -1,0 +1,209 @@
+name: Tauri installer preview
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tauri-packaging.yml
+      - apps/desktop/**
+      - Package.swift
+      - Sources/AICleanerCore/**
+      - Sources/AICleanerSidecar/**
+      - Sources/CPlatformSupport/**
+      - Sources/CSQLite/**
+      - scripts/build-tauri-macos-assets.sh
+      - scripts/generate-update-feed.sh
+      - scripts/sparkle-public-key.swift
+      - scripts/smoke-packaged-sidecar.py
+      - scripts/stage-windows-sidecar.py
+      - scripts/xplat_probe.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS · Universal DMG and Sparkle ZIP
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Build and verify universal packages
+        run: |
+          tag="v$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").version')"
+          ./scripts/build-tauri-macos-assets.sh --tag "$tag" --local
+          packages="dist/tauri-local/$tag"
+          zip_dir="$RUNNER_TEMP/aicleaner-zip"
+          mount_dir="$RUNNER_TEMP/aicleaner-dmg"
+          mkdir -p "$zip_dir" "$mount_dir"
+          ditto -x -k "$packages/AI-Cleaner-$tag-macOS.zip" "$zip_dir"
+          python3 scripts/smoke-packaged-sidecar.py "$zip_dir/AI Cleaner.app/Contents/MacOS/aicleaner-core"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$packages/AI-Cleaner-$tag-macOS.dmg"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          test "$(readlink "$mount_dir/Applications")" = /Applications
+          codesign --verify --deep --strict "$mount_dir/AI Cleaner.app"
+          python3 scripts/smoke-packaged-sidecar.py "$mount_dir/AI Cleaner.app/Contents/MacOS/aicleaner-core"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tauri-preview-macos-universal
+          path: dist/tauri-local/*/
+          if-no-files-found: error
+          compression-level: 0
+
+  linux:
+    name: Linux · DEB, RPM and AppImage
+    runs-on: ubuntu-latest
+    container: swift:6.4.3-jammy
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Tauri dependencies and Swift Static Linux SDK
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            binutils build-essential ca-certificates cpio curl file libayatana-appindicator3-dev \
+            libfuse2 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config python3 rpm rpm2cpio
+          swift sdk install \
+            https://download.swift.org/swift-6.4.3-release/static-sdk/swift-6.4.3-RELEASE/swift-6.4.3-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz \
+            --checksum 529e6982974de78793c8348c1459105a772f54b464a51edf074e5b9c4bfe7c73
+          curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Build and stage the static Linux sidecar
+        run: |
+          sdk=x86_64-swift-linux-musl
+          swift build -c release --swift-sdk "$sdk" --product aicleaner-core
+          sidecar="$(swift build -c release --swift-sdk "$sdk" --show-bin-path)/aicleaner-core"
+          if readelf -l "$sidecar" | grep INTERP; then
+            echo "Expected a statically linked sidecar" >&2
+            exit 1
+          fi
+          install -D -m 755 "$sidecar" apps/desktop/src-tauri/binaries/aicleaner-core-x86_64-unknown-linux-gnu
+      - name: Build Linux installers
+        working-directory: apps/desktop
+        run: |
+          npm run tauri build -- --ci --target x86_64-unknown-linux-gnu \
+            --bundles deb,rpm,appimage --config src-tauri/tauri.release.conf.json -- --locked
+      - name: Extract installers and exercise their bundled sidecars
+        run: |
+          shopt -s nullglob
+          bundle="$PWD/apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
+          deb=("$bundle"/deb/*.deb)
+          rpm=("$bundle"/rpm/*.rpm)
+          appimage=("$bundle"/appimage/*.AppImage)
+          if (( ${#deb[@]} != 1 || ${#rpm[@]} != 1 || ${#appimage[@]} != 1 )); then
+            echo "Expected one Linux installer per format" >&2
+            exit 1
+          fi
+          unpacked="$RUNNER_TEMP/aicleaner-linux"
+          mkdir -p "$unpacked/"{deb,rpm,appimage}
+          dpkg-deb -x "${deb[0]}" "$unpacked/deb"
+          (cd "$unpacked/rpm" && rpm2cpio "${rpm[0]}" | cpio -idm --quiet)
+          (cd "$unpacked/appimage" && "${appimage[0]}" --appimage-extract >/dev/null)
+          for format in deb rpm appimage; do
+            mapfile -t sidecars < <(find "$unpacked/$format" -type f -name aicleaner-core)
+            test "${#sidecars[@]}" -eq 1
+            python3 scripts/smoke-packaged-sidecar.py "${sidecars[0]}"
+          done
+          mkdir -p dist/tauri-preview/linux
+          cp "${deb[0]}" "${rpm[0]}" "${appimage[0]}" dist/tauri-preview/linux/
+          (cd dist/tauri-preview/linux && sha256sum -- *.deb *.rpm *.AppImage > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tauri-preview-linux-x86_64
+          path: dist/tauri-preview/linux/
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows · NSIS and MSI
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
+        with:
+          swift-version: swift-6.4.3-release
+          swift-build: 6.4.3-RELEASE
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Build and stage the Windows sidecar and Swift runtime
+        run: |
+          swift build -c release --product aicleaner-core
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $bin = (swift build -c release --show-bin-path).Trim()
+          python scripts/stage-windows-sidecar.py (Join-Path $bin 'aicleaner-core.exe') `
+            --config (Join-Path $env:RUNNER_TEMP 'aicleaner-windows-runtime.json')
+      - name: Build unsigned Windows installers
+        working-directory: apps/desktop
+        run: |
+          npm run tauri build -- --ci --target x86_64-pc-windows-msvc --bundles nsis,msi `
+            --config src-tauri/tauri.release.conf.json `
+            --config (Join-Path $env:RUNNER_TEMP 'aicleaner-windows-runtime.json') -- --locked
+      - name: Extract installers and exercise their bundled sidecars
+        run: |
+          $bundle = 'apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+          $nsis = @(Get-ChildItem "$bundle/nsis" -Filter '*.exe' -File)
+          $msi = @(Get-ChildItem "$bundle/msi" -Filter '*.msi' -File)
+          if ($nsis.Count -ne 1 -or $msi.Count -ne 1) { throw 'Expected one installer per format' }
+          $nsisDir = Join-Path $env:RUNNER_TEMP 'aicleaner-nsis'
+          $msiDir = Join-Path $env:RUNNER_TEMP 'aicleaner-msi'
+          $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          & $sevenZip x $nsis[0].FullName "-o$nsisDir" -y
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $extract = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/a', ('"{0}"' -f $msi[0].FullName), '/qn', ('TARGETDIR="{0}"' -f $msiDir)
+          )
+          if ($extract.ExitCode) { throw "MSI extraction failed with code $($extract.ExitCode)" }
+          foreach ($folder in @($nsisDir, $msiDir)) {
+            $sidecars = @(Get-ChildItem $folder -Recurse -Filter 'aicleaner-core.exe' -File)
+            if ($sidecars.Count -ne 1) { throw "Expected a single sidecar in $folder" }
+            python scripts/smoke-packaged-sidecar.py $sidecars[0].FullName
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          $outDir = New-Item -ItemType Directory -Force 'dist/tauri-preview/windows'
+          Copy-Item @($nsis[0].FullName, $msi[0].FullName) $outDir.FullName
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tauri-preview-windows-x86_64
+          path: dist/tauri-preview/windows/
+          if-no-files-found: error
+          compression-level: 0

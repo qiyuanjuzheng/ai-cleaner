@@ -333,6 +333,14 @@ assert_not_contains "$NOTES_V030" "Merge pull request #99" "release notes commit
 assert_not_contains "$NOTES_V030" "Merge pull request #13 from" "PR merges should display readable PR title instead of raw branch name"
 assert_contains "$NOTES_V030" "AICL-14: 支持 /tmp 分层扫描与清理（AI 特征精准归类 + 未归属项仅手选） (#13)" "PR #13 readable title should appear in diff"
 
+TAURI_NOTES_V030="$("${WORK_REPO}/scripts/generate-release-notes.sh" --tauri v0.3.0)"
+assert_contains "$TAURI_NOTES_V030" "AI-Cleaner-v0.3.0-macOS.dmg" "Tauri notes must include the Universal DMG"
+assert_contains "$TAURI_NOTES_V030" "NSIS" "Tauri notes must describe Windows installers"
+assert_contains "$TAURI_NOTES_V030" "AppImage" "Tauri notes must describe Linux packages"
+assert_contains "$TAURI_NOTES_V030" "SHA256SUMS.txt" "Tauri notes must link the checksums"
+assert_not_contains "$TAURI_NOTES_V030" "macOS.zip" "Tauri notes must only refer to published formats"
+assert_not_contains "$TAURI_NOTES_V030" "ad-hoc" "Tauri notes must match the official signing policy"
+
 echo "==> [5/6] 验证新一轮周期（Major 破坏性变更 -> v1.0.0）、Squash 合并与 GitHub API 识别及防误触发"
 git -C "$WORK_REPO" push --quiet origin --delete release-pr/main
 printf 'struct V1Rule {}\n' > "${WORK_REPO}/Sources/V1Rule.swift"

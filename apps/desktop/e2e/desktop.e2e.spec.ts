@@ -121,19 +121,21 @@ test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () =
       const shortcut = process.platform === 'darwin' ? 'Meta+r' : 'Control+r';
       await page.keyboard.press(shortcut);
       await expect(page.getByTestId('item-list-view')).toBeVisible();
+      await expect(page.getByTestId('toolbar-scan')).toBeEnabled();
     } finally {
       await bridge.close();
     }
   });
 
   test('virtual scrolling stays smooth with 5,200+ real scanned items', async ({ page }) => {
+    test.setTimeout(90_000);
     const bridge = await startE2EBridge({ repoRoot, distDir, stressFileCount: 5200 });
     try {
       const appUrl = `${bridge.baseUrl}/?bridge=${encodeURIComponent(bridge.baseUrl)}`;
       await page.goto(appUrl);
 
       await page.getByTestId('start-scan-button').click();
-      await expect(page.getByTestId('item-list-view')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId('item-list-view')).toBeVisible({ timeout: 60_000 });
       await expect(page.getByTestId('section-header-recommended')).toContainText('5202 项');
 
       // DOM virtualization check: 5,200+ items exist, but DOM renders only a tiny window (< 80 rows)

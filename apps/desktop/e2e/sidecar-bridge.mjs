@@ -157,6 +157,7 @@ export async function startE2EBridge({ repoRoot, distDir, stressFileCount = 0 })
   const child = spawn(binary, [], { stdio: ['pipe', 'pipe', 'pipe'], env });
   const pending = new Map();
   const sseClients = new Set();
+  const pendingNotifications = [];
   const revealedPaths = [];
   let nextId = 1;
   let stderrLog = '';
@@ -184,8 +185,13 @@ export async function startE2EBridge({ repoRoot, distDir, stressFileCount = 0 })
       }
     } else if (msg.method) {
       const data = `data: ${JSON.stringify(msg)}\n\n`;
-      for (const res of sseClients) {
-        res.write(data);
+      if (sseClients.size === 0) {
+        pendingNotifications.push(data);
+        if (pendingNotifications.length > 20) pendingNotifications.shift();
+      } else {
+        for (const res of sseClients) {
+          res.write(data);
+        }
       }
     }
   });
@@ -220,6 +226,9 @@ export async function startE2EBridge({ repoRoot, distDir, stressFileCount = 0 })
       });
       res.write(':\n\n');
       sseClients.add(res);
+      while (pendingNotifications.length > 0) {
+        res.write(pendingNotifications.shift());
+      }
       req.on('close', () => sseClients.delete(res));
       return;
     }
@@ -300,20 +309,53 @@ export async function startE2EBridge({ repoRoot, distDir, stressFileCount = 0 })
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   async function close() {
-    for (const res of sseClients) res.end();
+    for (const res of sseClients) {
+      try {
+        res.end();
+      } catch {
+        // ignore
+      }
+    }
     sseClients.clear();
+
+    const exitPromise =
+      child.exitCode !== null || child.signalCode !== null
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+            child.once('exit', () => resolve());
+          });
+
     try {
-      await sendRpc('core.shutdown', {});
+      await Promise.race([
+        sendRpc('core.shutdown', {}),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
     } catch {
       // ignore if already exited
     }
-    try {
-      child.kill();
-    } catch {
-      // ignore
+
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
     }
-    await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(sandboxHome, { recursive: true, force: true });
+
+    await Promise.race([exitPromise, new Promise((resolve) => setTimeout(resolve, 2000))]);
+
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+      if (typeof server.closeAllConnections === 'function') {
+        server.closeAllConnections();
+      }
+    });
+
+    try {
+      fs.rmSync(sandboxHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch {
+      // best-effort temp cleanup
+    }
   }
 
   return {

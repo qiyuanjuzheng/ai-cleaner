@@ -123,6 +123,7 @@ open "dist/AI Cleaner.app"
 - **手动打标签发版**：在已包含对应 `CHANGELOG.md` 章节的 `main` 提交上执行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"` 并 `git push origin vX.Y.Z`，将直接触发 `Build and publish AI Cleaner`（`.github/workflows/release.yml`）完成测试、打包与发布。
 - **重试发布**：在 GitHub Actions 的 `Build and publish AI Cleaner` 工作流中点击 **Run workflow**（`workflow_dispatch`），输入待发布的 `vX.Y.Z` 标签即可重试构建和发布。修正已发布的安装包时请发新版本。
 - **本地构建安装包**：运行 `./scripts/build-release-assets.sh --tag vX.Y.Z`，产物位于 `dist/release/`。`./scripts/package-app.sh` 默认构建 Universal 发布版并自动读取 `CHANGELOG.md` 最新版本号，`--debug` 默认使用本机架构。可用 `--arch` 指定架构，用 `--version` 和 `--build` 或 `APP_VERSION` 和 `APP_BUILD_NUMBER` 设置版本及构建号；`CODESIGN_IDENTITY` 可指定签名身份。
+- **本地预演 Tauri macOS 安装包**。准备 Xcode、Node.js 22 和 Rust 1.90 或更新版本。安装 Rust 的 `aarch64-apple-darwin` 和 `x86_64-apple-darwin` 目标，在 `apps/desktop` 运行 `npm ci`，再从仓库根目录运行 `./scripts/build-tauri-macos-assets.sh --tag v2.0.0 --local`。脚本用临时 Sparkle 密钥和 ad-hoc 签名生成 Universal DMG、ZIP、appcast 和校验和，产物位于 `dist/tauri-local/v2.0.0/`，供本地验证。
 
 ### 配置更新签名
 

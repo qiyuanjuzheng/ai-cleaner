@@ -189,6 +189,82 @@ final class SidecarFlowTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: dataDirectory.appendingPathComponent(backup)), corrupted)
     }
 
+    #if os(macOS)
+    func testReadsSwiftUIStorageWithoutRewritingIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let legacyRelativePath = "Library/Application Support/AICleaner"
+        let host = HostPlatformAdapter.shared
+        XCTAssertEqual(
+            host.userDataDirectory().standardizedFileURL.path,
+            host.homeDirectory.appendingPathComponent(legacyRelativePath).standardizedFileURL.path
+        )
+        let directory = fixture.root.appendingPathComponent(legacyRelativePath)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let platform = SandboxPlatformAdapter(wrapping: host, homeDirectory: fixture.root, userDataDirectory: directory)
+        let workspace = fixture.root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let workspacePath = workspace.resolvingSymlinksInPath().path
+        let sessionID = "a44f25f8-e76d-4bda-ab69-55dce71da00a"
+        let session = fixture.root.appendingPathComponent(".claude/projects/fixture/\(sessionID).jsonl")
+        try FileManager.default.createDirectory(at: session.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let sessionEntry = try JSONSerialization.data(withJSONObject: [
+            "type": "user", "cwd": workspacePath, "sessionId": sessionID,
+            "message": ["role": "user", "content": "Existing protected project"]
+        ])
+        try (sessionEntry + Data([10])).write(to: session)
+
+        // The v0.4.0 SwiftUI stores write JSON arrays and encode dates in ISO 8601.
+        let historicalDate = "2026-11-24T05:10:00Z"
+        let recordID = "B5CEB96C-D2F2-4653-BD87-7F8A61F27FE8"
+        let data: [String: Any] = [
+            "cleanup-history.json": [[
+                "id": recordID, "timestamp": historicalDate, "freedBytes": 8192, "trashedCount": 1,
+                "clientBreakdown": [], "categoryBreakdown": [], "sampleItemNames": ["removed.log"]
+            ]],
+            "excluded-items.json": [[
+                "id": recordID, "normalizedPath": fixture.file.path, "displayName": "Existing exclusion",
+                "clientID": "custom", "clientName": "Custom", "category": "cache",
+                "isDirectory": false, "excludedAt": historicalDate
+            ]],
+            "custom-directories.json": [[
+                "id": recordID, "displayName": "Existing custom directory", "path": fixture.file.deletingLastPathComponent().path,
+                "category": "cache", "mode": "children", "createdAt": historicalDate
+            ]],
+            "protected-projects.json": [workspacePath]
+        ]
+        let original = try data.mapValues { try JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted, .sortedKeys]) }
+        for (name, bytes) in original {
+            try bytes.write(to: directory.appendingPathComponent(name))
+        }
+
+        let scanner = ScanEngine(builtInProfiles: [BuiltInClientRules.claudeCode], systemTempRoot: nil, platform: platform)
+        let client = TestClient(platform: platform, scanner: scanner, legacyAppearance: { .dark })
+        let scanID = try await client.scan()
+        let history = try await client.call("history.list")
+        let exclusions = try await client.call("excluded.list")
+        let directories = try await client.call("customDirs.list")
+        let projects = try await client.call("projects.list", ["scanId": scanID, "clientId": .string("claude-code")])
+        let settings = try await client.call("settings.get")
+        XCTAssertEqual(history["records"]?.array?.first?["freedBytes"], .integer(8192))
+        XCTAssertEqual(exclusions["records"]?.array?.first?["displayName"], .string("Existing exclusion"))
+        XCTAssertEqual(directories["directories"]?.array?.first?["displayName"], .string("Existing custom directory"))
+        let protectedProject = try XCTUnwrap(projects["projects"]?.array?.first)
+        XCTAssertEqual(protectedProject["isProtected"], .bool(true))
+        let sessions = try await client.call("projects.sessions", [
+            "scanId": scanID, "projectId": try XCTUnwrap(protectedProject["projectId"])
+        ])
+        let protectedSession = try XCTUnwrap(sessions["items"]?.array?.first)
+        XCTAssertNotNil(protectedSession["hardProtectionReason"]?.string)
+        XCTAssertEqual(protectedSession["selected"], .bool(false))
+        XCTAssertEqual(settings["appearanceMode"], .string("dark"))
+
+        for (name, bytes) in original {
+            XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(name)), bytes, name)
+        }
+    }
+    #endif
+
     func testReportsCorruptProtectionAndPreservesFile() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

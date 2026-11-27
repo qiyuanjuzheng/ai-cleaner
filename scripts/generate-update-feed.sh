@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAG="${1:-}"
 REPOSITORY="${2:-}"
-if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-  echo "用法: $0 vX.Y.Z OWNER/REPO" >&2
+if [[ $# -gt 4 ]] || ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "用法: $0 vX.Y.Z OWNER/REPO [产物目录 [更新说明文件]]" >&2
   exit 2
 fi
 if [[ -z "${SPARKLE_PRIVATE_ED_KEY:-}" ]]; then
@@ -13,8 +13,8 @@ if [[ -z "${SPARKLE_PRIVATE_ED_KEY:-}" ]]; then
   exit 2
 fi
 
-TOOLS="${ROOT_DIR}/.build/artifacts/sparkle/Sparkle/bin"
-RELEASE_DIR="${ROOT_DIR}/dist/release"
+TOOLS="${SPARKLE_TOOLS_DIR:-${ROOT_DIR}/.build/artifacts/sparkle/Sparkle/bin}"
+RELEASE_DIR="${3:-${ROOT_DIR}/dist/release}"
 ZIP="AI-Cleaner-${TAG}-macOS.zip"
 RELEASE_URL="https://github.com/${REPOSITORY}/releases"
 DOWNLOAD_PREFIX="${RELEASE_URL}/download/${TAG}/"
@@ -22,7 +22,11 @@ STAGING_DIR="$(mktemp -d "${RELEASE_DIR}/.appcast.XXXXXX")"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 ln "$RELEASE_DIR/$ZIP" "$STAGING_DIR/$ZIP"
 NOTES_FILE="$STAGING_DIR/${ZIP%.zip}.md"
-"$ROOT_DIR/scripts/generate-release-notes.sh" --changes-only "$TAG" > "$NOTES_FILE"
+if [[ $# -eq 4 ]]; then
+  cp "$4" "$NOTES_FILE"
+else
+  "$ROOT_DIR/scripts/generate-release-notes.sh" --changes-only "$TAG" > "$NOTES_FILE"
+fi
 
 printf '%s\n' "$SPARKLE_PRIVATE_ED_KEY" | "$TOOLS/generate_appcast" \
   --ed-key-file - --maximum-deltas 0 --download-url-prefix "$DOWNLOAD_PREFIX" --embed-release-notes \

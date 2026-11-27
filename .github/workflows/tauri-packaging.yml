@@ -75,8 +75,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      APPIMAGE_EXTRACT_AND_RUN: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -86,7 +84,8 @@ jobs:
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             binutils build-essential ca-certificates cpio curl file libayatana-appindicator3-dev \
-            libfuse2 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config python3 rpm rpm2cpio
+            libfuse2 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config \
+            python3 rpm rpm2cpio squashfs-tools
           swift sdk install \
             https://download.swift.org/swift-6.4.3-release/static-sdk/swift-6.4.3-RELEASE/swift-6.4.3-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz \
             --checksum 529e6982974de78793c8348c1459105a772f54b464a51edf074e5b9c4bfe7c73
@@ -110,7 +109,10 @@ jobs:
           fi
           install -D -m 755 "$sidecar" apps/desktop/src-tauri/binaries/aicleaner-core-x86_64-unknown-linux-gnu
       - name: Build Linux installers
+        id: build
         working-directory: apps/desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
           npm run tauri build -- --ci --target x86_64-unknown-linux-gnu \
             --bundles deb,rpm,appimage --config src-tauri/tauri.release.conf.json -- --locked
@@ -122,17 +124,30 @@ jobs:
           rpm=("$bundle"/rpm/*.rpm)
           appimage=("$bundle"/appimage/*.AppImage)
           if (( ${#deb[@]} != 1 || ${#rpm[@]} != 1 || ${#appimage[@]} != 1 )); then
-            echo "Expected one Linux installer per format" >&2
+            echo "Expected one Linux installer per format. Found DEB=${#deb[@]}, RPM=${#rpm[@]}, AppImage=${#appimage[@]}." >&2
             exit 1
           fi
           unpacked="$RUNNER_TEMP/aicleaner-linux"
-          mkdir -p "$unpacked/"{deb,rpm,appimage}
+          mkdir -p "$unpacked/"{deb,rpm}
+          echo "Extracting DEB: ${deb[0]}"
           dpkg-deb -x "${deb[0]}" "$unpacked/deb"
+          echo "Extracting RPM: ${rpm[0]}"
           (cd "$unpacked/rpm" && rpm2cpio "${rpm[0]}" | cpio -idm --quiet)
-          (cd "$unpacked/appimage" && "${appimage[0]}" --appimage-extract >/dev/null)
+          echo "Extracting AppImage: ${appimage[0]}"
+          offset="$("${appimage[0]}" --appimage-offset)"
+          if [[ ! "$offset" =~ ^[0-9]+$ || "$offset" == 0 ]]; then
+            echo "Invalid AppImage filesystem offset: $offset" >&2
+            exit 1
+          fi
+          unsquashfs -no-progress -offset "$offset" -dest "$unpacked/appimage" "${appimage[0]}"
           for format in deb rpm appimage; do
+            echo "Checking the sidecar extracted from $format"
             mapfile -t sidecars < <(find "$unpacked/$format" -type f -name aicleaner-core)
-            test "${#sidecars[@]}" -eq 1
+            if (( ${#sidecars[@]} != 1 )); then
+              echo "Expected one sidecar in $format. Found ${#sidecars[@]}." >&2
+              find "$unpacked/$format" -iname '*aicleaner*' -print >&2
+              exit 1
+            fi
             python3 scripts/smoke-packaged-sidecar.py "${sidecars[0]}"
           done
           mkdir -p dist/tauri-preview/linux
@@ -142,6 +157,17 @@ jobs:
         with:
           name: tauri-preview-linux-x86_64
           path: dist/tauri-preview/linux/
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure() && steps.build.outcome == 'success'
+        with:
+          name: tauri-linux-diagnostics
+          path: |
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          retention-days: 1
           if-no-files-found: error
           compression-level: 0
 

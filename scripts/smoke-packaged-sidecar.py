@@ -24,7 +24,7 @@ def main() -> None:
         env.pop(key, None)
     if os.name == "nt":
         # The runner has Swift on PATH. An installed application must find its own DLLs.
-        env["PATH"] = str(Path(env["SystemRoot"]) / "System32")
+        env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
 
     with tempfile.TemporaryDirectory(prefix="aicleaner-package-") as sandbox:
         env["AI_CLEANER_HOME"] = sandbox

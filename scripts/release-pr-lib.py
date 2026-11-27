@@ -811,7 +811,7 @@ def build_pr_body(
             "",
             "1. **润色更新日志**：可直接在本 PR 中编辑 `CHANGELOG.md` 调整中文措辞；后续若 `main` 再合入新 PR，工作流会保留你的手动修改并仅追加新变更。",
             f"2. **手动调整版本号**：如需修改发布版本（例如将 `{next_tag}` 改为其他语义化版本号），直接修改本 PR 中 `CHANGELOG.md` 顶部的 `## [{next_tag}] - YYYY-MM-DD` 标题即可，合并后将严格以该版本号为准。",
-            "3. **合并即自动发版**：本 PR 创建与更新期间**不会**运行耗时的 macOS Universal 编译打包；点击合并后，流水线会在当前 `main` 提交自动创建带注释标签、编译 Universal `.dmg` / `.zip` 与 `SHA256SUMS.txt` 并发布 GitHub Release。",
+            "3. **合并即自动发版**。合并后，流水线会创建版本标签，构建三端安装包和 Tauri 签名更新包，验签后生成 `latest.json` 与 `SHA256SUMS.txt`，再发布到 GitHub Releases。",
         ]
     )
     return "\n".join(lines) + "\n"

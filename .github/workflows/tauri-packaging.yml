@@ -4,29 +4,33 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Release tag for building signed Tauri assets
+        description: Release tag for building installers and signed update assets
         type: string
         required: true
+      platform_signing:
+        description: Use Developer ID and Authenticode for release installers
+        type: boolean
+        default: true
     secrets:
       TAURI_SIGNING_PRIVATE_KEY:
         required: true
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
       APPLE_CERTIFICATE:
-        required: true
+        required: false
       APPLE_CERTIFICATE_PASSWORD:
-        required: true
+        required: false
       APPLE_SIGNING_IDENTITY:
-        required: true
+        required: false
       APPLE_ID:
-        required: true
+        required: false
       APPLE_PASSWORD:
-        required: true
+        required: false
       APPLE_TEAM_ID:
-        required: true
+        required: false
       WINDOWS_SIGN_CERTIFICATE:
-        required: true
+        required: false
       WINDOWS_SIGN_CERTIFICATE_PASSWORD:
-        required: true
+        required: false
   pull_request:
     branches: [main]
     paths:
@@ -53,6 +57,7 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ inputs.tag }}
+  TAURI_PLATFORM_SIGNING: ${{ inputs.tag != '' && inputs.platform_signing }}
   TAURI_UPDATER_PUBLIC_KEY: ${{ inputs.tag != '' && vars.TAURI_UPDATER_PUBLIC_KEY || '' }}
 
 jobs:
@@ -79,16 +84,20 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
-          APPLE_CERTIFICATE: ${{ inputs.tag != '' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.tag != '' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ inputs.tag != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ inputs.tag != '' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ inputs.tag != '' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ inputs.tag != '' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_CERTIFICATE: ${{ inputs.tag != '' && inputs.platform_signing && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.tag != '' && inputs.platform_signing && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ inputs.tag != '' && inputs.platform_signing && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ inputs.tag != '' && inputs.platform_signing && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.tag != '' && inputs.platform_signing && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.tag != '' && inputs.platform_signing && secrets.APPLE_TEAM_ID || '' }}
         run: |
           if [[ -n "$RELEASE_TAG" ]]; then
             tag="$RELEASE_TAG"
-            ./scripts/build-tauri-macos-assets.sh --tag "$tag"
+            signing=()
+            if [[ "$TAURI_PLATFORM_SIGNING" == 'false' ]]; then
+              signing+=(--ad-hoc)
+            fi
+            ./scripts/build-tauri-macos-assets.sh --tag "$tag" "${signing[@]}"
             packages="dist/tauri-release/$tag"
           else
             tag="v$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").version')"
@@ -264,8 +273,8 @@ jobs:
           $bin = (swift build -c release --show-bin-path).Trim()
           python scripts/stage-windows-sidecar.py (Join-Path $bin 'aicleaner-core.exe') `
             --config (Join-Path $env:RUNNER_TEMP 'aicleaner-windows-runtime.json')
-      - name: Sign staged Windows executables and configure the release
-        if: inputs.tag != ''
+      - name: Sign staged Windows executables
+        if: inputs.tag != '' && inputs.platform_signing
         env:
           WINDOWS_SIGN_CERTIFICATE: ${{ secrets.WINDOWS_SIGN_CERTIFICATE }}
           WINDOWS_SIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
@@ -292,9 +301,7 @@ jobs:
               /tr http://timestamp.digicert.com /td SHA256 $file.FullName
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
-          python scripts/tauri-build-config.py $env:RELEASE_TAG $env:GITHUB_REPOSITORY `
-            (Join-Path $env:RUNNER_TEMP 'tauri-release.json') --release
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "AI_CLEANER_WINDOWS_SIGNING_THUMBPRINT=$env:AI_CLEANER_WINDOWS_SIGNING_THUMBPRINT" >> $env:GITHUB_ENV
       - name: Build Windows installers
         working-directory: apps/desktop
         env:
@@ -305,7 +312,10 @@ jobs:
             '--config', (Join-Path $env:RUNNER_TEMP 'aicleaner-windows-runtime.json'))
           if ($env:RELEASE_TAG) {
             if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Missing Tauri updater key' }
-            $config += @('--config', (Join-Path $env:RUNNER_TEMP 'tauri-release.json'))
+            $releaseConfig = Join-Path $env:RUNNER_TEMP 'tauri-release.json'
+            python ../../scripts/tauri-build-config.py $env:RELEASE_TAG $env:GITHUB_REPOSITORY $releaseConfig --release
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $config += @('--config', $releaseConfig)
           } else {
             $key = Join-Path $env:RUNNER_TEMP 'tauri-preview.key'
             npm run tauri -- signer generate --ci --write-keys $key *> $null
@@ -344,7 +354,7 @@ jobs:
           $outDir = New-Item -ItemType Directory -Force 'dist/tauri-preview/windows'
           Copy-Item @($nsis[0].FullName, $msi[0].FullName) $outDir.FullName
           foreach ($file in @($nsis[0], $msi[0])) {
-            if ($env:RELEASE_TAG -and (Get-AuthenticodeSignature -FilePath $file.FullName).Status -ne 'Valid') {
+            if ($env:TAURI_PLATFORM_SIGNING -eq 'true' -and (Get-AuthenticodeSignature -FilePath $file.FullName).Status -ne 'Valid') {
               throw "Invalid Windows code signature on $($file.Name)"
             }
             Copy-Item -LiteralPath "$($file.FullName).sig" $outDir.FullName -ErrorAction Stop

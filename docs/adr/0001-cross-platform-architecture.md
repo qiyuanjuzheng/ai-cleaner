@@ -442,6 +442,8 @@ public protocol PlatformAdapter: Sendable {
 - **Linux**：`.deb` / `.rpm` 附带 SHA-256 校验和；AppImage 的更新包由 Tauri updater 签名。
 - **Tauri updater**：使用项目专用的 minisign 密钥（`TAURI_SIGNING_PRIVATE_KEY`）。应用内置公钥，并校验更新包签名及签名绑定的版本。
 
+`v1.0.0` 首发采用 macOS ad-hoc 签名和无 Authenticode 的 Windows 安装包。发布任务仍用正式 Tauri 更新公钥验证所有更新包，校验通过后才生成 `latest.json`。
+
 ### 10.3 Tauri 更新
 
 AICL-40 确认旧版没有在用用户。首个 Tauri 正式版由用户从 GitHub Releases 安装。应用内「检查更新」使用 `https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest/download/latest.json`，覆盖 macOS arm64 和 x64、Windows x64 的 NSIS 和 MSI，以及 Linux x64 AppImage。DEB 和 RPM 用户通过应用内提示跳转下载页。
@@ -454,7 +456,7 @@ AICL-40 确认旧版没有在用用户。首个 Tauri 正式版由用户从 GitH
 | --- | --- | --- |
 | T0：本 ADR 合入 main | — | `Sources/AICleanerApp` 冻结，只接受 P0 修复（数据丢失、误删、崩溃、无法启动）；新功能只做在 Core 和 Tauri 前端 |
 | T1：阶段 3 完成 | AICL-39 功能对照表全部勾完，三端 E2E 通过 | 从 GitHub Actions 下载 Tauri 预览安装包 |
-| T2：阶段 4 首个正式版 | 平台签名、公证、Tauri 更新链路验证通过 | 发布三端正式安装包和 `latest.json` |
+| T2：阶段 4 首个正式版 | `v1.0.0` 三端安装包与 Tauri 更新链路验证通过 | 发布三端正式安装包和 `latest.json` |
 | T2 + 2 周 | 没有新的 P0 问题 | 删除 `Sources/AICleanerApp`、`Tests/AICleanerAppTests` 和 `Package.swift` 里的 Sparkle 依赖 |
 
 ## 11. 测试策略

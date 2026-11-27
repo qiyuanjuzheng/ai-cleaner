@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [v0.5.0] - 2026-11-27
+
+### 新增
+
+- AICL-40：切换三端 Tauri 发布和应用内更新 (#44)
+- **desktop**：Tauri 2 三端统一前端与 Rust 宿主功能对齐 (AICL-39) (#43)
+- **rules,safety**：Windows 与 Linux 规则包及 SafetyGuard 平台护栏（AICL-37 / AICL-38） (#42)
+- AICL-36: Core 筛选勾选与 sidecar 清理主链路 (#41)
+
+### 优化与变更
+
+- AICL-35: Core 三端平台适配与系统回收站 (#40)
+- AICL-34 将内置清理规则迁移为平台清单 (#39)
+- AICL-33 跨平台探针：Windows/Linux 构建测试、体积实测与 Tauri 空壳 sidecar (#37)
+
 ## [v0.4.0] - 2026-11-26
 
 ### 新增

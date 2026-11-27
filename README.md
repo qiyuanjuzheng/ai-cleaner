@@ -55,33 +55,34 @@ Tauri 版在工具栏提供「检查更新」。macOS、Windows 和 Linux AppIma
 - **国内客户端**　WorkBuddy（腾讯 WorkBuddy / CodeBuddy）、豆包工作伙伴 / 豆包（Doubao / DoubaoWork）、WorkDaddy、DeepSeek Harness、Trae / Trae CN、Qoder、通义灵码（Lingma）、ZCode / 智谱清言（ChatGLM）、阶跃星辰（StepFun）、Kimi、腾讯元宝。
 - **其他客户端**　Claude Code、Codex、Cursor、Windsurf、Claude Desktop、ChatGPT Desktop、OpenCode、Pi、Gemini / Antigravity、Kiro、GitHub Copilot、Multica、Cherry Studio、AnythingLLM、T3 Code、Ollama、LM Studio、Chatbox、Jan、Zed。
 
-## 源码构建环境
+## macOS 源码构建环境
 
-- **操作系统**：macOS 14.0 (Sonoma) 或更高版本
-- **工具链**：Swift 6.0+ / Xcode 16+
+- macOS 14.0（Sonoma）或更新版本，Xcode 16 或更新版本（Swift 6+）
+- Node.js 22、Rust 1.90 或更新版本，以及 `aarch64-apple-darwin` 和 `x86_64-apple-darwin` Rust 目标
 
 ---
 
 ## 构建、测试与运行
 
 ```bash
-# 1. 构建
-swift build
-
-# 2. 运行隔离沙箱单元测试（严禁触碰宿主机真实 AI 客户端数据）
+# 测试 Swift Core 与 sidecar
 swift test
 
-# 3. 直接启动 SwiftUI 桌面应用
-swift run AICleanerApp
-
-# 4. 一键打包可双击运行的 macOS .app（输出至 dist/AI Cleaner.app）
-./scripts/package-app.sh
-open "dist/AI Cleaner.app"
+# 构建并打开本地 macOS 通用安装包
+(cd apps/desktop && npm ci)
+./scripts/build-tauri-macos-assets.sh --tag v1.0.0 --local
+open "dist/tauri-local/v1.0.0/AI-Cleaner-v1.0.0-macOS.dmg"
 ```
 
-> 如需在临时沙箱中预览界面而不扫描真实主目录或宿主机 `/tmp`，可运行：
-> `AI_CLEANER_HOME=/path/to/sandbox-home swift run AICleanerApp`
-> 如需同时挂载模拟的 `/tmp` 与用户临时目录，可附加 `AI_CLEANER_SYSTEM_TMP=/path/to/mock-tmp` 与 `AI_CLEANER_USER_TMP=/path/to/mock-user-tmp`。
+如需在隔离目录中运行，解开同版本 ZIP，并通过 `open --env` 将 `AI_CLEANER_HOME` 和 `AI_CLEANER_SYSTEM_TMP` 指向空目录。
+
+```bash
+sandbox="$(mktemp -d)"
+mkdir "$sandbox/home" "$sandbox/tmp"
+ditto -x -k "dist/tauri-local/v1.0.0/AI-Cleaner-v1.0.0-macOS.zip" "$sandbox"
+open -n "$sandbox/AI Cleaner.app" --env "AI_CLEANER_HOME=$sandbox/home" \
+  --env "AI_CLEANER_SYSTEM_TMP=$sandbox/tmp"
+```
 
 内置清理规则定义在 `rules/`。编辑规则后，用装有 `jsonschema==4.23.0` 的 Python 环境运行
 `python3 scripts/generate-built-in-rules.py`，并提交生成的 Swift 文件。CI 会校验规则格式和生成结果。
@@ -119,7 +120,7 @@ open "dist/AI Cleaner.app"
 
 - **手动打标签发版**：在已包含对应 `CHANGELOG.md` 章节的 `main` 提交上执行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"` 并 `git push origin vX.Y.Z`，将直接触发 `Build and publish AI Cleaner`（`.github/workflows/release.yml`）完成测试、打包与发布。
 - **重试发布**：在 GitHub Actions 的 `Build and publish AI Cleaner` 工作流中点击 **Run workflow**（`workflow_dispatch`），输入待发布的 `vX.Y.Z` 标签即可重试构建和发布。修正已发布的安装包时请发新版本。
-- **本地预演 Tauri macOS 安装包**。准备 Xcode、Node.js 22 和 Rust 1.90 或更新版本，并安装 `aarch64-apple-darwin` 和 `x86_64-apple-darwin` 目标。在 `apps/desktop` 运行 `npm ci`，再从仓库根目录运行 `./scripts/build-tauri-macos-assets.sh --tag v2.0.0 --local`。脚本使用临时 Tauri 更新密钥和 ad-hoc 签名，将 Universal DMG、ZIP、签名更新包和校验和写入 `dist/tauri-local/v2.0.0/`。
+- **本地预演 Tauri macOS 安装包**。见[构建、测试与运行](#构建测试与运行)。本地打包使用临时 Tauri 更新密钥和 ad-hoc 签名，生成 Universal DMG、ZIP、签名更新包和校验和。
 - **下载三端 Tauri 预览包**。在 GitHub Actions 的 `Tauri installer preview` 运行记录中下载构建产物。工作流从各类安装包提取 Swift sidecar 并检查 JSON-RPC 握手。
 
 ### 配置发布签名
@@ -147,31 +148,20 @@ open "dist/AI Cleaner.app"
 
 ```text
 ai-cleaner/
-├── Package.swift
-├── README.md
-├── .github/workflows/                            # GitHub Pages、Release PR 自动化与 macOS 打包发布工作流
-├── CHANGELOG.md                                  # 简体中文版本变更日志（Release PR 自动维护）
-├── docs/screenshots/                             # macOS 应用界面截图
-├── scripts/                                      # 本地打包、发布产物构建、发布说明与 Release PR 脚本
+├── Package.swift                 # Swift Core 与 sidecar 构建目标
 ├── Sources/
-│   ├── AICleanerCore/
-│   │   ├── Models/                               # CleanupRecommendation / ScanCategory / ScanRule / CleanableItem / CleanupHistoryRecord
-│   │   ├── Rules/
-│   │   │   ├── BuiltInClientRules.swift          # 国际主流 & 本地大模型客户端规则（20 款）
-│   │   │   ├── BuiltInDomesticClientRules.swift  # 国内 AI 客户端与工作伙伴规则（11 款）
-│   │   │   └── SafetyGuard.swift                 # 路径、凭据、主数据库与符号链接保护
-│   │   └── Services/
-│   │       ├── DirectorySizer.swift              # 只读目录体积统计
-│   │       ├── SessionMetadataReader.swift       # 只读会话标题、项目与首条提问摘要
-│   │       ├── TempDirectoryScanner.swift        # /tmp 与系统用户临时目录分层扫描与活跃保护
-│   │       ├── ScanEngine.swift                  # 并发扫描引擎与三档清理分级
-│   │       ├── CustomDirectoryStore.swift        # 自定义目录 JSON 持久化
-│   │       ├── CleanupHistoryStore.swift         # 移入废纸篓历史统计持久化与聚合
-│   │       └── TrashCleaner.swift                # 系统废纸篓移入与清理前复核
-│   └── AICleanerApp/
-│       ├── AICleanerApp.swift                    # 应用入口与菜单快捷键
-│       ├── Resources/ClientLogos/                # 随包分发的官方客户端标识及来源记录（SOURCES.md）
-│       ├── ViewModels/CleanerViewModel.swift     # 空间总览、分组筛选、勾选与历史状态管理
-│       └── Views/                                # 侧边栏、客户端 Logo 解析、空间总览、确认弹窗与清理记录
-└── Tests/                                        # 核心逻辑及界面模型的隔离测试
+│   ├── AICleanerCore/            # 扫描、规则、安全校验和用户数据存储
+│   ├── AICleanerSidecar/         # aicleaner-core 的 JSON-RPC 服务
+│   ├── CPlatformSupport/        # 平台系统调用
+│   └── CSQLite/                 # 随包构建的 SQLite
+├── Tests/                        # Swift Core 和 sidecar 的隔离测试
+├── apps/desktop/
+│   ├── src/                     # React + TypeScript 桌面界面
+│   ├── src-tauri/               # Rust 宿主和应用内更新
+│   └── e2e/                     # 桌面端与真实 sidecar 的端到端测试
+├── rules/                       # 分平台清理规则
+├── protocol/                    # 规则、JSON-RPC 契约与测试夹具
+├── scripts/                      # 构建、打包和发布脚本
+├── .github/workflows/            # 三端测试、打包与自动发布
+└── site/                         # 官网
 ```

@@ -1,14 +1,14 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-var products: [Product] = [
+let products: [Product] = [
     .library(name: "AICleanerCore", targets: ["AICleanerCore"]),
     .executable(name: "aicleaner-core", targets: ["AICleanerSidecar"])
 ]
-var dependencies: [Package.Dependency] = [
+let dependencies: [Package.Dependency] = [
     .package(url: "https://github.com/apple/swift-log.git", exact: "1.6.4")
 ]
-var targets: [Target] = [
+let targets: [Target] = [
     .target(
         name: "CPlatformSupport",
         linkerSettings: [
@@ -27,19 +27,6 @@ var targets: [Target] = [
     .executableTarget(name: "AICleanerSidecar", dependencies: ["AICleanerCore", "CPlatformSupport"]),
     .testTarget(name: "AICleanerSidecarTests", dependencies: ["AICleanerSidecar", "AICleanerCore"])
 ]
-
-#if os(macOS)
-products.append(.executable(name: "AICleanerApp", targets: ["AICleanerApp"]))
-dependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1"))
-targets += [
-    .executableTarget(
-        name: "AICleanerApp",
-        dependencies: ["AICleanerCore", .product(name: "Sparkle", package: "Sparkle")],
-        resources: [.copy("Resources/ClientLogos")]
-    ),
-    .testTarget(name: "AICleanerAppTests", dependencies: ["AICleanerApp", "AICleanerCore"])
-]
-#endif
 
 let package = Package(
     name: "AICleaner",

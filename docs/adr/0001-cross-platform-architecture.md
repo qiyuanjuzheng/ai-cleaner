@@ -98,13 +98,12 @@ flowchart LR
 ```
 Package.swift                     # SwiftPM：Core / Platform / CSQLite / Sidecar
 Sources/
-  AICleanerCore/                  # 平台无关，仅依赖 FoundationEssentials
-  AICleanerPlatform/              # PlatformAdapter 三端实现（#if os(...)）
+  AICleanerCore/                  # 共享业务逻辑和 PlatformAdapter
+  CPlatformSupport/               # 平台系统调用
   CSQLite/                        # sqlite amalgamation（C target）
   AICleanerSidecar/               # executable product: aicleaner-core
-  AICleanerApp/                   # SwiftUI（冻结，AICL-40 删除）
 Tests/
-  AICleanerCoreTests/  AICleanerPlatformTests/  AICleanerSidecarTests/
+  AICleanerCoreTests/  AICleanerSidecarTests/
 protocol/
   rpc-v1.schema.json              # JSON-RPC 方法与 DTO 的 JSON Schema（单一事实来源）
   rules-v1.schema.json            # 规则 JSON schema
@@ -128,7 +127,7 @@ TS 类型由 `protocol/rpc-v1.schema.json` 生成；Swift 端用 `protocol/fixtu
 
 ## 5. PlatformAdapter 协议
 
-放在 `AICleanerCore`（只有协议和值类型），实现放在 `AICleanerPlatform`。Core 所有构造入口改为注入 adapter，不再读取 `FileManager.default.homeDirectoryForCurrentUser` 等全局状态；测试注入 `SandboxPlatformAdapter`。
+`AICleanerCore/Platform` 维护协议、值类型和 `HostPlatformAdapter`。需要 C 接口的系统调用由 `CPlatformSupport` 提供。Core 的构造入口注入 adapter，测试使用 `SandboxPlatformAdapter`。
 
 ```swift
 public enum PlatformKind: String, Codable, Sendable { case macos, windows, linux }
@@ -457,7 +456,7 @@ AICL-40 确认旧版没有在用用户。首个 Tauri 正式版由用户从 GitH
 | T0：本 ADR 合入 main | — | `Sources/AICleanerApp` 冻结，只接受 P0 修复（数据丢失、误删、崩溃、无法启动）；新功能只做在 Core 和 Tauri 前端 |
 | T1：阶段 3 完成 | AICL-39 功能对照表全部勾完，三端 E2E 通过 | 从 GitHub Actions 下载 Tauri 预览安装包 |
 | T2：阶段 4 首个正式版 | `v1.0.0` 三端安装包与 Tauri 更新链路验证通过 | 发布三端正式安装包和 `latest.json` |
-| T2 + 2 周 | 没有新的 P0 问题 | 删除 `Sources/AICleanerApp`、`Tests/AICleanerAppTests` 和 `Package.swift` 里的 Sparkle 依赖 |
+| T3：清理旧客户端源码 | 首发后由维护者确认 | 删除 `Sources/AICleanerApp`、`Tests/AICleanerAppTests` 和 Sparkle 依赖，继续兼容旧版用户数据 |
 
 ## 11. 测试策略
 

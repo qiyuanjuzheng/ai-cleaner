@@ -31,7 +31,6 @@ function getDownloadLinks(release) {
   return {
     tag,
     dmg,
-    zip: uploadedAsset(`AI-Cleaner-${tag}-macOS.zip`),
     checksums: uploadedAsset("SHA256SUMS.txt"),
     hasTauriUpdates: Boolean(uploadedAsset("latest.json")),
     notes: `${repository}/releases/tag/${tag}`,
@@ -44,7 +43,7 @@ function updateReleaseStatus(message) {
   });
 }
 
-function showDownloadLinks({ tag, dmg, zip, checksums, hasTauriUpdates, notes }) {
+function showDownloadLinks({ tag, dmg, checksums, hasTauriUpdates, notes }) {
   document.querySelectorAll("[data-download]").forEach((link) => {
     link.href = dmg;
     link.hidden = false;
@@ -60,11 +59,6 @@ function showDownloadLinks({ tag, dmg, zip, checksums, hasTauriUpdates, notes })
   if (hasTauriUpdates) {
     const link = document.querySelector("[data-platform-downloads]");
     link.href = notes;
-    link.parentElement.hidden = false;
-  }
-  if (zip) {
-    const link = document.querySelector("[data-zip]");
-    link.href = zip;
     link.parentElement.hidden = false;
   }
   if (checksums) {

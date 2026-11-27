@@ -1,5 +1,5 @@
 These WebP images are resized from the client logos bundled with AI Cleaner.
-See Sources/AICleanerApp/Resources/ClientLogos/SOURCES.md in the source repository
+See https://github.com/qiyuanjuzheng/ai-cleaner/blob/main/apps/desktop/public/client-logos/SOURCES.md
 for the upstream sources of the Claude Code, Cursor, and Doubao logos.
 
 The Codex, ChatGPT, and Ollama images are from LobeHub Icons.

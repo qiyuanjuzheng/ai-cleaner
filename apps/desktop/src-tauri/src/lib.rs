@@ -88,9 +88,13 @@ pub fn run() {
     let sidecar = Arc::new(SidecarManager::new(None));
     let sidecar_for_exit = Arc::clone(&sidecar);
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    let context = tauri::generate_context!();
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    if updater::is_plugin_configured(context.config()) {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    let app = builder
         .manage(HostState {
             sidecar: Arc::clone(&sidecar),
         })
@@ -126,7 +130,7 @@ pub fn run() {
             host_platform,
             updater::check_for_updates
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building AI Cleaner Tauri application");
 
     app.run(move |_handle, event| {

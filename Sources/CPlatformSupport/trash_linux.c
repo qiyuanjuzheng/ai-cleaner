@@ -4,12 +4,16 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/fs.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
+// Linux renameat2 ABI value for SDKs that do not ship the kernel UAPI headers.
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1U << 0)
+#endif
 
 static int open_private_directory(int parent, const char *name) {
     if (mkdirat(parent, name, 0700) != 0 && errno != EEXIST) return -1;

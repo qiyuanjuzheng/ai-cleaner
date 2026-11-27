@@ -1,0 +1,357 @@
+name: Tauri installer preview
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag for building signed Tauri assets
+        type: string
+        required: true
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+      APPLE_CERTIFICATE:
+        required: true
+      APPLE_CERTIFICATE_PASSWORD:
+        required: true
+      APPLE_SIGNING_IDENTITY:
+        required: true
+      APPLE_ID:
+        required: true
+      APPLE_PASSWORD:
+        required: true
+      APPLE_TEAM_ID:
+        required: true
+      WINDOWS_SIGN_CERTIFICATE:
+        required: true
+      WINDOWS_SIGN_CERTIFICATE_PASSWORD:
+        required: true
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tauri-packaging.yml
+      - apps/desktop/**
+      - Package.swift
+      - Sources/AICleanerCore/**
+      - Sources/AICleanerSidecar/**
+      - Sources/CPlatformSupport/**
+      - Sources/CSQLite/**
+      - scripts/build-tauri-macos-assets.sh
+      - scripts/smoke-packaged-sidecar.py
+      - scripts/stage-windows-sidecar.py
+      - scripts/tauri-build-config.py
+      - scripts/xplat_probe.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-packaging-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ inputs.tag == '' }}
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+  TAURI_UPDATER_PUBLIC_KEY: ${{ inputs.tag != '' && vars.TAURI_UPDATER_PUBLIC_KEY || '' }}
+
+jobs:
+  macos:
+    name: macOS · Universal DMG and signed update archive
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Build and verify universal packages
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          APPLE_CERTIFICATE: ${{ inputs.tag != '' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.tag != '' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ inputs.tag != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ inputs.tag != '' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.tag != '' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.tag != '' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          if [[ -n "$RELEASE_TAG" ]]; then
+            tag="$RELEASE_TAG"
+            ./scripts/build-tauri-macos-assets.sh --tag "$tag"
+            packages="dist/tauri-release/$tag"
+          else
+            tag="v$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").version')"
+            ./scripts/build-tauri-macos-assets.sh --tag "$tag" --local
+            packages="dist/tauri-local/$tag"
+          fi
+          update_dir="$RUNNER_TEMP/aicleaner-update"
+          mount_dir="$RUNNER_TEMP/aicleaner-dmg"
+          mkdir -p "$update_dir" "$mount_dir"
+          test -s "$packages/AI-Cleaner-$tag-macOS.app.tar.gz.sig"
+          tar -xzf "$packages/AI-Cleaner-$tag-macOS.app.tar.gz" -C "$update_dir"
+          codesign --verify --deep --strict "$update_dir/AI Cleaner.app"
+          python3 scripts/smoke-packaged-sidecar.py "$update_dir/AI Cleaner.app/Contents/MacOS/aicleaner-core"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$packages/AI-Cleaner-$tag-macOS.dmg"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          test "$(readlink "$mount_dir/Applications")" = /Applications
+          codesign --verify --deep --strict "$mount_dir/AI Cleaner.app"
+          python3 scripts/smoke-packaged-sidecar.py "$mount_dir/AI Cleaner.app/Contents/MacOS/aicleaner-core"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tauri-preview-macos-universal
+          path: dist/tauri-*/*/
+          if-no-files-found: error
+          compression-level: 0
+
+  linux:
+    name: Linux · DEB, RPM and AppImage
+    runs-on: ubuntu-latest
+    container: swift:6.4.3-jammy
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - name: Install Tauri dependencies and Swift Static Linux SDK
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            binutils build-essential ca-certificates curl file libarchive-tools libayatana-appindicator3-dev \
+            libfuse2 librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config \
+            python3 rpm squashfs-tools
+          swift sdk install \
+            https://download.swift.org/swift-6.4.3-release/static-sdk/swift-6.4.3-RELEASE/swift-6.4.3-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz \
+            --checksum 529e6982974de78793c8348c1459105a772f54b464a51edf074e5b9c4bfe7c73
+          curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Build and stage the static Linux sidecar
+        run: |
+          sdk=x86_64-swift-linux-musl
+          swift build -c release --swift-sdk "$sdk" --product aicleaner-core
+          sidecar="$(swift build -c release --swift-sdk "$sdk" --show-bin-path)/aicleaner-core"
+          if readelf -l "$sidecar" | grep INTERP; then
+            echo "Expected a statically linked sidecar" >&2
+            exit 1
+          fi
+          install -D -m 755 "$sidecar" apps/desktop/src-tauri/binaries/aicleaner-core-x86_64-unknown-linux-gnu
+      - name: Build Linux installers and sign updater artifacts
+        id: build
+        working-directory: apps/desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          tag="$RELEASE_TAG"
+          mode=(--release)
+          if [[ -z "$tag" ]]; then
+            tag="v$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+            if ! npm run tauri -- signer generate --ci --write-keys "$RUNNER_TEMP/tauri-preview.key" >/dev/null 2>&1; then
+              echo '::error::Could not generate a temporary Tauri update signing key.'
+              exit 1
+            fi
+            export TAURI_SIGNING_PRIVATE_KEY="$RUNNER_TEMP/tauri-preview.key"
+            export TAURI_UPDATER_PUBLIC_KEY="$(< "$RUNNER_TEMP/tauri-preview.key.pub")"
+            mode=()
+          fi
+          : "${TAURI_SIGNING_PRIVATE_KEY:?Missing Tauri updater key}"
+          config="$RUNNER_TEMP/tauri-updater.json"
+          python3 ../../scripts/tauri-build-config.py "$tag" "$GITHUB_REPOSITORY" "$config" "${mode[@]}"
+          npm run tauri build -- --ci --target x86_64-unknown-linux-gnu \
+            --bundles deb,rpm,appimage --config src-tauri/tauri.release.conf.json --config "$config" -- --locked
+      - name: Extract installers and exercise their bundled sidecars
+        run: |
+          shopt -s nullglob
+          bundle="$PWD/apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
+          deb=("$bundle"/deb/*.deb)
+          rpm=("$bundle"/rpm/*.rpm)
+          appimage=("$bundle"/appimage/*.AppImage)
+          if (( ${#deb[@]} != 1 || ${#rpm[@]} != 1 || ${#appimage[@]} != 1 )); then
+            echo "Expected one Linux installer per format. Found DEB=${#deb[@]}, RPM=${#rpm[@]}, AppImage=${#appimage[@]}." >&2
+            exit 1
+          fi
+          unpacked="$RUNNER_TEMP/aicleaner-linux"
+          mkdir -p "$unpacked/"{deb,rpm}
+          echo "Extracting DEB: ${deb[0]}"
+          dpkg-deb -x "${deb[0]}" "$unpacked/deb"
+          echo "Extracting RPM: ${rpm[0]}"
+          bsdtar -xf "${rpm[0]}" -C "$unpacked/rpm"
+          echo "Extracting AppImage: ${appimage[0]}"
+          offset="$("${appimage[0]}" --appimage-offset)"
+          if [[ ! "$offset" =~ ^[0-9]+$ || "$offset" == 0 ]]; then
+            echo "Invalid AppImage filesystem offset: $offset" >&2
+            exit 1
+          fi
+          unsquashfs -no-progress -offset "$offset" -dest "$unpacked/appimage" "${appimage[0]}"
+          for format in deb rpm appimage; do
+            echo "Checking the sidecar extracted from $format"
+            mapfile -t sidecars < <(find "$unpacked/$format" -type f -name aicleaner-core)
+            if (( ${#sidecars[@]} != 1 )); then
+              echo "Expected one sidecar in $format. Found ${#sidecars[@]}." >&2
+              find "$unpacked/$format" -iname '*aicleaner*' -print >&2
+              exit 1
+            fi
+            python3 scripts/smoke-packaged-sidecar.py "${sidecars[0]}"
+          done
+          mkdir -p dist/tauri-preview/linux
+          cp "${deb[0]}" "${rpm[0]}" "${appimage[0]}" "${appimage[0]}.sig" dist/tauri-preview/linux/
+          (cd dist/tauri-preview/linux && sha256sum -- *.deb *.rpm *.AppImage *.sig > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tauri-preview-linux-x86_64
+          path: dist/tauri-preview/linux/
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure() && steps.build.outcome == 'success'
+        with:
+          name: tauri-linux-diagnostics
+          path: |
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
+            apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows · NSIS and MSI
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f # v0.5.1
+        with:
+          swift-version: swift-6.4.3-release
+          swift-build: 6.4.3-RELEASE
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Build and stage the Windows sidecar and Swift runtime
+        run: |
+          swift build -c release --product aicleaner-core
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $bin = (swift build -c release --show-bin-path).Trim()
+          python scripts/stage-windows-sidecar.py (Join-Path $bin 'aicleaner-core.exe') `
+            --config (Join-Path $env:RUNNER_TEMP 'aicleaner-windows-runtime.json')
+      - name: Sign staged Windows executables and configure the release
+        if: inputs.tag != ''
+        env:
+          WINDOWS_SIGN_CERTIFICATE: ${{ secrets.WINDOWS_SIGN_CERTIFICATE }}
+          WINDOWS_SIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'windows-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_CERTIFICATE))
+            $password = ConvertTo-SecureString $env:WINDOWS_SIGN_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certificates = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+              Where-Object HasPrivateKey)
+            if ($certificates.Count -ne 1) { throw 'Expected one code-signing certificate with a private key' }
+            $env:AI_CLEANER_WINDOWS_SIGNING_THUMBPRINT = $certificates[0].Thumbprint
+          } finally {
+            if (Test-Path $pfx) { Remove-Item -LiteralPath $pfx -Force }
+          }
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'Windows SDK signtool.exe was not found' }
+          $binaries = 'apps/desktop/src-tauri/binaries'
+          $files = @(Get-ChildItem "$binaries/swift-runtime" -File -Filter '*.dll')
+          $files += Get-Item "$binaries/aicleaner-core-x86_64-pc-windows-msvc.exe"
+          foreach ($file in $files) {
+            & $signtool.FullName sign /sha1 $env:AI_CLEANER_WINDOWS_SIGNING_THUMBPRINT /fd SHA256 `
+              /tr http://timestamp.digicert.com /td SHA256 $file.FullName
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          python scripts/tauri-build-config.py $env:RELEASE_TAG $env:GITHUB_REPOSITORY `
+            (Join-Path $env:RUNNER_TEMP 'tauri-release.json') --release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build Windows installers
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          $config = @('--config', 'src-tauri/tauri.release.conf.json',
+            '--config', (Join-Path $env:RUNNER_TEMP 'aicleaner-windows-runtime.json'))
+          if ($env:RELEASE_TAG) {
+            if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Missing Tauri updater key' }
+            $config += @('--config', (Join-Path $env:RUNNER_TEMP 'tauri-release.json'))
+          } else {
+            $key = Join-Path $env:RUNNER_TEMP 'tauri-preview.key'
+            npm run tauri -- signer generate --ci --write-keys $key *> $null
+            if ($LASTEXITCODE) { throw 'Could not generate a temporary Tauri update signing key' }
+            $env:TAURI_SIGNING_PRIVATE_KEY = $key
+            $env:TAURI_UPDATER_PUBLIC_KEY = Get-Content -LiteralPath "$key.pub" -Raw
+            $tag = 'v' + (Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+            $preview = Join-Path $env:RUNNER_TEMP 'tauri-preview.json'
+            python ../../scripts/tauri-build-config.py $tag $env:GITHUB_REPOSITORY $preview
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $config += @('--config', $preview)
+          }
+          npm run tauri build -- --ci --target x86_64-pc-windows-msvc --bundles nsis,msi @config -- --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Extract installers and exercise their bundled sidecars
+        run: |
+          $bundle = 'apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+          $nsis = @(Get-ChildItem "$bundle/nsis" -Filter '*.exe' -File)
+          $msi = @(Get-ChildItem "$bundle/msi" -Filter '*.msi' -File)
+          if ($nsis.Count -ne 1 -or $msi.Count -ne 1) { throw 'Expected one installer per format' }
+          $nsisDir = Join-Path $env:RUNNER_TEMP 'aicleaner-nsis'
+          $msiDir = Join-Path $env:RUNNER_TEMP 'aicleaner-msi'
+          $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          & $sevenZip x $nsis[0].FullName "-o$nsisDir" -y
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $extract = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/a', ('"{0}"' -f $msi[0].FullName), '/qn', ('TARGETDIR="{0}"' -f $msiDir)
+          )
+          if ($extract.ExitCode) { throw "MSI extraction failed with code $($extract.ExitCode)" }
+          foreach ($folder in @($nsisDir, $msiDir)) {
+            $sidecars = @(Get-ChildItem $folder -Recurse -Filter 'aicleaner-core.exe' -File)
+            if ($sidecars.Count -ne 1) { throw "Expected a single sidecar in $folder" }
+            python scripts/smoke-packaged-sidecar.py $sidecars[0].FullName
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          $outDir = New-Item -ItemType Directory -Force 'dist/tauri-preview/windows'
+          Copy-Item @($nsis[0].FullName, $msi[0].FullName) $outDir.FullName
+          foreach ($file in @($nsis[0], $msi[0])) {
+            if ($env:RELEASE_TAG -and (Get-AuthenticodeSignature -FilePath $file.FullName).Status -ne 'Valid') {
+              throw "Invalid Windows code signature on $($file.Name)"
+            }
+            Copy-Item -LiteralPath "$($file.FullName).sig" $outDir.FullName -ErrorAction Stop
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tauri-preview-windows-x86_64
+          path: dist/tauri-preview/windows/
+          if-no-files-found: error
+          compression-level: 0

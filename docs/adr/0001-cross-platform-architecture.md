@@ -35,7 +35,7 @@ AICL-31 已经确定：三端（macOS / Windows / Linux）同时支持，功能�
 4. 内置规则改为 JSON（schema v1），用平台占位符写路径，**构建时嵌入**二进制，运行时不从外部加载。
 5. 用户数据的文件名和格式保持不变；macOS 位置不变；Windows 放 `%LOCALAPPDATA%\AICleaner`，Linux 放 `$XDG_DATA_HOME/aicleaner`。
 6. 清理只允许"移入系统回收站"。三端回收站实现都**无法回收时直接失败，不降级为永久删除**。
-7. macOS 通过 Sparkle 下发一个用 Tauri 构建、Bundle ID 不变的 `.app`，之后改用 Tauri updater。**本 ADR 合入即冻结 SwiftUI 代码**，只修 P0。
+7. 三端正式版从首个 Tauri 版本开始使用 Tauri updater。macOS 保留 Bundle ID，用户从 GitHub Releases 安装首个 Tauri 版本。**本 ADR 合入即冻结 SwiftUI 代码**，只修 P0。
 
 ## 3. 方案对比
 
@@ -431,7 +431,7 @@ public protocol PlatformAdapter: Sendable {
 
 | 平台 | 安装包 | sidecar | 最低系统 |
 | --- | --- | --- | --- |
-| macOS | `.dmg` + `.app.tar.gz`（Tauri updater）+ `.zip`（Sparkle 过渡） | universal（arm64 + x86_64 用 `lipo` 合并），放在 `Contents/MacOS/aicleaner-core` | macOS 14.0（与现版一致） |
+| macOS | `.dmg` + `.app.tar.gz`（Tauri updater） | universal（arm64 + x86_64 用 `lipo` 合并），放在 `Contents/MacOS/aicleaner-core` | macOS 14.0（与现版一致） |
 | Windows | NSIS `.exe`（同时提供 MSI） | `aicleaner-core.exe` + Swift 运行时 DLL（同目录） | Windows 10 1809+（WebView2 Evergreen） |
 | Linux | `.deb`、`.rpm`、`.AppImage` | 静态 musl（Static Linux SDK）优先；不可行时用动态链接 + 随包运行时 | webkit2gtk-4.1（Ubuntu 22.04+ / Debian 12+ / Fedora 38+） |
 
@@ -440,38 +440,22 @@ public protocol PlatformAdapter: Sendable {
 - **macOS**：Developer ID Application 证书 + Hardened Runtime；sidecar 和应用本体一起签名（`externalBin` 必须在签名范围内）；`notarytool` 公证后 staple。CI 用 `codesign --verify --deep --strict` 和 `spctl -a -vv` 校验。sidecar 不需要额外 entitlement。完全磁盘访问权限（TCC）按发起访问的应用来认定，授予 `.app` 后对它启动的 sidecar 同样生效。
 - **Windows**：Authenticode 签名（Azure Trusted Signing 或 OV/EV 证书），覆盖应用 exe、`aicleaner-core.exe`、Swift 运行时 DLL 和安装包。
 - **Linux**：`.deb` / `.rpm` 附带 SHA-256 校验和；AppImage 的更新包由 Tauri updater 签名。
-- **Tauri updater**：使用独立的 minisign 密钥（`TAURI_SIGNING_PRIVATE_KEY`），与 Sparkle EdDSA 密钥分开保管。
+- **Tauri updater**：使用项目专用的 minisign 密钥（`TAURI_SIGNING_PRIVATE_KEY`）。应用内置公钥，并校验更新包签名及签名绑定的版本。
 
-### 10.3 Sparkle → Tauri updater 迁移
+### 10.3 Tauri 更新
 
-```mermaid
-sequenceDiagram
-  participant Old as 旧版 SwiftUI（Sparkle）
-  participant AC as appcast.xml（releases/latest）
-  participant New as Tauri 版 .app（Bundle ID 不变）
-  participant LJ as latest.json（Tauri updater）
-  Old->>AC: 检查更新
-  AC-->>Old: 指向最新 Tauri 版 macOS .zip（Sparkle EdDSA 签名）
-  Old->>New: Sparkle 安装替换 /Applications/AI Cleaner.app
-  New->>New: 首次启动：迁移外观设置，校验用户数据，必要时引导重新授予完全磁盘访问
-  New->>LJ: 之后改用 Tauri updater
-```
+AICL-40 确认旧版没有在用用户。首个 Tauri 正式版由用户从 GitHub Releases 安装。应用内「检查更新」使用 `https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest/download/latest.json`，覆盖 macOS arm64 和 x64、Windows x64 的 NSIS 和 MSI，以及 Linux x64 AppImage。DEB 和 RPM 用户通过应用内提示跳转下载页。
 
-1. **过渡期间，每个 Tauri 版本的 release 都继续产出 `appcast.xml` 和 Sparkle EdDSA 签名的 macOS `.zip`。** appcast 地址是 `releases/latest/download/appcast.xml`，所以无论旧版本有多老，都会直接升级到最新的 Tauri 版，不需要固定一个"桥接版本"。过渡期至少 12 个月，之后再评估是否停止生成。
-2. Tauri 版 `.app` 的要求：`CFBundleIdentifier = com.qiyuanjuzheng.ai-cleaner`；`CFBundleVersion` 必须**严格大于**最后一个 SwiftUI 版本（沿用现有的 build number 序列）；`LSMinimumSystemVersion = 14.0`。
-3. 旧版是 ad-hoc 签名，新版是 Developer ID 签名。Sparkle 以 EdDSA 签名为准，签名身份变化不影响安装，但必须在 AICL-40 中用至少两个历史版本实测升级链路。
-4. 签名身份变了，TCC 授权会失效。首次启动时如果发现读不到需要完全磁盘访问的路径，引导用户重新授权。
-5. 删除 Sparkle 依赖之后，CI 仍然需要 Sparkle 的 `generate_appcast` / `sign_update` 工具：在 release workflow 里单独下载对应版本的 Sparkle 发行包，不再依赖 `.build/artifacts`。
-6. Tauri updater 的地址是 `https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest/download/latest.json`，覆盖 `darwin-aarch64`、`darwin-x86_64`、`windows-x86_64`、`linux-x86_64`（仅 AppImage）。`.deb` / `.rpm` 用户在应用内看到新版本提示，跳转到下载页手动更新。
+验收用同一组测试密钥构建两个 Tauri 版本，验证前一版能发现更新、拒绝版本与签名不匹配的更新包、安装有效更新并重启。macOS 保留 `CFBundleIdentifier = com.qiyuanjuzheng.ai-cleaner` 和 `LSMinimumSystemVersion = 14.0`。
 
 ### 10.4 SwiftUI 冻结与移除时间点
 
 | 时间点 | 条件 | 动作 |
 | --- | --- | --- |
 | T0：本 ADR 合入 main | — | `Sources/AICleanerApp` 冻结，只接受 P0 修复（数据丢失、误删、崩溃、无法启动）；新功能只做在 Core 和 Tauri 前端 |
-| T1：阶段 3 完成 | AICL-39 功能对照表全部勾完，三端 E2E 通过 | 发布 Tauri 测试版（GitHub pre-release，不进 appcast） |
-| T2：阶段 4 首个正式版 | 签名公证通过，旧版到新版的升级链路实测通过 | appcast 指向 Tauri 版，三端正式发布 |
-| T2 + 2 周 | 没有新的 P0 问题 | 删除 `Sources/AICleanerApp`、`Tests/AICleanerAppTests` 和 Package.swift 里的 Sparkle 依赖（appcast 生成工具按 10.3 第 5 条保留） |
+| T1：阶段 3 完成 | AICL-39 功能对照表全部勾完，三端 E2E 通过 | 从 GitHub Actions 下载 Tauri 预览安装包 |
+| T2：阶段 4 首个正式版 | 平台签名、公证、Tauri 更新链路验证通过 | 发布三端正式安装包和 `latest.json` |
+| T2 + 2 周 | 没有新的 P0 问题 | 删除 `Sources/AICleanerApp`、`Tests/AICleanerAppTests` 和 `Package.swift` 里的 Sparkle 依赖 |
 
 ## 11. 测试策略
 
@@ -490,7 +474,7 @@ sequenceDiagram
 | Windows `IFileOperation` 在大文件或回收站满时的行为 | 可能出现永久删除 | 用 `PreDeleteItem` 拦截加专项测试；不满足条件一律 `TRASH_UNAVAILABLE` | AICL-35 |
 | 5,000+ 条目分页查询的延迟 | 列表滚动卡顿 | `items.query` 单页 200 条，目标 P95 < 30 ms；必要时前端预取 | AICL-36 / 39 |
 | macOS 原生细节退步（菜单栏、vibrancy、动效） | 体验下降 | AICL-39 的对照表逐项验收，已明确接受小幅退步 | AICL-39 |
-| Sparkle 升级到不同签名身份的 `.app` | 老用户收不到更新 | 用多个历史版本实测，失败时提示用户手动下载 | AICL-40 |
+| 正式更新元数据与安装包的版本不一致 | 客户端无法安装新版 | 更新签名绑定版本，发布前校验产物，使用两个 Tauri 版本做覆盖升级演练 | AICL-40 |
 | 体积和内存的实际数字 | 估算可能偏差 | 以 AICL-33 实测为准，结果回填本 ADR 第 3 节 | AICL-33 |
 
 ## 13. 落地顺序
@@ -498,6 +482,6 @@ sequenceDiagram
 1. **阶段 1**：本 ADR（AICL-32）+ 三端编译与体积实测（AICL-33）。
 2. **阶段 2**：规则 JSON 化（AICL-34）→ PlatformAdapter 与去平台依赖（AICL-35）→ 业务逻辑下沉 Core + sidecar（AICL-36）。
 3. **阶段 3**：Windows / Linux 规则与 SafetyGuard（AICL-37 / 38）+ Tauri 前端功能对齐（AICL-39）。
-4. **阶段 4**：签名公证、Sparkle → Tauri 迁移、移除 SwiftUI（AICL-40）。
+4. **阶段 4**：签名公证、启用 Tauri 更新、发布三端安装包，随后移除 SwiftUI（AICL-40）。
 
 本 ADR 中的契约（PlatformAdapter、RPC v1、规则 schema v1、存储位置）如果需要做破坏性修改，必须新增 ADR 或修订本文并说明原因；增量扩展（新方法、新可选字段、新占位符）在对应子 issue 中记录即可。

@@ -1,15 +1,12 @@
 # AI Cleaner
 
-AI Cleaner 是一款 macOS 原生 SwiftUI 应用，可扫描 31 款 AI 客户端的会话、缓存、日志和临时文件。
+AI Cleaner 的 Tauri 桌面版面向 macOS、Windows 和 Linux，可扫描 31 款 AI 客户端的会话、缓存、日志和临时文件。
 
 ## 下载安装
 
-1. 从 GitHub Releases 下载最新版的 `AI-Cleaner-<版本>-macOS.dmg`，打开磁盘映像，将 **AI Cleaner.app** 拖入「应用程序」。也可以解压同版本的 ZIP 后移入「应用程序」。[下载最新版](https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest)
-2. 安装包支持 macOS 14.0（Sonoma）或更新版本，适用于 Apple Silicon 和 Intel Mac。安装包采用 ad-hoc 签名，尚未经过 Apple 公证。若首次打开被拦截，确认来源和校验和后，前往「系统设置 → 隐私与安全性 → 仍要打开」。也可运行 `xattr -cr "/Applications/AI Cleaner.app"` 后再次打开应用。
+从 GitHub Releases 下载适用于当前系统的安装包。macOS 14.0 或更新版本使用 Universal DMG，将 **AI Cleaner.app** 拖入「应用程序」。Windows x64 使用 NSIS 安装程序（`.exe`）或 MSI。Linux x64 可按发行版选择 DEB、RPM 或 AppImage。各版本页面提供该版本附件的 `SHA256SUMS.txt`。[下载最新版](https://github.com/qiyuanjuzheng/ai-cleaner/releases/latest)
 
-版本页面提供 `SHA256SUMS.txt`。将两个安装包和校验文件放在同一目录，运行 `shasum -a 256 -c SHA256SUMS.txt`。
-
-AI Cleaner 会在后台检查新版，也可以从菜单栏选择 **AI Cleaner → 检查更新…**。发现新版后，弹窗会显示该版本的更新日志。点击「安装更新」，应用会下载、验证更新包并重启。正在执行的清理会先完成。
+Tauri 版在工具栏提供「检查更新」。macOS、Windows 和 Linux AppImage 用户确认后，客户端会下载并验签安装。Linux DEB 和 RPM 用户会跳转 GitHub Releases 下载新版安装包。
 
 ## 界面截图
 
@@ -91,7 +88,7 @@ open "dist/AI Cleaner.app"
 
 ## 后续发版流程
 
-仓库采用 **Release PR 自动发版（方案 B）**：日常合入 `main` 时仅轻量累计更新日志，成员审阅并合并 Release PR 后，在同一条 GitHub Actions 流水线中自动打标签、构建 macOS Universal 安装包并发布 GitHub Release。
+仓库采用 **Release PR 自动发版**。日常合入 `main` 时累计更新日志。成员审阅并合并 Release PR 后，GitHub Actions 创建版本标签、构建三端安装包并发布 GitHub Release。
 
 ### 首次启用前必须开启的仓库权限
 
@@ -103,7 +100,7 @@ open "dist/AI Cleaner.app"
 
 1. **正常合并功能或修复 PR 到 `main`**：`Release PR automation` 工作流（`.github/workflows/release-pr.yml`）会自动扫描自上一个 `vX.Y.Z` 标签以来的未发布改动，在固定分支 `release-pr/main` 上创建或原地更新唯一的 Release PR（标题形如 `chore(release): 发布 v0.2.0`），并累计更新 `CHANGELOG.md`。此阶段**不会**运行耗时的 macOS 编译打包任务。
 2. **审阅与可选微调**：合并前可直接在该 Release PR 中编辑 `CHANGELOG.md` 润色中文说明或调整目标版本号。若期间 `main` 继续合入新 PR，工作流会保留你此前对 `CHANGELOG.md` 的手动编辑，并仅增量追加新提交。
-3. **合并 Release PR 触发一条龙发布**：在 GitHub 上点击合并该 Release PR 后，工作流自动读取 `CHANGELOG.md` 中最终确认的 `vX.Y.Z` 版本号，在当前 `main` 提交上幂等创建带注释的 `vX.Y.Z` 标签，并直接通过 `workflow_call` 调用 `.github/workflows/release.yml` 运行 `swift test`、构建 Universal `.dmg` / `.zip` 与 `SHA256SUMS.txt`、生成含上一版本对比链接的中文说明，最后创建/更新 GitHub Release 并回帖 Release 链接。官网（`site/`）通过 GitHub Releases API 动态读取最新版，无需手动改动硬编码版本号。
+3. **合并 Release PR 触发发布**。工作流读取 `CHANGELOG.md` 确认版本，在合并提交上创建标签，再调用 `.github/workflows/release.yml` 构建三端安装包、更新包、`latest.json` 和校验和。所有附件上传到草稿后，工作流发布 GitHub Release 并回帖链接。官网从 GitHub Releases API 读取最新版本。
 
 ### 版本号递增规则、手动覆盖与跳过
 
@@ -122,13 +119,16 @@ open "dist/AI Cleaner.app"
 
 - **手动打标签发版**：在已包含对应 `CHANGELOG.md` 章节的 `main` 提交上执行 `git tag -a vX.Y.Z -m "AI Cleaner vX.Y.Z"` 并 `git push origin vX.Y.Z`，将直接触发 `Build and publish AI Cleaner`（`.github/workflows/release.yml`）完成测试、打包与发布。
 - **重试发布**：在 GitHub Actions 的 `Build and publish AI Cleaner` 工作流中点击 **Run workflow**（`workflow_dispatch`），输入待发布的 `vX.Y.Z` 标签即可重试构建和发布。修正已发布的安装包时请发新版本。
-- **本地构建安装包**：运行 `./scripts/build-release-assets.sh --tag vX.Y.Z`，产物位于 `dist/release/`。`./scripts/package-app.sh` 默认构建 Universal 发布版并自动读取 `CHANGELOG.md` 最新版本号，`--debug` 默认使用本机架构。可用 `--arch` 指定架构，用 `--version` 和 `--build` 或 `APP_VERSION` 和 `APP_BUILD_NUMBER` 设置版本及构建号；`CODESIGN_IDENTITY` 可指定签名身份。
+- **本地预演 Tauri macOS 安装包**。准备 Xcode、Node.js 22 和 Rust 1.90 或更新版本，并安装 `aarch64-apple-darwin` 和 `x86_64-apple-darwin` 目标。在 `apps/desktop` 运行 `npm ci`，再从仓库根目录运行 `./scripts/build-tauri-macos-assets.sh --tag v2.0.0 --local`。脚本使用临时 Tauri 更新密钥和 ad-hoc 签名，将 Universal DMG、ZIP、签名更新包和校验和写入 `dist/tauri-local/v2.0.0/`。
+- **下载三端 Tauri 预览包**。在 GitHub Actions 的 `Tauri installer preview` 运行记录中下载构建产物。工作流从各类安装包提取 Swift sidecar 并检查 JSON-RPC 握手。
 
-### 配置更新签名
+### 配置发布签名
 
-首次发布前运行 `swift package resolve`，再用 `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account ai-cleaner` 创建专用 EdDSA 密钥。用同一账号和 `-x <私钥文件>` 导出私钥，将文件内容配置为仓库 Actions Secret `SPARKLE_PRIVATE_ED_KEY`。发布流程从这把私钥推导公钥并随 App 打包。妥善备份私钥，后续更新继续使用同一密钥。
+在 `apps/desktop` 运行 `npm run tauri -- signer generate --write-keys /安全目录/ai-cleaner-updater.key`。将私钥文件内容保存到 Actions Secret `TAURI_SIGNING_PRIVATE_KEY`，将密钥密码保存到 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，将 `.pub` 文件内容保存到仓库变量 `TAURI_UPDATER_PUBLIC_KEY`。备份私钥，后续发布继续使用同一密钥。
 
-每次正式发布都会为 Universal ZIP 生成已签名的 `appcast.xml`，并内嵌 `CHANGELOG.md` 中对应版本的更新日志。GitHub Release 随 ZIP 一起发布更新源，应用通过 `releases/latest/download/appcast.xml` 查找新版。功能 PR 使用临时密钥验证相同的打包和签名流程。
+macOS 发布需配置 `APPLE_CERTIFICATE`（Base64 编码的 `.p12`）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`（Developer ID Application）、`APPLE_ID`、`APPLE_PASSWORD`（应用专用密码）和 `APPLE_TEAM_ID`。Windows 发布需配置 `WINDOWS_SIGN_CERTIFICATE`（Base64 编码的 `.pfx`）和 `WINDOWS_SIGN_CERTIFICATE_PASSWORD`。
+
+正式构建将更新公钥嵌入客户端。发布工作流从签名更新包生成 `latest.json`，应用通过 `releases/latest/download/latest.json` 检查更新，并验证签名与公告版本是否匹配。
 
 ---
 

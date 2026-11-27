@@ -125,14 +125,8 @@ cat <<EOF
 - **macOS 14.0 或更新版本**：下载 [Universal DMG](${DOWNLOAD_URL}/AI-Cleaner-${TAG}-macOS.dmg)，将 **AI Cleaner.app** 拖入「应用程序」。支持 Apple Silicon 和 Intel Mac。
 - **Windows x64**：从附件下载 NSIS 安装程序（\`.exe\`）或 MSI 安装包（\`.msi\`）。
 - **Linux x64**：按发行版选择 \`.deb\`、\`.rpm\` 或 \`.AppImage\`。
-EOF
-if [[ "${TAURI_PLATFORM_SIGNING:-true}" == false ]]; then
-  cat <<'EOF'
 
 macOS 安装包使用 ad-hoc 签名。首次打开时，可能需要在「系统设置 → 隐私与安全性」选择「仍要打开」。Windows 安装包未使用 Authenticode，可能显示未知发布者提示，启用 Smart App Control 的设备可能拦截。应用内更新仍验证 Tauri 更新签名。
-EOF
-fi
-cat <<EOF
 
 ### SHA-256 校验
 

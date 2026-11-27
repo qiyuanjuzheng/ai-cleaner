@@ -434,14 +434,14 @@ public protocol PlatformAdapter: Sendable {
 | Windows | NSIS `.exe`（同时提供 MSI） | `aicleaner-core.exe` + Swift 运行时 DLL（同目录） | Windows 10 1809+（WebView2 Evergreen） |
 | Linux | `.deb`、`.rpm`、`.AppImage` | 静态 musl（Static Linux SDK）优先；不可行时用动态链接 + 随包运行时 | webkit2gtk-4.1（Ubuntu 22.04+ / Debian 12+ / Fedora 38+） |
 
-### 10.2 签名与公证
+### 10.2 安装包与更新签名
 
-- **macOS**：Developer ID Application 证书 + Hardened Runtime；sidecar 和应用本体一起签名（`externalBin` 必须在签名范围内）；`notarytool` 公证后 staple。CI 用 `codesign --verify --deep --strict` 和 `spctl -a -vv` 校验。sidecar 不需要额外 entitlement。完全磁盘访问权限（TCC）按发起访问的应用来认定，授予 `.app` 后对它启动的 sidecar 同样生效。
-- **Windows**：Authenticode 签名（Azure Trusted Signing 或 OV/EV 证书），覆盖应用 exe、`aicleaner-core.exe`、Swift 运行时 DLL 和安装包。
+- **macOS**：应用和 sidecar 一起使用 ad-hoc 签名。CI 用 `codesign --verify --deep --strict` 校验两者的签名结构。完全磁盘访问权限（TCC）按发起访问的应用来认定，授予 `.app` 后对它启动的 sidecar 同样生效。
+- **Windows**：NSIS 和 MSI 跳过 Authenticode。
 - **Linux**：`.deb` / `.rpm` 附带 SHA-256 校验和；AppImage 的更新包由 Tauri updater 签名。
 - **Tauri updater**：使用项目专用的 minisign 密钥（`TAURI_SIGNING_PRIVATE_KEY`）。应用内置公钥，并校验更新包签名及签名绑定的版本。
 
-`v1.0.0` 首发采用 macOS ad-hoc 签名和无 Authenticode 的 Windows 安装包。发布任务仍用正式 Tauri 更新公钥验证所有更新包，校验通过后才生成 `latest.json`。
+发布任务用正式 Tauri 更新公钥验证三端更新包，校验通过后生成 `latest.json`。
 
 ### 10.3 Tauri 更新
 
@@ -483,6 +483,6 @@ AICL-40 确认旧版没有在用用户。首个 Tauri 正式版由用户从 GitH
 1. **阶段 1**：本 ADR（AICL-32）+ 三端编译与体积实测（AICL-33）。
 2. **阶段 2**：规则 JSON 化（AICL-34）→ PlatformAdapter 与去平台依赖（AICL-35）→ 业务逻辑下沉 Core + sidecar（AICL-36）。
 3. **阶段 3**：Windows / Linux 规则与 SafetyGuard（AICL-37 / 38）+ Tauri 前端功能对齐（AICL-39）。
-4. **阶段 4**：签名公证、启用 Tauri 更新、发布三端安装包，随后移除 SwiftUI（AICL-40）。
+4. **阶段 4**：启用 Tauri 更新、发布三端安装包，随后移除 SwiftUI（AICL-40）。
 
 本 ADR 中的契约（PlatformAdapter、RPC v1、规则 schema v1、存储位置）如果需要做破坏性修改，必须新增 ADR 或修订本文并说明原因；增量扩展（新方法、新可选字段、新占位符）在对应子 issue 中记录即可。

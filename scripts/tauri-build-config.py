@@ -30,16 +30,6 @@ def main() -> None:
         if args.release:
             updater["endpoints"] = [f"https://github.com/{args.repository}/releases/latest/download/latest.json"]
         config["plugins"] = {"updater": updater}
-    thumbprint = os.environ.get("AI_CLEANER_WINDOWS_SIGNING_THUMBPRINT", "").strip()
-    if thumbprint:
-        if not re.fullmatch(r"[0-9A-Fa-f]{40}", thumbprint):
-            parser.error("invalid Windows code-signing certificate thumbprint")
-        config["bundle"]["windows"] = {
-            "certificateThumbprint": thumbprint,
-            "digestAlgorithm": "sha256",
-            "timestampUrl": "http://timestamp.digicert.com",
-            "tsp": True,
-        }
     args.output.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 

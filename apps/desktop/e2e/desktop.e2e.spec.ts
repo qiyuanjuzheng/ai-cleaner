@@ -128,6 +128,40 @@ test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () =
     }
   });
 
+  test('the AI client sidebar scrolls when its navigation exceeds the window', async ({ page }) => {
+    const bridge = await startE2EBridge({ repoRoot, distDir });
+    try {
+      const { sandboxHome } = bridge.fixtureInfo;
+      const createdAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+      const directories = Array.from({ length: 40 }, (_, index) => {
+        const displayName = `Sidebar fixture ${String(index + 1).padStart(2, '0')}`;
+        const directory = path.join(sandboxHome, displayName);
+        fs.mkdirSync(directory);
+        return { id: randomUUID(), displayName, path: directory, category: 'cache', mode: 'children', createdAt };
+      });
+      const dataDir = path.join(sandboxHome, '.aicleaner-data');
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(dataDir, 'custom-directories.json'), JSON.stringify(directories));
+
+      await page.setViewportSize({ width: 1180, height: 660 });
+      await page.goto(`${bridge.baseUrl}/?bridge=${encodeURIComponent(bridge.baseUrl)}`);
+      const sidebar = page.locator('aside[aria-label="主导航侧栏"]');
+      const lastDirectory = sidebar.getByText('Sidebar fixture 40', { exact: true });
+      const footer = page.getByTestId('disk-usage-footer');
+      await expect(lastDirectory).toBeAttached();
+      await expect(lastDirectory).not.toBeInViewport();
+      const footerTop = await footer.evaluate((element) => element.getBoundingClientRect().top);
+
+      await sidebar.getByText('AI 客户端', { exact: true }).hover();
+      await page.mouse.wheel(0, 1800);
+      await expect(lastDirectory).toBeInViewport();
+      await expect(footer).toBeInViewport({ ratio: 1 });
+      expect(await footer.evaluate((element) => element.getBoundingClientRect().top)).toBe(footerTop);
+    } finally {
+      await bridge.close();
+    }
+  });
+
   test('cleanup history scrolls from the fixed page heading', async ({ page }) => {
     const bridge = await startE2EBridge({ repoRoot, distDir });
     try {

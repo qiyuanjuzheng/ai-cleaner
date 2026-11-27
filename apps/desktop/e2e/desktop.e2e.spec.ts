@@ -179,8 +179,19 @@ test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () =
       expect(initialRenderedRows).toBeGreaterThan(5);
       expect(initialRenderedRows).toBeLessThan(80);
 
-      // Scroll far down (to ~item #2,600) and verify lazy 200-item paging renders real rows cleanly
       const viewport = page.getByTestId('virtual-item-list');
+      const heading = page.getByTestId('dashboard-title');
+      for (const [navigation, title] of [['nav-all-clients', '空间总览'], ['nav-client-codex', 'Codex']]) {
+        await page.getByTestId(navigation).click();
+        await expect(heading).toHaveText(title);
+        const top = await heading.evaluate((element) => element.getBoundingClientRect().top);
+        await heading.hover();
+        await page.mouse.wheel(0, 480);
+        await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        expect(await heading.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+      }
+
+      // Scroll far down (to ~item #2,600) and verify lazy 200-item paging renders real rows cleanly
       await viewport.evaluate((el) => {
         el.scrollTop = el.scrollHeight * 0.5;
       });

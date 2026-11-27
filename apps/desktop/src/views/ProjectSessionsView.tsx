@@ -147,8 +147,9 @@ export function ProjectSessionsView({
 
   return (
     <div className="projects-split" data-testid="project-sessions-view">
-      <div className="projects-left">
+      <div className="page-scroll projects-left">
         <div
+          className="page-scroll-header"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -167,7 +168,7 @@ export function ProjectSessionsView({
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 96px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div style={{ padding: '0 8px 96px', display: 'flex', flexDirection: 'column', gap: 3 }}>
           {projects.map((project) => {
             const isSelected = project.projectId === selectedProjectId;
             return (
@@ -230,10 +231,13 @@ export function ProjectSessionsView({
         </div>
       </div>
 
-      <div className="projects-right">
+      <div className="page-scroll projects-right">
         {activeProject && (
           <>
-            <div style={{ padding: 16, borderBottom: '1px solid var(--divider)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div
+              className="page-scroll-header"
+              style={{ padding: 16, borderBottom: '1px solid var(--divider)', display: 'flex', flexDirection: 'column', gap: 10 }}
+            >
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
                 <div style={{ minWidth: 0 }}>
                   <h2 style={{ margin: '0 0 3px', fontSize: 20, fontWeight: 700 }}>{activeProject.name}</h2>
@@ -333,7 +337,7 @@ export function ProjectSessionsView({
               </div>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '6px 14px 110px' }}>
+            <div style={{ padding: '6px 14px 110px' }}>
               {loading && sessions.length === 0 ? (
                 <div className="hero-center-stage">正在加载项目会话…</div>
               ) : sessions.length === 0 ? (

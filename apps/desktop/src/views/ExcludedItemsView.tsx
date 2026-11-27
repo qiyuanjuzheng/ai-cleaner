@@ -67,8 +67,8 @@ export function ExcludedItemsView({
         : `共 ${records.length} 项在扫描时自动跳过`;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="excluded-items-view">
-      <div style={{ padding: '4px 20px 12px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+    <div className="page-scroll excluded-scroll" data-testid="excluded-items-view">
+      <div className="page-scroll-header excluded-header">
         <div>
           <h1 style={{ margin: '0 0 2px', fontSize: 20, fontWeight: 700 }}>已排除</h1>
           <div className="mono-num" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -155,7 +155,7 @@ export function ExcludedItemsView({
           </button>
         </div>
       ) : (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 24px' }}>
+        <div style={{ padding: '0 20px 24px' }}>
           <div className="glass-card" style={{ overflow: 'hidden' }}>
             {filtered.map((rec, idx) => {
               const exists = statuses[rec.id] !== false;

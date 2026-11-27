@@ -130,8 +130,8 @@ export function CleanupHistoryView({
   const barWidth = points.length > 0 ? Math.max(4, Math.min(28, (plotW / points.length) * 0.62)) : 12;
 
   return (
-    <div className="history-scroll" data-testid="cleanup-history-view">
-      <div className="history-header">
+    <div className="page-scroll" data-testid="cleanup-history-view">
+      <div className="page-scroll-header history-header">
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>清理记录</h1>
         <span style={{ flex: 1 }} />
 

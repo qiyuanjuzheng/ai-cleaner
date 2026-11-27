@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_URL="${RELEASE_REPO_URL:-https://github.com/${GITHUB_REPOSITORY:-qiyuanjuzheng/ai-cleaner}}"
-NOTES_FORMAT=legacy
+CHANGES_ONLY=false
 case "${1:-}" in
-  --changes-only) NOTES_FORMAT=changes; shift ;;
-  --tauri) NOTES_FORMAT=tauri; shift ;;
+  --changes-only) CHANGES_ONLY=true; shift ;;
+  --tauri) shift ;;
 esac
 
 if [[ $# -ne 1 || ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -39,7 +39,7 @@ if [[ ! "$NOTES" =~ [^[:space:]] ]]; then
   echo "错误: CHANGELOG.md 中缺少 ${TAG} 的版本说明。" >&2
   exit 1
 fi
-if [[ "$NOTES_FORMAT" == changes ]]; then
+if [[ "$CHANGES_ONLY" == true ]]; then
   printf '%s\n' "$NOTES"
   exit 0
 fi
@@ -118,8 +118,7 @@ if [[ -n "$PREVIOUS_TAG" ]]; then
 fi
 
 DOWNLOAD_URL="${REPO_URL}/releases/download/${TAG}"
-if [[ "$NOTES_FORMAT" == tauri ]]; then
-  cat <<EOF
+cat <<EOF
 
 ## 下载与安装
 
@@ -127,42 +126,15 @@ if [[ "$NOTES_FORMAT" == tauri ]]; then
 - **Windows x64**：从附件下载 NSIS 安装程序（\`.exe\`）或 MSI 安装包（\`.msi\`）。
 - **Linux x64**：按发行版选择 \`.deb\`、\`.rpm\` 或 \`.AppImage\`。
 EOF
-  if [[ "${TAURI_PLATFORM_SIGNING:-true}" == false ]]; then
-    cat <<'EOF'
+if [[ "${TAURI_PLATFORM_SIGNING:-true}" == false ]]; then
+  cat <<'EOF'
 
 macOS 安装包使用 ad-hoc 签名。首次打开时，可能需要在「系统设置 → 隐私与安全性」选择「仍要打开」。Windows 安装包未使用 Authenticode，可能显示未知发布者提示，启用 Smart App Control 的设备可能拦截。应用内更新仍验证 Tauri 更新签名。
 EOF
-  fi
-  cat <<EOF
+fi
+cat <<EOF
 
 ### SHA-256 校验
 
 计算所下载文件的 SHA-256，并与 [SHA256SUMS.txt](${DOWNLOAD_URL}/SHA256SUMS.txt) 中的同名条目比较。
-EOF
-  exit 0
-fi
-cat <<EOF
-
-## 下载与安装
-
-需要 macOS 14.0（Sonoma）或更新版本。Universal 通用包支持 Apple Silicon 和 Intel Mac。
-
-1. 下载 [AI-Cleaner-${TAG}-macOS.dmg](${DOWNLOAD_URL}/AI-Cleaner-${TAG}-macOS.dmg)，打开磁盘映像，将 **AI Cleaner.app** 拖入「应用程序」。
-2. 也可以下载 [AI-Cleaner-${TAG}-macOS.zip](${DOWNLOAD_URL}/AI-Cleaner-${TAG}-macOS.zip)，解压后将应用移入「应用程序」。
-
-### 首次打开
-
-安装包采用 ad-hoc 签名，尚未经过 Apple 公证。确认安装包来自本页并通过校验后，若 macOS 拦截首次打开，可先尝试启动应用，再前往「系统设置 → 隐私与安全性 → 仍要打开」。也可以在终端执行以下命令后重新打开应用。
-
-\`\`\`bash
-xattr -cr "/Applications/AI Cleaner.app"
-\`\`\`
-
-### SHA-256 校验
-
-将两个安装包和 [SHA256SUMS.txt](${DOWNLOAD_URL}/SHA256SUMS.txt) 放在同一个目录，在该目录执行：
-
-\`\`\`bash
-shasum -a 256 -c SHA256SUMS.txt
-\`\`\`
 EOF

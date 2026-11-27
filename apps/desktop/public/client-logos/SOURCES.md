@@ -1,10 +1,8 @@
 # Bundled Client Logo Sources
 
-AI Cleaner resolves desktop client icons from verified locally installed `.app` bundles first (`CFBundleIdentifier`, `CFBundlePackageType == "APPL"`, and executable/bundle-name checks where vendors share bundle identifiers, including reading dedicated `icon-codex-*.png` resources inside unified `ChatGPT.app`).
+The Tauri desktop app bundles the PNGs documented below for product identification. The website reuses selected logos as WebP images. The filenames and SHA-256 checksums in the table refer to the bundled PNGs.
 
-Bundled PNGs below are used solely for factual product identification when a client is CLI-only, an IDE extension, or its desktop `.app` bundle is not currently installed locally. All third-party product names and marks remain the property of their respective owners. Runtime logo resolution is strictly offline and reads only local files.
-
-`workdaddy` (`com.workdaddy.launcher`) has no public official brand asset and therefore resolves only from a locally installed `WorkDaddy.app`, falling back to text-only if absent.
+All third-party product names and marks remain the property of their respective owners. References to installed `.app` bundles in the table describe where these logos were used as fallbacks by the SwiftUI app.
 
 | Client ID | Files | Official / Curated Source | Usage & License Notes | SHA-256 |
 | --- | --- | --- | --- | --- |

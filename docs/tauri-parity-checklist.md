@@ -1,6 +1,6 @@
 # Tauri 2 三端前端功能对照验收表（AICL-39）
 
-对照基线：冻结态 SwiftUI macOS 版（`Sources/AICleanerApp/`）与 ADR 0001（`docs/adr/0001-cross-platform-architecture.md`）。
+对照基线：[v0.4.0 SwiftUI macOS 版](https://github.com/qiyuanjuzheng/ai-cleaner/tree/v0.4.0/Sources/AICleanerApp)与 ADR 0001（`docs/adr/0001-cross-platform-architecture.md`）。
 
 ## 1. 功能对齐清单
 

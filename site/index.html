@@ -175,7 +175,6 @@
           <ul class="release-links" role="list">
             <li><a data-release-notes href="https://github.com/qiyuanjuzheng/ai-cleaner/releases">GitHub 发布记录</a></li>
             <li hidden><a data-platform-downloads>Windows 和 Linux 安装包</a></li>
-            <li hidden><a data-zip>下载 ZIP</a></li>
             <li hidden><a data-checksums>SHA-256 校验值</a></li>
           </ul>
         </div>
@@ -189,12 +188,14 @@
           <p>若 macOS 拦截首次打开，请先确认下载来源并核对发布方的 SHA-256。对尚未经过 Apple 公证的版本，可在尝试打开后前往「系统设置 → 隐私与安全性」，选择「仍要打开」。</p>
           <details class="source-guide">
             <summary>从源码构建</summary>
-            <p>源码构建需要 Xcode 16 或更新版本（Swift 6+）。</p>
+            <p>源码构建需要 Xcode 16 或更新版本、Node.js 22 和 Rust 1.90 或更新版本。</p>
             <button class="copy-command" type="button" id="copy-command" hidden>复制命令</button>
             <pre><code id="install-command">git clone https://github.com/qiyuanjuzheng/ai-cleaner.git
 cd ai-cleaner
-./scripts/package-app.sh
-open "dist/AI Cleaner.app"</code></pre>
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+(cd apps/desktop &amp;&amp; npm ci)
+./scripts/build-tauri-macos-assets.sh --tag v1.0.0 --local
+open "dist/tauri-local/v1.0.0/AI-Cleaner-v1.0.0-macOS.dmg"</code></pre>
             <p class="copy-status" id="copy-status" role="status"></p>
             <a href="https://github.com/qiyuanjuzheng/ai-cleaner#构建测试与运行">完整构建说明</a>
           </details>

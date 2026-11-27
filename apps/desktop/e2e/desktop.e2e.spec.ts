@@ -1,0 +1,167 @@
+import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { startE2EBridge } from './sidecar-bridge.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const desktopRoot = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(desktopRoot, '../..');
+const distDir = path.join(desktopRoot, 'dist');
+
+test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () => {
+  test('complete lifecycle: scan, filter, full title, exclude/restore, project protection, custom dir, real recycle, history & theme', async ({
+    page,
+  }) => {
+    const bridge = await startE2EBridge({ repoRoot, distDir });
+    try {
+      const appUrl = `${bridge.baseUrl}/?bridge=${encodeURIComponent(bridge.baseUrl)}`;
+      await page.goto(appUrl);
+
+      // 1. Landing hero + real startup disk capacity footer
+      await expect(page.getByTestId('scan-ready-hero')).toBeVisible();
+      await expect(page.getByTestId('disk-usage-footer')).toContainText('总容量');
+
+      // 2. Start real scan via Hero CTA
+      await page.getByTestId('start-scan-button').click();
+      await expect(page.getByTestId('item-list-view')).toBeVisible();
+      await expect(page.getByTestId('dashboard-title')).toHaveText('空间总览');
+      await expect(page.getByTestId('nav-client-codex')).toBeVisible();
+
+      // 3. Search & Full Session Title inspection via real `items.get`
+      const searchInput = page.getByTestId('items-search-input');
+      await searchInput.fill('Cross-platform Tauri 2');
+      await expect(page.getByTestId('scan-item-row')).toHaveCount(1);
+      await page.getByTestId('item-full-title-btn').first().click();
+      await expect(page.getByTestId('full-title-modal')).toBeVisible();
+      await expect(page.getByTestId('full-title-content')).toContainText(bridge.fixtureInfo.longTitle);
+      await page.getByRole('button', { name: '完成' }).click();
+      await expect(page.getByTestId('full-title-modal')).toBeHidden();
+
+      // 4. Reveal path through Core-verified `items.resolvePath`
+      await page.getByTestId('item-reveal-btn').first().click();
+      await expect.poll(() => bridge.revealedPaths.length).toBeGreaterThan(0);
+
+      // Reset search filter
+      await page.getByTestId('reset-filters-btn').click();
+
+      // 5. Project Sessions & Project Protection
+      await page.getByTestId('nav-client-codex').click();
+      await page.getByTestId('open-project-sessions-btn').click();
+      await expect(page.getByTestId('project-sessions-view')).toBeVisible();
+      await expect(page.getByTestId(`project-row-${bridge.fixtureInfo.projectName}`)).toBeVisible();
+
+      await page.getByTestId('toggle-project-protection-btn').click();
+      await expect(page.getByTestId('project-protected-banner')).toBeVisible();
+      // Unlock again to verify round-trip persistence
+      await page.getByTestId('toggle-project-protection-btn').click();
+      await expect(page.getByTestId('project-protected-banner')).toBeHidden();
+
+      await page.getByTestId('back-to-cleanup-items-btn').click();
+      await expect(page.getByTestId('item-list-view')).toBeVisible();
+
+      // 6. Exclude one log file & verify Excluded Items view + Restore
+      await searchInput.fill('e2e-exclude-me.log');
+      await expect(page.getByTestId('scan-item-row')).toHaveCount(1);
+      await expect(page.getByTestId('scan-item-row').first()).toContainText('e2e-exclude-me.log');
+      await page.getByTestId('item-more-btn').first().click();
+      await page.getByTestId('ctx-exclude-item').click();
+      await expect(page.getByTestId('empty-items-state')).toBeVisible();
+
+      await page.getByTestId('nav-excluded').click();
+      await expect(page.getByTestId('excluded-items-view')).toBeVisible();
+      await expect(page.getByTestId('excluded-row')).toHaveCount(1);
+      await page.getByTestId('restore-excluded-btn').first().click();
+      await expect(page.getByTestId('excluded-empty-state')).toBeVisible();
+
+      // 7. Custom directory live SafetyGuard validation (reject system root, accept safe dir)
+      await page.getByTestId('toolbar-add-custom').click();
+      const customPathInput = page.getByTestId('custom-dir-path-input');
+      await customPathInput.fill(bridge.fixtureInfo.blockedRootDir);
+      await expect(page.getByTestId('custom-dir-validation-error')).toBeVisible();
+      await expect(page.getByTestId('submit-custom-dir-btn')).toBeDisabled();
+
+      await customPathInput.fill(bridge.fixtureInfo.safeCustomDir);
+      await expect(page.getByTestId('submit-custom-dir-btn')).toBeEnabled();
+      await page.getByTestId('submit-custom-dir-btn').click();
+      await expect(page.getByTestId('add-custom-dir-modal')).toBeHidden();
+      // Triggers scan automatically and returns to overview with new custom dir scanned
+      await expect(page.getByTestId('item-list-view')).toBeVisible();
+
+      // 8. Select one recommended file -> Preview -> Execute real native recycle
+      await page.getByTestId('nav-all-clients').click();
+      await searchInput.fill('e2e-stale-cache.log');
+      await expect(page.getByTestId('scan-item-row')).toHaveCount(1);
+      await expect(page.getByTestId('scan-item-row').first()).toContainText('e2e-stale-cache.log');
+      await page.getByTestId('item-checkbox').first().click();
+
+      await expect(page.getByTestId('selection-dock')).toBeVisible();
+      await page.getByTestId('open-trash-confirm-btn').click();
+      await expect(page.getByTestId('trash-confirm-modal')).toBeVisible();
+      await page.getByTestId('confirm-trash-execute-btn').click();
+
+      // Celebration pill appears and original file is gone from sandbox
+      await expect(page.getByTestId('cleanup-result-pill')).toBeVisible();
+      expect(fs.existsSync(bridge.fixtureInfo.staleTmpPath)).toBe(false);
+
+      // 9. Cleanup History view reflects the real recycled run
+      await page.getByTestId('nav-history').click();
+      await expect(page.getByTestId('cleanup-history-view')).toBeVisible();
+      await expect(page.getByTestId('history-trend-chart')).toBeVisible();
+      await expect(page.getByTestId('history-client-ranking')).toContainText('Codex');
+      await page.getByTestId('history-metric-daily').click();
+      await page.getByTestId('history-range-allTime').click();
+
+      // 10. Appearance cycle persists through real sidecar settings.set
+      await page.getByTestId('toolbar-appearance').click();
+      await page.getByTestId('toolbar-appearance').click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+      // 11. Keyboard shortcut (Cmd+R on macOS / Ctrl+R on Windows & Linux) starts rescan
+      const shortcut = process.platform === 'darwin' ? 'Meta+r' : 'Control+r';
+      await page.keyboard.press(shortcut);
+      await expect(page.getByTestId('item-list-view')).toBeVisible();
+      await expect(page.getByTestId('toolbar-scan')).toBeEnabled();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test('virtual scrolling stays smooth with 5,200+ real scanned items', async ({ page }) => {
+    test.setTimeout(90_000);
+    const bridge = await startE2EBridge({ repoRoot, distDir, stressFileCount: 5200 });
+    try {
+      const appUrl = `${bridge.baseUrl}/?bridge=${encodeURIComponent(bridge.baseUrl)}`;
+      await page.goto(appUrl);
+
+      await page.getByTestId('start-scan-button').click();
+      await expect(page.getByTestId('item-list-view')).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByTestId('section-header-recommended')).toContainText('5202 项');
+
+      // DOM virtualization check: 5,200+ items exist, but DOM renders only a tiny window (< 80 rows)
+      const initialRenderedRows = await page.getByTestId('scan-item-row').count();
+      expect(initialRenderedRows).toBeGreaterThan(5);
+      expect(initialRenderedRows).toBeLessThan(80);
+
+      // Scroll far down (to ~item #2,600) and verify lazy 200-item paging renders real rows cleanly
+      const viewport = page.getByTestId('virtual-item-list');
+      await viewport.evaluate((el) => {
+        el.scrollTop = el.scrollHeight * 0.5;
+      });
+      await expect
+        .poll(async () => {
+          const indices = await page
+            .getByTestId('scan-item-row')
+            .evaluateAll((els) => els.map((el) => Number(el.getAttribute('data-row-index') ?? -1)));
+          return indices.length > 5 && indices.some((idx) => idx >= 2000);
+        })
+        .toBe(true);
+
+      const midRenderedRows = await page.getByTestId('scan-item-row').count();
+      expect(midRenderedRows).toBeGreaterThan(5);
+      expect(midRenderedRows).toBeLessThan(80);
+    } finally {
+      await bridge.close();
+    }
+  });
+});

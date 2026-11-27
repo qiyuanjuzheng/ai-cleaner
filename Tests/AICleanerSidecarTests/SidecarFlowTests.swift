@@ -241,6 +241,40 @@ final class SidecarFlowTests: XCTestCase {
         let error = client.messages.withLock { $0.last?["error"]?["code"] }
         XCTAssertEqual(error, .integer(-32700))
     }
+
+    func testSharedProtocolFixturesDecodeAndHandshakeThroughSidecar() async throws {
+        let fixturesURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("protocol/fixtures/rpc-v1-samples.json")
+        let data = try Data(contentsOf: fixturesURL)
+        let decoded = try JSONDecoder().decode(RPCValue.self, from: data)
+        let requests = try XCTUnwrap(decoded["requests"]?.array)
+        let notifications = try XCTUnwrap(decoded["notifications"]?.array)
+        let errors = try XCTUnwrap(decoded["errors"]?.array)
+        XCTAssertFalse(requests.isEmpty)
+        XCTAssertFalse(notifications.isEmpty)
+        XCTAssertFalse(errors.isEmpty)
+
+        // Round-trip every fixture entry through RPCValue encoder/decoder
+        for group in [requests, notifications, errors] {
+            for entry in group {
+                let reencoded = try JSONEncoder().encode(entry)
+                let reparsed = try JSONDecoder().decode(RPCValue.self, from: reencoded)
+                XCTAssertEqual(reparsed, entry)
+            }
+        }
+
+        // Dispatch the shared handshake request fixture directly into SidecarServer
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let handshakeLine = try String(decoding: JSONEncoder().encode(requests[0]), as: UTF8.self)
+        let keepRunning = await fixture.client.server.receive(handshakeLine)
+        XCTAssertTrue(keepRunning)
+        let reply = fixture.client.messages.withLock { $0.last }
+        XCTAssertEqual(reply?["result"]?["protocolVersion"], .string("1.0"))
+    }
 }
 
 private struct Fixture {

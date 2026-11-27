@@ -1,0 +1,117 @@
+{
+  "description": "Shared JSON-RPC v1 contract fixtures validated by both Swift (AICleanerSidecarTests) and TypeScript (apps/desktop).",
+  "requests": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "core.handshake",
+      "params": {
+        "protocolVersion": "1.0",
+        "clientVersion": "2.0.0",
+        "locale": "zh-Hans"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "items.query",
+      "params": {
+        "scanId": "SCAN-1",
+        "scope": { "kind": "client", "clientId": "codex" },
+        "filter": { "search": "rollout", "category": "sessions", "recommendation": "reviewSuggested", "age": "olderThan30Days" },
+        "sort": "sizeDesc",
+        "offset": 0,
+        "limit": 200
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "selection.apply",
+      "params": {
+        "scanId": "SCAN-1",
+        "op": "toggleSection",
+        "scope": { "kind": "all" },
+        "recommendation": "recommended"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "trash.execute",
+      "params": {
+        "scanId": "SCAN-1",
+        "confirmationToken": "TOKEN-1",
+        "acknowledgedNotRecommendedRisk": false
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "jsonrpc": "2.0",
+      "method": "scan.progress",
+      "params": {
+        "scanId": "SCAN-1",
+        "stage": "analyzingCacheFiles",
+        "scannedFileCount": 142,
+        "cleanableBytes": 1048576,
+        "clients": [
+          {
+            "id": "codex",
+            "name": "Codex",
+            "symbolName": "cpu",
+            "accentToken": "codex",
+            "kind": "builtInClient",
+            "state": "measured",
+            "cleanableBytes": 1048576,
+            "itemCount": 12
+          }
+        ]
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "scan.completed",
+      "params": {
+        "scanId": "SCAN-1",
+        "status": "completed",
+        "reportRevision": 1,
+        "summary": {
+          "scannedAt": "2026-11-26T12:00:00Z",
+          "totalBuiltInProfilesCount": 31,
+          "detectedBuiltInClientsCount": 2,
+          "skippedProtectedCount": 0,
+          "totalSizeBytes": 1048576,
+          "recommendedSizeBytes": 524288,
+          "reviewSuggestedSizeBytes": 524288,
+          "protectedSizeBytes": 4096,
+          "totalDiskFootprintBytes": 1052672,
+          "totalItemCount": 12,
+          "totalRecommendedCount": 5,
+          "totalReviewSuggestedCount": 7,
+          "totalProtectedItemCount": 1
+        }
+      }
+    }
+  ],
+  "errors": [
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "error": {
+        "code": -32006,
+        "message": "Preview confirmation expired",
+        "data": { "name": "CONFIRMATION_TOKEN_INVALID" }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "error": {
+        "code": -32010,
+        "message": "Safety check blocked the item",
+        "data": { "name": "SAFETY_BLOCKED", "reason": "系统根目录或核心路径不允许操作" }
+      }
+    }
+  ]
+}

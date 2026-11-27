@@ -85,8 +85,19 @@ jobs:
           rustup update stable --no-self-update
 
       - name: Stage static musl sidecar
+        shell: bash
         run: |
-          bin="$(ls -d probe-out/bin/swift_sdk_*_swift_linux_musl_Xswiftc_Osize_Xlinker_s/aicleaner-core-probe | head -1)"
+          bin_dir="probe-out/bin/swift_sdk_$(uname -m)_swift_linux_musl_Xswiftc_Osize_Xlinker_s"
+          product=aicleaner-core-probe
+          if [[ ! -f "$bin_dir/$product" ]]; then
+            product=sidecar-standin
+          fi
+          bin="$bin_dir/$product"
+          if [[ ! -f "$bin" ]]; then
+            echo "::error::No size-optimized static musl sidecar in $bin_dir. See the probe-linux build logs."
+            exit 1
+          fi
+          echo "Using sidecar: $product" | tee -a "$GITHUB_STEP_SUMMARY"
           python3 scripts/xplat-probe/stage_sidecar.py "$bin"
 
       - name: Build bundles

@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_URL="${RELEASE_REPO_URL:-https://github.com/${GITHUB_REPOSITORY:-qiyuanjuzheng/ai-cleaner}}"
-CHANGES_ONLY=false
-if [[ "${1:-}" == --changes-only ]]; then
-  CHANGES_ONLY=true
-  shift
-fi
+NOTES_FORMAT=legacy
+case "${1:-}" in
+  --changes-only) NOTES_FORMAT=changes; shift ;;
+  --tauri) NOTES_FORMAT=tauri; shift ;;
+esac
 
 if [[ $# -ne 1 || ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "用法: $0 [--changes-only] vX.Y.Z" >&2
+  echo "用法: $0 [--changes-only | --tauri] vX.Y.Z" >&2
   exit 2
 fi
 
@@ -39,7 +39,7 @@ if [[ ! "$NOTES" =~ [^[:space:]] ]]; then
   echo "错误: CHANGELOG.md 中缺少 ${TAG} 的版本说明。" >&2
   exit 1
 fi
-if [[ "$CHANGES_ONLY" == true ]]; then
+if [[ "$NOTES_FORMAT" == changes ]]; then
   printf '%s\n' "$NOTES"
   exit 0
 fi
@@ -118,6 +118,21 @@ if [[ -n "$PREVIOUS_TAG" ]]; then
 fi
 
 DOWNLOAD_URL="${REPO_URL}/releases/download/${TAG}"
+if [[ "$NOTES_FORMAT" == tauri ]]; then
+  cat <<EOF
+
+## 下载与安装
+
+- **macOS 14.0 或更新版本**：下载 [Universal DMG](${DOWNLOAD_URL}/AI-Cleaner-${TAG}-macOS.dmg)，将 **AI Cleaner.app** 拖入「应用程序」。支持 Apple Silicon 和 Intel Mac。
+- **Windows x64**：从附件下载 NSIS 安装程序（\`.exe\`）或 MSI 安装包（\`.msi\`）。
+- **Linux x64**：按发行版选择 \`.deb\`、\`.rpm\` 或 \`.AppImage\`。
+
+### SHA-256 校验
+
+计算所下载文件的 SHA-256，并与 [SHA256SUMS.txt](${DOWNLOAD_URL}/SHA256SUMS.txt) 中的同名条目比较。
+EOF
+  exit 0
+fi
 cat <<EOF
 
 ## 下载与安装

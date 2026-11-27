@@ -1,6 +1,7 @@
 pub mod menu;
 pub mod reveal;
 pub mod sidecar;
+mod updater;
 
 use std::sync::Arc;
 
@@ -89,6 +90,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(HostState {
             sidecar: Arc::clone(&sidecar),
         })
@@ -121,7 +123,8 @@ pub fn run() {
             core_request,
             reveal_scan_item,
             reveal_excluded_item,
-            host_platform
+            host_platform,
+            updater::check_for_updates
         ])
         .build(tauri::generate_context!())
         .expect("error while building AI Cleaner Tauri application");

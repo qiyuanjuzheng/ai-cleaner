@@ -1,3 +1,4 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { AlertTriangle, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AddCustomDirectoryModal } from './components/AddCustomDirectoryModal';
@@ -64,6 +65,7 @@ export function App({ client }: AppProps) {
 
   const [sidebarSelection, setSidebarSelection] = useState<SidebarSelection>({ kind: 'allClients' });
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
   const [toastNotice, setToastNotice] = useState<string | null>(null);
 
   // Scan state
@@ -378,8 +380,21 @@ export function App({ client }: AppProps) {
   );
 
   // Actions
+  const handleCheckUpdates = useCallback(async () => {
+    if (isScanning || isCleaning || isUpdating) return;
+    setErrorBanner(null);
+    setIsUpdating(true);
+    try {
+      await invoke('check_for_updates');
+    } catch (error) {
+      setErrorBanner(typeof error === 'string' ? error : '更新失败，请稍后重试。');
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [isCleaning, isScanning, isUpdating]);
+
   const handleStartScan = useCallback(async () => {
-    if (isScanning || isCleaning) return;
+    if (isScanning || isCleaning || isUpdating) return;
     setErrorBanner(null);
     setLastCleanupResult(null);
     setTrashPreview(null);
@@ -400,7 +415,7 @@ export function App({ client }: AppProps) {
       setActiveScanId(null);
       handleCoreError(err);
     }
-  }, [core, handleCoreError, isCleaning, isScanning, sidebarSelection.kind]);
+  }, [core, handleCoreError, isCleaning, isScanning, isUpdating, sidebarSelection.kind]);
 
   const handleCancelScan = useCallback(async () => {
     if (!activeScanId) return;
@@ -502,7 +517,7 @@ export function App({ client }: AppProps) {
   );
 
   const handleRequestTrash = useCallback(async () => {
-    if (!scanId || selectionSummary.selectedCount === 0) return;
+    if (!scanId || selectionSummary.selectedCount === 0 || isUpdating) return;
     setTrashStaleError(null);
     try {
       const preview = await core.previewTrash(scanId);
@@ -510,11 +525,11 @@ export function App({ client }: AppProps) {
     } catch (err) {
       handleCoreError(err);
     }
-  }, [core, handleCoreError, scanId, selectionSummary.selectedCount]);
+  }, [core, handleCoreError, isUpdating, scanId, selectionSummary.selectedCount]);
 
   const handleExecuteTrash = useCallback(
     async (acknowledgedRisk: boolean) => {
-      if (!scanId || !trashPreview) return;
+      if (!scanId || !trashPreview || isUpdating) return;
       setIsCleaning(true);
       setTrashStaleError(null);
       try {
@@ -545,7 +560,7 @@ export function App({ client }: AppProps) {
         setIsCleaning(false);
       }
     },
-    [core, handleCoreError, refreshDiskCapacity, refreshHistory, refreshReportSnapshot, scanId, trashPreview]
+    [core, handleCoreError, isUpdating, refreshDiskCapacity, refreshHistory, refreshReportSnapshot, scanId, trashPreview]
   );
 
   const handleExcludeItem = useCallback(
@@ -870,9 +885,11 @@ export function App({ client }: AppProps) {
             onCycleAppearance={() => void handleCycleAppearance()}
             onOpenAddCustom={() => setShowingAddCustom(true)}
             onStartScan={() => void handleStartScan()}
+            onCheckUpdates={isTauri() ? () => void handleCheckUpdates() : undefined}
             hasScanResults={reportSummary !== null}
             isScanning={isScanning}
             isCleaning={isCleaning}
+            isUpdating={isUpdating}
             platform={platform}
           />
 

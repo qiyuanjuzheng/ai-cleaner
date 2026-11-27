@@ -11,7 +11,8 @@ import {
   MoreHorizontal,
   ShieldAlert,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   abbreviatePath,
   categoryDisplayName,
@@ -30,6 +31,7 @@ import type {
 } from '../rpc/types';
 
 interface VirtualizedItemListProps {
+  header: ReactNode;
   groups: ItemGroupDTO[];
   total: number;
   pageItems: Map<number, CleanableItemDTO[]>;
@@ -58,6 +60,7 @@ interface ContextMenuState {
 }
 
 export function VirtualizedItemList({
+  header,
   groups,
   total,
   pageItems,
@@ -79,7 +82,20 @@ export function VirtualizedItemList({
   viewportKey,
 }: VirtualizedItemListProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  useLayoutEffect(() => {
+    const element = headerRef.current;
+    if (!element) return;
+    const measure = () => setHeaderHeight(element.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const rows = useMemo(() => buildVirtualRows(groups), [groups]);
 
@@ -87,6 +103,8 @@ export function VirtualizedItemList({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => (rows[index]?.kind === 'sectionHeader' ? 40 : 62),
+    scrollMargin: headerHeight,
+    scrollPaddingStart: headerHeight,
     overscan: 12,
   });
 
@@ -132,37 +150,41 @@ export function VirtualizedItemList({
     return pageItems.get(page)?.[offsetInPage];
   };
 
+  const stickyHeader = <div ref={headerRef} className="page-scroll-header">{header}</div>;
   if (total === 0 || rows.length === 0) {
     return (
-      <div className="hero-center-stage" data-testid="empty-items-state">
-        {hasActiveFilters ? (
-          <>
-            <h3 style={{ margin: 0, fontSize: 16 }}>没有匹配的条目</h3>
-            <p style={{ margin: 0, color: 'var(--text-secondary)' }}>调整搜索词或筛选条件后重试。</p>
-            <button type="button" className="btn-glow-primary" onClick={onResetFilters}>
-              重置筛选
-            </button>
-          </>
-        ) : (
-          <>
-            <h3 style={{ margin: 0, fontSize: 16 }}>未找到可清理条目</h3>
-            {excludedCount > 0 && (
-              <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
-                当前有 {excludedCount} 项在已排除列表中被自动跳过。
-              </p>
-            )}
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button type="button" className="btn-subtle-pill" onClick={onRescan}>
-                重新扫描
+      <div ref={scrollRef} className="page-scroll virtual-list-viewport">
+        {stickyHeader}
+        <div className="hero-center-stage" data-testid="empty-items-state">
+          {hasActiveFilters ? (
+            <>
+              <h3 style={{ margin: 0, fontSize: 16 }}>没有匹配的条目</h3>
+              <p style={{ margin: 0, color: 'var(--text-secondary)' }}>调整搜索词或筛选条件后重试。</p>
+              <button type="button" className="btn-glow-primary" onClick={onResetFilters}>
+                重置筛选
               </button>
+            </>
+          ) : (
+            <>
+              <h3 style={{ margin: 0, fontSize: 16 }}>未找到可清理条目</h3>
               {excludedCount > 0 && (
-                <button type="button" className="btn-subtle-pill" onClick={onOpenExcluded}>
-                  查看已排除（{excludedCount}）
-                </button>
+                <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+                  当前有 {excludedCount} 项在已排除列表中被自动跳过。
+                </p>
               )}
-            </div>
-          </>
-        )}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button type="button" className="btn-subtle-pill" onClick={onRescan}>
+                  重新扫描
+                </button>
+                {excludedCount > 0 && (
+                  <button type="button" className="btn-subtle-pill" onClick={onOpenExcluded}>
+                    查看已排除（{excludedCount}）
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -176,17 +198,13 @@ export function VirtualizedItemList({
   };
 
   return (
-    <div ref={scrollRef} className="virtual-list-viewport" data-testid="virtual-item-list">
-      <div
-        style={{
-          height: `${virtualizer.getTotalSize()}px`,
-          width: '100%',
-          position: 'relative',
-        }}
-      >
+    <div ref={scrollRef} className="page-scroll virtual-list-viewport" data-testid="virtual-item-list">
+      {stickyHeader}
+      <div className="virtual-list-content" style={{ height: virtualizer.getTotalSize() }}>
         {virtualItems.map((vRow) => {
           const desc = rows[vRow.index];
           if (!desc) return null;
+          const rowPosition = `translateY(${vRow.start - headerHeight}px)`;
 
           if (desc.kind === 'sectionHeader') {
             const rec: CleanupRecommendation = desc.recommendation;
@@ -201,7 +219,7 @@ export function VirtualizedItemList({
                   top: 0,
                   left: 0,
                   width: '100%',
-                  transform: `translateY(${vRow.start}px)`,
+                  transform: rowPosition,
                 }}
               >
                 <div className="section-header-row" data-testid={`section-header-${rec}`}>
@@ -248,7 +266,7 @@ export function VirtualizedItemList({
                   top: 0,
                   left: 0,
                   width: '100%',
-                  transform: `translateY(${vRow.start}px)`,
+                  transform: rowPosition,
                 }}
               >
                 <div className={`item-row-card ${cornerClasses}`}>
@@ -279,7 +297,7 @@ export function VirtualizedItemList({
                 top: 0,
                 left: 0,
                 width: '100%',
-                transform: `translateY(${vRow.start}px)`,
+                transform: rowPosition,
               }}
             >
               <div

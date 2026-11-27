@@ -210,8 +210,8 @@ export function ItemListView({
     setMenuOpen((prev) => !prev);
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="item-list-view">
+  const header = (
+    <>
       <div className="dashboard-wrap">
         <div className="glass-hero-card">
           <div className="dashboard-inner">
@@ -512,8 +512,13 @@ export function ItemListView({
           <span>{noticeText}</span>
         </div>
       )}
+    </>
+  );
 
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="item-list-view">
       <VirtualizedItemList
+        header={header}
         groups={groups}
         total={total}
         pageItems={pageItems}

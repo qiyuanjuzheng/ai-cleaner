@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,6 +128,41 @@ test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () =
     }
   });
 
+  test('cleanup history scrolls from the fixed page heading', async ({ page }) => {
+    const bridge = await startE2EBridge({ repoRoot, distDir });
+    try {
+      const records = Array.from({ length: 6 }, (_, index) => ({
+        id: randomUUID(),
+        timestamp: new Date(Date.now() - index * 3_600_000).toISOString().replace(/\.\d+Z$/, 'Z'),
+        freedBytes: 2048,
+        trashedCount: 1,
+        clientBreakdown: [],
+        categoryBreakdown: [],
+        sampleItemNames: [`history-scroll-${index}.log`],
+      }));
+      const dataDir = path.join(bridge.fixtureInfo.sandboxHome, '.aicleaner-data');
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(path.join(dataDir, 'cleanup-history.json'), JSON.stringify(records));
+
+      await page.setViewportSize({ width: 1180, height: 660 });
+      await page.goto(`${bridge.baseUrl}/?bridge=${encodeURIComponent(bridge.baseUrl)}`);
+      await page.getByTestId('nav-history').click();
+      const heading = page.getByRole('heading', { name: '清理记录', exact: true });
+      const lastRecord = page.getByTestId('history-recent-list').getByText('history-scroll-4.log');
+      await expect(lastRecord).toBeAttached();
+      await expect(lastRecord).not.toBeInViewport();
+      const top = await heading.evaluate((element) => element.getBoundingClientRect().top);
+
+      await heading.hover();
+      await page.mouse.wheel(0, 600);
+      await expect(lastRecord).toBeInViewport();
+      await expect(heading).toBeInViewport();
+      expect(await heading.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+    } finally {
+      await bridge.close();
+    }
+  });
+
   test('virtual scrolling stays smooth with 5,200+ real scanned items', async ({ page }) => {
     test.setTimeout(90_000);
     const bridge = await startE2EBridge({ repoRoot, distDir, stressFileCount: 5200 });
@@ -143,8 +179,19 @@ test.describe('AI Cleaner Desktop E2E (Real Swift aicleaner-core sidecar)', () =
       expect(initialRenderedRows).toBeGreaterThan(5);
       expect(initialRenderedRows).toBeLessThan(80);
 
-      // Scroll far down (to ~item #2,600) and verify lazy 200-item paging renders real rows cleanly
       const viewport = page.getByTestId('virtual-item-list');
+      const heading = page.getByTestId('dashboard-title');
+      for (const [navigation, title] of [['nav-all-clients', '空间总览'], ['nav-client-codex', 'Codex']]) {
+        await page.getByTestId(navigation).click();
+        await expect(heading).toHaveText(title);
+        const top = await heading.evaluate((element) => element.getBoundingClientRect().top);
+        await heading.hover();
+        await page.mouse.wheel(0, 480);
+        await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        expect(await heading.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+      }
+
+      // Scroll far down (to ~item #2,600) and verify lazy 200-item paging renders real rows cleanly
       await viewport.evaluate((el) => {
         el.scrollTop = el.scrollHeight * 0.5;
       });

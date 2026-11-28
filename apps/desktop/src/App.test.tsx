@@ -21,6 +21,8 @@ function createMockTransport(options?: { platform?: PlatformKind; failHandshake?
   let projectProtected = false;
   let history: CleanupHistoryRecordDTO[] = [];
   let appearance: 'light' | 'dark' | 'system' = 'light';
+  let scanCount = 0;
+  let currentScanId: string | null = null;
 
   const items: CleanableItemDTO[] = [
     {
@@ -116,7 +118,15 @@ function createMockTransport(options?: { platform?: PlatformKind; failHandshake?
     };
   };
 
+  const scanNotFound = new CoreRpcError({
+    code: -32002,
+    message: 'Scan not found',
+    data: { name: 'SCAN_NOT_FOUND' },
+  });
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
+    if (typeof params.scanId === 'string' && params.scanId !== currentScanId) {
+      throw scanNotFound;
+    }
     if (method === 'core.handshake') {
       if (options?.failHandshake) {
         throw new CoreRpcError({
@@ -156,12 +166,15 @@ function createMockTransport(options?: { platform?: PlatformKind; failHandshake?
     if (method === 'customDirs.list') return { directories: [] };
     if (method === 'disk.capacity') return { total: 500_000_000_000, available: 200_000_000_000 };
     if (method === 'scan.start') {
+      const scanId = `scan-${++scanCount}`;
+      currentScanId = scanId;
+      selectedIds.clear();
       setTimeout(() => {
         notificationListener?.({
           jsonrpc: '2.0',
           method: 'scan.progress',
           params: {
-            scanId: 'scan-1',
+            scanId,
             stage: 'analyzingCacheFiles',
             scannedFileCount: 3,
             cleanableBytes: 6144,
@@ -183,7 +196,7 @@ function createMockTransport(options?: { platform?: PlatformKind; failHandshake?
           jsonrpc: '2.0',
           method: 'scan.completed',
           params: {
-            scanId: 'scan-1',
+            scanId,
             status: 'completed',
             reportRevision: 1,
             summary: {
@@ -204,7 +217,7 @@ function createMockTransport(options?: { platform?: PlatformKind; failHandshake?
           },
         });
       }, 0);
-      return { scanId: 'scan-1' };
+      return { scanId };
     }
     if (method === 'report.summary') {
       return {
@@ -361,7 +374,13 @@ function createMockTransport(options?: { platform?: PlatformKind; failHandshake?
     getHostPlatform: vi.fn(async () => platform),
   };
 
-  return { transport, request, triggerMenu: (a: MenuActionId) => menuListener?.(a) };
+  return {
+    transport,
+    request,
+    loseScan: () => { currentScanId = null; },
+    scanNotFound,
+    triggerMenu: (a: MenuActionId) => menuListener?.(a),
+  };
 }
 
 describe('App integration with CoreClient', () => {
@@ -422,6 +441,61 @@ describe('App integration with CoreClient', () => {
     const errBox = await screen.findByTestId('custom-dir-validation-error');
     expect(errBox).toHaveTextContent('不允许添加系统根目录');
     expect(screen.getByTestId('submit-custom-dir-btn')).toBeDisabled();
+  });
+
+  it('clears expired results and selection and lets the user run a new scan', async () => {
+    const { transport, request, loseScan } = createMockTransport();
+    render(<App client={new CoreClient(transport)} />);
+
+    fireEvent.click(screen.getByTestId('start-scan-button'));
+    fireEvent.click(await screen.findByTestId('select-recommended-btn'));
+    await screen.findByTestId('selection-dock');
+    await screen.findByTestId('nav-client-codex');
+
+    let finishSelection!: () => void;
+    request.mockImplementationOnce(() => new Promise((resolve) => {
+      finishSelection = () => resolve({
+        selectionRevision: 3,
+        selectedCount: 1,
+        selectedBytes: 2048,
+        hasNotRecommended: false,
+      });
+    }));
+    fireEvent.click(screen.getByTestId('select-recommended-btn'));
+    await waitFor(() => expect(finishSelection).toBeDefined());
+
+    loseScan();
+    fireEvent.click(screen.getByTestId('cat-filter-temporary'));
+    expect(await screen.findByTestId('error-banner')).toHaveTextContent('请重新扫描');
+    expect(screen.getByTestId('scan-ready-hero')).toBeVisible();
+    expect(screen.queryByTestId('nav-client-codex')).not.toBeInTheDocument();
+    await act(async () => finishSelection());
+    expect(screen.queryByTestId('selection-dock')).not.toBeInTheDocument();
+    expect(request.mock.calls.filter(([method]) => method === 'scan.start')).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId('start-scan-button'));
+    await screen.findByTestId('nav-client-codex');
+    expect(screen.queryByTestId('error-banner')).not.toBeInTheDocument();
+  });
+
+  it('ignores a missing-scan reply for the previous scan after a new one completes', async () => {
+    const { transport, request, scanNotFound } = createMockTransport();
+    render(<App client={new CoreClient(transport)} />);
+
+    fireEvent.click(screen.getByTestId('start-scan-button'));
+    await screen.findByTestId('nav-client-codex');
+
+    let rejectOldSelection!: (error: CoreRpcError) => void;
+    request.mockImplementationOnce(() => new Promise((_, reject) => { rejectOldSelection = reject; }));
+    fireEvent.click(screen.getByTestId('select-recommended-btn'));
+    await waitFor(() => expect(rejectOldSelection).toBeDefined());
+    fireEvent.click(screen.getByTestId('toolbar-scan'));
+    await waitFor(() => expect(request).toHaveBeenCalledWith('clients.list', { scanId: 'scan-2' }));
+    await screen.findByTestId('nav-client-codex');
+
+    await act(async () => rejectOldSelection(scanNotFound));
+    expect(screen.getByTestId('nav-client-codex')).toBeVisible();
+    expect(screen.queryByTestId('error-banner')).not.toBeInTheDocument();
   });
 
   it('navigates into client project sessions and toggles project protection', async () => {

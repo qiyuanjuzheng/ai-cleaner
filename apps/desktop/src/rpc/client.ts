@@ -43,6 +43,13 @@ export class CoreRpcError extends Error {
   }
 }
 
+export class ScanNotFoundError extends Error {
+  constructor(readonly scanId: string, cause: CoreRpcError) {
+    super(cause.message, { cause });
+    this.name = 'ScanNotFoundError';
+  }
+}
+
 export interface CoreTransport {
   request<T>(method: string, params?: Record<string, unknown>): Promise<T>;
   onNotification(listener: (notification: CoreNotification) => void): () => void;
@@ -138,7 +145,11 @@ class TauriCoreTransport implements CoreTransport {
 
   async revealScanItem(scanId: string, itemId: string): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('reveal_scan_item', { scanId, itemId });
+    try {
+      await invoke('reveal_scan_item', { scanId, itemId });
+    } catch (err) {
+      throw normalizeRpcError(err);
+    }
   }
 
   async revealExcludedItem(recordId: string): Promise<void> {
@@ -276,12 +287,31 @@ export class CoreClient {
     return this.transport.request('scan.cancel', { scanId });
   }
 
+  private async withScan<T>(scanId: string, request: Promise<T>): Promise<T> {
+    try {
+      return await request;
+    } catch (err) {
+      if (err instanceof CoreRpcError && err.code === -32002) {
+        throw new ScanNotFoundError(scanId, err);
+      }
+      throw err;
+    }
+  }
+
+  private requestForScan<T>(method: string, params: { scanId: string } & Record<string, unknown>): Promise<T> {
+    return this.withScan(params.scanId, this.transport.request<T>(method, params));
+  }
+
+  revealScanItem(scanId: string, itemId: string): Promise<void> {
+    return this.withScan(scanId, this.transport.revealScanItem(scanId, itemId));
+  }
+
   getReportSummary(scanId: string): Promise<ReportSummaryDTO> {
-    return this.transport.request('report.summary', { scanId });
+    return this.requestForScan('report.summary', { scanId });
   }
 
   listClients(scanId: string): Promise<{ clients: ClientSummaryDTO[] }> {
-    return this.transport.request('clients.list', { scanId });
+    return this.requestForScan('clients.list', { scanId });
   }
 
   queryItems(params: {
@@ -292,11 +322,11 @@ export class CoreClient {
     offset?: number;
     limit?: number;
   }): Promise<ItemsQueryResponse> {
-    return this.transport.request('items.query', params);
+    return this.requestForScan('items.query', params);
   }
 
   getItems(scanId: string, ids: string[]): Promise<{ items: CleanableItemDTO[] }> {
-    return this.transport.request('items.get', { scanId, ids });
+    return this.requestForScan('items.get', { scanId, ids });
   }
 
   applySelection(params: {
@@ -307,15 +337,15 @@ export class CoreClient {
     itemIds?: string[];
     recommendation?: 'recommended' | 'reviewSuggested';
   }): Promise<SelectionSummaryDTO> {
-    return this.transport.request('selection.apply', params);
+    return this.requestForScan('selection.apply', params);
   }
 
   confirmRisk(scanId: string, itemId: string): Promise<SelectionSummaryDTO> {
-    return this.transport.request('selection.confirmRisk', { scanId, itemId });
+    return this.requestForScan('selection.confirmRisk', { scanId, itemId });
   }
 
   previewTrash(scanId: string): Promise<TrashPreviewResponse> {
-    return this.transport.request('trash.preview', { scanId });
+    return this.requestForScan('trash.preview', { scanId });
   }
 
   executeTrash(params: {
@@ -323,7 +353,7 @@ export class CoreClient {
     confirmationToken: string;
     acknowledgedNotRecommendedRisk: boolean;
   }): Promise<TrashExecuteResponse> {
-    return this.transport.request('trash.execute', params);
+    return this.requestForScan('trash.execute', params);
   }
 
   listHistory(): Promise<{ records: CleanupHistoryRecordDTO[] }> {
@@ -343,7 +373,7 @@ export class CoreClient {
   }
 
   addExcluded(scanId: string, itemId: string): Promise<{ record: ExcludedItemRecordDTO; reportRevision: number }> {
-    return this.transport.request('excluded.add', { scanId, itemId });
+    return this.requestForScan('excluded.add', { scanId, itemId });
   }
 
   restoreExcluded(id: string): Promise<Record<string, never>> {
@@ -380,7 +410,7 @@ export class CoreClient {
     clientId?: string;
     includeAllClients?: boolean;
   }): Promise<{ projects: ProjectSummaryDTO[] }> {
-    return this.transport.request('projects.list', params);
+    return this.requestForScan('projects.list', params);
   }
 
   queryProjectSessions(params: {
@@ -392,7 +422,7 @@ export class CoreClient {
     offset?: number;
     limit?: number;
   }): Promise<ItemsQueryResponse> {
-    return this.transport.request('projects.sessions', params);
+    return this.requestForScan('projects.sessions', params);
   }
 
   setProjectProtection(projectId: string, enabled: boolean): Promise<{ isProtected: boolean }> {

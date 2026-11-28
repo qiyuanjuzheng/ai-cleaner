@@ -6,7 +6,7 @@ mod updater;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::{ipc::InvokeError, Emitter, Manager, RunEvent};
 
 use crate::sidecar::{
     host_platform_name, validate_existing_path_from_core, RpcErrorPayload, SidecarManager,
@@ -33,21 +33,20 @@ async fn reveal_scan_item(
     state: tauri::State<'_, HostState>,
     scan_id: String,
     item_id: String,
-) -> Result<(), String> {
+) -> Result<(), InvokeError> {
     let resolved = state
         .sidecar
         .request(
             "items.resolvePath",
             json!({ "scanId": scan_id, "itemId": item_id }),
         )
-        .await
-        .map_err(|e| e.message)?;
+        .await?;
     let raw_path = resolved
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| "核心服务未返回有效路径".to_string())?;
     let safe_path = validate_existing_path_from_core(raw_path)?;
-    reveal::reveal_in_file_manager(&safe_path)
+    Ok(reveal::reveal_in_file_manager(&safe_path)?)
 }
 
 #[tauri::command]

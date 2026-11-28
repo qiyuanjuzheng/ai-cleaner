@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { abbreviatePath, formatBytes, formatDateTime, revealActionTitle } from '../lib/format';
 import { RECOMMENDATION_COLORS } from '../lib/theme';
-import type { CoreClient } from '../rpc/client';
+import { ScanNotFoundError, type CoreClient } from '../rpc/client';
 import type {
   CleanableItemDTO,
   ClientSummaryDTO,
@@ -34,6 +34,7 @@ interface ProjectSessionsViewProps {
   onToggleProtection: (projectId: string, nextProtected: boolean) => Promise<void>;
   onInspectFullTitle: (item: CleanableItemDTO) => void;
   onRevealItem: (item: CleanableItemDTO) => void;
+  onScanNotFound: (error: ScanNotFoundError) => void;
   onStartScan: () => void;
 }
 
@@ -51,6 +52,7 @@ export function ProjectSessionsView({
   onToggleProtection,
   onInspectFullTitle,
   onRevealItem,
+  onScanNotFound,
   onStartScan,
 }: ProjectSessionsViewProps) {
   const [projects, setProjects] = useState<ProjectSummaryDTO[]>([]);
@@ -77,10 +79,14 @@ export function ProjectSessionsView({
         if (prev && res.projects.some((p) => p.projectId === prev)) return prev;
         return res.projects[0]?.projectId ?? null;
       });
-    } catch {
+    } catch (err) {
+      if (err instanceof ScanNotFoundError) {
+        onScanNotFound(err);
+        return;
+      }
       setProjects([]);
     }
-  }, [core, scanId, client, showsAllClients]);
+  }, [core, scanId, client, showsAllClients, onScanNotFound]);
 
   useEffect(() => {
     void loadProjects();
@@ -105,12 +111,16 @@ export function ProjectSessionsView({
         limit: 200,
       });
       setSessions(res.items);
-    } catch {
+    } catch (err) {
+      if (err instanceof ScanNotFoundError) {
+        onScanNotFound(err);
+        return;
+      }
       setSessions([]);
     } finally {
       setLoading(false);
     }
-  }, [core, scanId, client, selectedProjectId, showsAllClients, activeProject?.workspacePath, ageFilter]);
+  }, [core, scanId, client, selectedProjectId, showsAllClients, activeProject?.workspacePath, ageFilter, onScanNotFound]);
 
   useEffect(() => {
     void loadSessions();

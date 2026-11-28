@@ -116,7 +116,8 @@ actor SidecarServer {
     }
 
     func isIdle(now: ContinuousClock.Instant = .now) -> Bool {
-        scanTask == nil && lastRequestAt.duration(to: now) >= Self.idleTimeout
+        // The desktop still needs the completed report, selection, and cleanup preview.
+        scanTask == nil && session == nil && lastRequestAt.duration(to: now) >= Self.idleTimeout
     }
 
     func stop() {

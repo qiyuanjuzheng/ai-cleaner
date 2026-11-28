@@ -12,7 +12,7 @@ import { formatTimeShort, nextAppearanceMode } from './lib/format';
 import { matchShortcutEvent } from './lib/shortcuts';
 import { accentColorForToken, EXCLUDED_ACCENT_COLOR } from './lib/theme';
 import { ITEMS_PAGE_SIZE } from './lib/virtualRows';
-import { CoreClient, CoreRpcError } from './rpc/client';
+import { CoreClient, CoreRpcError, ScanNotFoundError } from './rpc/client';
 import type {
   AppearanceMode,
   CleanableItemDTO,
@@ -70,6 +70,7 @@ export function App({ client }: AppProps) {
 
   // Scan state
   const [scanId, setScanId] = useState<string | null>(null);
+  const scanIdRef = useRef<string | null>(null);
   const [activeScanId, setActiveScanId] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgressNotification | null>(null);
@@ -132,7 +133,35 @@ export function App({ client }: AppProps) {
     }, 2200);
   }, []);
 
+  const clearScanResults = useCallback(() => {
+    scanIdRef.current = null;
+    queryEpochRef.current += 1;
+    setScanId(null);
+    setReportSummary(null);
+    setClients([]);
+    setGroups([]);
+    setTotalItems(0);
+    setPageItems(new Map());
+    setInFlightPages(new Set());
+    setScopeUnfilteredGroups(null);
+    setSelectionSummary(EMPTY_SELECTION);
+    setPendingRiskItem(null);
+    setTrashPreview(null);
+    setTrashStaleError(null);
+    setInspectedItem(null);
+    setLastCleanupResult(null);
+  }, []);
+
   const handleCoreError = useCallback((err: unknown) => {
+    if (err instanceof ScanNotFoundError) {
+      if (scanIdRef.current !== err.scanId) return;
+      clearScanResults();
+      setSidebarSelection((current) =>
+        current.kind === 'client' || current.kind === 'clientProjects' ? { kind: 'allClients' } : current
+      );
+      setErrorBanner('上次扫描结果已失效，请重新扫描。');
+      return;
+    }
     if (err instanceof CoreRpcError) {
       if (err.code === -32000 || err.errorName === 'PROTOCOL_VERSION_MISMATCH') {
         setErrorBanner('安装不完整或核心协议版本不匹配，请重新安装 AI Cleaner。');
@@ -146,7 +175,7 @@ export function App({ client }: AppProps) {
       return;
     }
     setErrorBanner(err instanceof Error ? err.message : '操作失败，请稍后重试。');
-  }, []);
+  }, [clearScanResults]);
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -192,6 +221,7 @@ export function App({ client }: AppProps) {
         core.getReportSummary(targetScanId),
         core.listClients(targetScanId),
       ]);
+      if (scanIdRef.current !== targetScanId) return;
       setReportSummary(summary);
       setClients(clientList.clients);
     },
@@ -252,6 +282,7 @@ export function App({ client }: AppProps) {
         setScanProgress(null);
 
         if (status === 'completed' && summary) {
+          scanIdRef.current = completedScanId;
           setScanId(completedScanId);
           setReportSummary(summary);
           setReportRevision(nextRev);
@@ -259,7 +290,9 @@ export function App({ client }: AppProps) {
           setLastCleanupResult(null);
           void core
             .listClients(completedScanId)
-            .then((res) => setClients(res.clients))
+            .then((res) => {
+              if (scanIdRef.current === completedScanId) setClients(res.clients);
+            })
             .catch(handleCoreError);
           void refreshDiskCapacity();
         } else if (status === 'failed' && error) {
@@ -319,16 +352,18 @@ export function App({ client }: AppProps) {
           return next;
         });
       } catch (err) {
-        if (queryEpochRef.current === epoch) {
+        if (err instanceof ScanNotFoundError || queryEpochRef.current === epoch) {
           handleCoreError(err);
         }
       } finally {
-        setInFlightPages((prev) => {
-          if (!prev.has(pageIndex)) return prev;
-          const next = new Set(prev);
-          next.delete(pageIndex);
-          return next;
-        });
+        if (queryEpochRef.current === epoch) {
+          setInFlightPages((prev) => {
+            if (!prev.has(pageIndex)) return prev;
+            const next = new Set(prev);
+            next.delete(pageIndex);
+            return next;
+          });
+        }
       }
     },
     [core, handleCoreError]
@@ -364,11 +399,13 @@ export function App({ client }: AppProps) {
       .then((res) => {
         if (!cancelled) setScopeUnfilteredGroups(res.groups);
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (err instanceof ScanNotFoundError) handleCoreError(err);
+      });
     return () => {
       cancelled = true;
     };
-  }, [core, scanId, reportSummary, sidebarSelection, reportRevision]);
+  }, [core, handleCoreError, scanId, reportSummary, sidebarSelection, reportRevision]);
 
   const handleRequestPage = useCallback(
     (pageIndex: number) => {
@@ -396,12 +433,7 @@ export function App({ client }: AppProps) {
   const handleStartScan = useCallback(async () => {
     if (isScanning || isCleaning || isUpdating) return;
     setErrorBanner(null);
-    setLastCleanupResult(null);
-    setTrashPreview(null);
-    setReportSummary(null);
-    setScanId(null);
-    setClients([]);
-    setSelectionSummary(EMPTY_SELECTION);
+    clearScanResults();
     setIsScanning(true);
     setScanProgress(null);
     if (sidebarSelection.kind === 'history' || sidebarSelection.kind === 'excluded') {
@@ -415,7 +447,7 @@ export function App({ client }: AppProps) {
       setActiveScanId(null);
       handleCoreError(err);
     }
-  }, [core, handleCoreError, isCleaning, isScanning, isUpdating, sidebarSelection.kind]);
+  }, [clearScanResults, core, handleCoreError, isCleaning, isScanning, isUpdating, sidebarSelection.kind]);
 
   const handleCancelScan = useCallback(async () => {
     if (!activeScanId) return;
@@ -428,16 +460,9 @@ export function App({ client }: AppProps) {
 
   const handleReturnToIdle = useCallback(() => {
     if (isCleaning) return;
-    setScanId(null);
-    setReportSummary(null);
-    setClients([]);
-    setGroups([]);
-    setTotalItems(0);
-    setPageItems(new Map());
-    setSelectionSummary(EMPTY_SELECTION);
-    setLastCleanupResult(null);
+    clearScanResults();
     setSidebarSelection({ kind: 'allClients' });
-  }, [isCleaning]);
+  }, [clearScanResults, isCleaning]);
 
   const handleCycleAppearance = useCallback(async () => {
     const next = nextAppearanceMode(appearanceMode);
@@ -464,10 +489,10 @@ export function App({ client }: AppProps) {
           filter,
           itemIds: [item.id],
         });
-        setSelectionSummary(nextSel);
+        if (scanIdRef.current === scanId) setSelectionSummary(nextSel);
       } catch (err) {
         if (err instanceof CoreRpcError && err.code === -32005) {
-          setPendingRiskItem(item);
+          if (scanIdRef.current === scanId) setPendingRiskItem(item);
         } else {
           handleCoreError(err);
         }
@@ -482,7 +507,7 @@ export function App({ client }: AppProps) {
     setPendingRiskItem(null);
     try {
       const nextSel = await core.confirmRisk(scanId, target.id);
-      setSelectionSummary(nextSel);
+      if (scanIdRef.current === scanId) setSelectionSummary(nextSel);
     } catch (err) {
       handleCoreError(err);
     }
@@ -508,7 +533,7 @@ export function App({ client }: AppProps) {
           filter: op === 'clearAll' || op === 'selectRecommendedInScope' ? null : filter,
           recommendation,
         });
-        setSelectionSummary(nextSel);
+        if (scanIdRef.current === scanId) setSelectionSummary(nextSel);
       } catch (err) {
         handleCoreError(err);
       }
@@ -521,7 +546,7 @@ export function App({ client }: AppProps) {
     setTrashStaleError(null);
     try {
       const preview = await core.previewTrash(scanId);
-      setTrashPreview(preview);
+      if (scanIdRef.current === scanId) setTrashPreview(preview);
     } catch (err) {
       handleCoreError(err);
     }
@@ -637,20 +662,20 @@ export function App({ client }: AppProps) {
       if (!scanId) return;
       try {
         const res = await core.getItems(scanId, [item.id]);
-        if (res.items[0]) {
+        if (scanIdRef.current === scanId && res.items[0]) {
           setInspectedItem(res.items[0]);
         }
-      } catch {
-        // Keep initial snapshot if items.get fails
+      } catch (err) {
+        if (err instanceof ScanNotFoundError) handleCoreError(err);
       }
     },
-    [core, scanId]
+    [core, handleCoreError, scanId]
   );
 
   const handleRevealItem = useCallback(
     (item: CleanableItemDTO) => {
       if (!scanId) return;
-      void core.transport.revealScanItem(scanId, item.id).catch(handleCoreError);
+      void core.revealScanItem(scanId, item.id).catch(handleCoreError);
     },
     [core, handleCoreError, scanId]
   );
@@ -688,10 +713,10 @@ export function App({ client }: AppProps) {
           scope,
           itemIds: [item.id],
         });
-        setSelectionSummary(nextSel);
+        if (scanIdRef.current === scanId) setSelectionSummary(nextSel);
       } catch (err) {
         if (err instanceof CoreRpcError && err.code === -32005) {
-          setPendingRiskItem(item);
+          if (scanIdRef.current === scanId) setPendingRiskItem(item);
         } else {
           handleCoreError(err);
         }
@@ -710,7 +735,7 @@ export function App({ client }: AppProps) {
             op: 'selectAllVisible',
             scope: { kind: 'clientProjects', clientId: sidebarSelection.clientId, projectId },
           });
-          setSelectionSummary(nextSel);
+          if (scanIdRef.current === scanId) setSelectionSummary(nextSel);
           return;
         }
         const unchecked = sessions
@@ -719,6 +744,7 @@ export function App({ client }: AppProps) {
         if (unchecked.length === 0) return;
         let latest = selectionSummary;
         for (let i = 0; i < unchecked.length; i += 500) {
+          if (scanIdRef.current !== scanId) return;
           latest = await core.applySelection({
             scanId,
             op: 'toggle',
@@ -726,7 +752,7 @@ export function App({ client }: AppProps) {
             itemIds: unchecked.slice(i, i + 500),
           });
         }
-        setSelectionSummary(latest);
+        if (scanIdRef.current === scanId) setSelectionSummary(latest);
       } catch (err) {
         handleCoreError(err);
       }
@@ -996,6 +1022,7 @@ export function App({ client }: AppProps) {
               onToggleProtection={handleToggleProjectProtection}
               onInspectFullTitle={(item) => void handleInspectFullTitle(item)}
               onRevealItem={handleRevealItem}
+              onScanNotFound={handleCoreError}
               onStartScan={() => void handleStartScan()}
             />
           )}

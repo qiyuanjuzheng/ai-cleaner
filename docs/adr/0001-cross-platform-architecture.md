@@ -318,7 +318,7 @@ public protocol PlatformAdapter: Sendable {
 ### 6.6 生命周期
 
 - 由 Rust 宿主按需启动（Tauri `externalBin`）。sidecar 在 stdin EOF（宿主退出或崩溃）时立即退出。
-- 空闲超时：10 分钟内没有任何请求、也没有扫描在跑，就退出。窗口可见时前端每 60 s 发一次 `core.ping`，所以只有应用长时间隐藏或驻留后台时才会退出。宿主在下一次请求时自动重新拉起；前端收到 `SCAN_NOT_FOUND` 后提示重新扫描。
+- 空闲超时：连续 10 分钟没有请求、没有扫描在跑且没有已完成的扫描结果时，核心进程退出。已完成的扫描与勾选保留在核心进程中，直到开始新扫描或退出应用。核心意外退出时，宿主在下一次请求自动拉起核心。前端收到当前扫描的 `SCAN_NOT_FOUND` 后清除失效结果，提示用户重新扫描。窗口可见时前端仍每 60 秒发送 `core.ping` 并更新磁盘容量。
 - 单实例：Tauri `single-instance` 插件，再加上 sidecar 在用户数据目录持有 `core.lock`（`flock` / `LockFileEx`），避免两个进程同时写数据。
 - 宿主只转发白名单方法；前端没有 fs 插件，也没有执行任意 shell 命令的能力；CSP 禁止远程内容。
 

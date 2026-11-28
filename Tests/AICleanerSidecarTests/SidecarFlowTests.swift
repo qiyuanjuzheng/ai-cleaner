@@ -73,6 +73,19 @@ final class SidecarFlowTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.file), Data("updated after scan".utf8))
     }
 
+    func testPreservesCompletedScanAndSelectionPastIdleTimeout() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let client = fixture.client
+        let scanID = try await client.scan()
+        _ = try await client.call("selection.apply", ["scanId": scanID, "op": .string("selectAllVisible")])
+
+        let idle = await client.server.isIdle(now: ContinuousClock.now + .seconds(601))
+        XCTAssertFalse(idle, "Exiting here would discard the completed scan and selection")
+        let item = try await client.firstItem(scanID)
+        XCTAssertEqual(item["selected"], .bool(true))
+    }
+
     func testCancelsAStartedScanAndCannotStartAnotherUntilItFinishes() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
